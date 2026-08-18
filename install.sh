@@ -1,5 +1,5 @@
 #!/bin/sh
-# parley installer — https://github.com/marcus-campos/parley
+# parley installer - https://github.com/marcus-campos/parley
 #
 #   curl -fsSL https://raw.githubusercontent.com/marcus-campos/parley/main/install.sh | sh
 #   wget -qO- https://raw.githubusercontent.com/marcus-campos/parley/main/install.sh | sh
@@ -76,16 +76,22 @@ fetch "${BASE}/${ASSET}" "${TMP}/${ASSET}" \
 # security boundary; it catches a truncated or corrupted download, which is the
 # failure this actually prevents.
 if fetch "${BASE}/${ASSET}.sha256" "${TMP}/${ASSET}.sha256" 2>/dev/null; then
+  # 0 = matched, 1 = mismatch, 2 = no tool to check with.
+  verify_status=0
   if command -v sha256sum >/dev/null 2>&1; then
-    ( cd "$TMP" && sha256sum -c "${ASSET}.sha256" >/dev/null 2>&1 ) \
-      && say "parley: checksum ok" \
-      || err "checksum mismatch — refusing to install a corrupted binary"
+    ( cd "$TMP" && sha256sum -c "${ASSET}.sha256" >/dev/null 2>&1 ) || verify_status=1
   elif command -v shasum >/dev/null 2>&1; then
-    ( cd "$TMP" && shasum -a 256 -c "${ASSET}.sha256" >/dev/null 2>&1 ) \
-      && say "parley: checksum ok" \
-      || err "checksum mismatch — refusing to install a corrupted binary"
+    ( cd "$TMP" && shasum -a 256 -c "${ASSET}.sha256" >/dev/null 2>&1 ) || verify_status=1
   else
+    verify_status=2
+  fi
+
+  if [ "$verify_status" = 0 ]; then
+    say "parley: checksum ok"
+  elif [ "$verify_status" = 2 ]; then
     say "parley: no sha256 tool found, skipping checksum verification"
+  else
+    err "checksum mismatch - refusing to install a corrupted binary"
   fi
 else
   say "parley: no published checksum for this asset, skipping verification"
@@ -132,6 +138,9 @@ case ":${PATH}:" in
     ;;
 esac
 
-"${DIR}/${TARGET_NAME}" --help >/dev/null 2>&1 \
-  && say "parley: ready. Run 'parley doctor' inside a git repository to verify." \
-  || say "parley: installed, but the binary did not run. Report this at https://github.com/${REPO}/issues"
+if "${DIR}/${TARGET_NAME}" --version >/dev/null 2>&1; then
+  say "parley: ready. Run 'parley doctor' inside a git repository to verify."
+else
+  say "parley: installed, but the binary did not run."
+  say "         Report this at https://github.com/${REPO}/issues"
+fi
