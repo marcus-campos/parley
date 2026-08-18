@@ -14,6 +14,8 @@ import { resolveIdentity } from "./identity";
 
 const USAGE = `parley — coordination bus for concurrent agent sessions in one repository
 
+  parley update [--check] [--yes]
+                             replace this binary with the latest release
   parley init [--yes]        install hooks and skill for detected harnesses
   parley uninit              remove what init wrote
   parley doctor              diagnose transport, repo identity and the WSL boundary
@@ -166,6 +168,20 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Updating does not need a repository — you may well be fixing an install
+  // from your home directory.
+  if (parsed.command === "update") {
+    const { runUpdate } = await import("./update");
+    let gitCommonDir: string | null = null;
+    try { gitCommonDir = locateRepo().gitCommonDir; } catch { gitCommonDir = null; }
+    return runUpdate({
+      checkOnly: parsed.flags.check === true,
+      assumeYes: parsed.flags.yes === true,
+      json: parsed.flags.json === true,
+      gitCommonDir,
+    });
+  }
+
   let repo: RepoInfo;
   try {
     repo = locateRepo();
@@ -186,6 +202,7 @@ async function main(): Promise<void> {
       const address = resolveAddress(repo.repoId, env);
       const endpoint = readEndpoint(repo.gitCommonDir);
       const report = {
+        version: VERSION,
         repo_root: repo.root,
         git_common_dir: repo.gitCommonDir,
         canonical: repo.canonical,

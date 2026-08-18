@@ -143,6 +143,26 @@ sudo mv dist/parley /usr/local/bin/parley
 The resulting binary has no runtime dependency — it does not need Bun, Node, or
 anything else on the target machine.
 
+### Keeping it current
+
+```bash
+parley update          # replace this binary with the latest release
+parley update --check  # just tell me whether I am behind
+```
+
+It checks the latest release, downloads the binary for your platform, verifies
+its SHA-256, replaces itself atomically, and **stops the running daemon** — a
+daemon that is already up keeps serving the version it started with, and
+forgetting that step is what produces confusing bug reports. The next command
+spawns a fresh one.
+
+If the binary lives somewhere you cannot write, it says so and tells you to
+re-run with `sudo`. Running from a source checkout, it says that too, and points
+at `git pull && bun run build` instead of doing something surprising.
+
+> Installs of **0.1.0 predate this command** and need one manual reinstall — the
+> one-liner at the top — to get it. From 0.2.0 onward, `parley update` is enough.
+
 ### Verify
 
 ```bash
@@ -154,9 +174,9 @@ parley doctor
 lives, and — if you are in WSL — whether it detected the Windows boundary and
 what that implies.
 
-**After upgrading**, run `parley stop` once. A daemon that is already running
-keeps serving the version it started with, so a new binary is not picked up until
-the old daemon exits. The next command spawns a fresh one automatically.
+**After upgrading by hand**, run `parley stop` once — a daemon that is already
+running keeps serving the version it started with. `parley update` does this for
+you.
 
 ---
 
@@ -211,7 +231,7 @@ Claude Code. See the compatibility matrix below.
 ## Commands
 
 ```
-parley init | uninit | doctor | status | stop
+parley init | uninit | doctor | status | stop | update
 
 parley join --as NAME [--mission "..."]
 parley rename --as NAME [--mission "..."]
