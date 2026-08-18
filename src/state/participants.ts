@@ -1,4 +1,5 @@
 import { err, ok, type ParticipantKind } from "../protocol/types";
+import { resolvePendingOnRelease } from "./territory";
 import {
   actorOf, byName, liveParticipants, publicParticipant, pushEvent,
   type Ctx, type Outcome, type Participant, type State,
@@ -150,7 +151,10 @@ export function leave(state: State, actorId: string | null, ctx: Ctx): Outcome {
     text: `${me.name} left${released.length ? `, releasing ${released.length} claim(s)` : ""}`,
   });
 
-  return { state, response: ok({ released }), broadcast: [event] };
+  // Leaving is releasing, so anyone waiting on those paths is served too.
+  const settled = released.length ? resolvePendingOnRelease(state, me.id, released, ctx) : [];
+
+  return { state, response: ok({ released }), broadcast: [event, ...settled] };
 }
 
 export function who(state: State, ctx: Ctx): Outcome {

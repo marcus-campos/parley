@@ -291,3 +291,54 @@ describe("a human has a voice, not a vote", () => {
       .toMatchObject({ error: { code: "NOT_OWNER" } });
   });
 });
+
+describe("releasing a lock is the answer", () => {
+  test("letting the path go hands it to whoever was waiting", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/state/**"] }, at(0));
+    apply(state, campo, { v: 1, op: "ask", path: "src/state/machine.ts", reason: "one column" }, at(100));
+
+    const out = apply(state, fin, { v: 1, op: "release", paths: ["src/state/**"] }, at(200));
+    expect(out.response.ok).toBe(true);
+
+    const request = Object.values(state.requests)[0]!;
+    expect(request.state).toBe("granted");
+    expect(state.claims.some((c) => c.pattern === "src/state/machine.ts" && c.ownerId === campo)).toBe(true);
+    expect(out.broadcast.some((e) => e.text.includes("was waiting for it and now has it"))).toBe(true);
+  });
+
+  test("leaving does the same, so a finished session unblocks the queue", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/state/**"] }, at(0));
+    apply(state, campo, { v: 1, op: "ask", path: "src/state/machine.ts", reason: "r" }, at(100));
+
+    apply(state, fin, { v: 1, op: "leave" }, at(200));
+    expect(Object.values(state.requests)[0]!.state).toBe("granted");
+    expect(state.claims.some((c) => c.ownerId === campo)).toBe(true);
+  });
+
+  test("releasing an unrelated path settles nothing", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/state/**", "docs/**"] }, at(0));
+    apply(state, campo, { v: 1, op: "ask", path: "src/state/machine.ts", reason: "r" }, at(100));
+
+    apply(state, fin, { v: 1, op: "release", paths: ["docs/**"] }, at(200));
+    expect(Object.values(state.requests)[0]!.state).toBe("pending");
+  });
+
+  test("a request for a free path never becomes a pending request at all", () => {
+    // This is the rule that keeps the pending list meaningful: asking is only a
+    // thing when somebody actually holds the path.
+    const out = apply(state, campo, { v: 1, op: "ask", path: "src/untouched.ts", reason: "r" }, at(100));
+    expect(out.response).toMatchObject({ ok: true, state: "granted", reason: "unclaimed" });
+    expect(Object.keys(state.requests)).toHaveLength(0);
+  });
+
+  test("a settled request is not re-settled by a later release", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/state/**"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/state/machine.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+    apply(state, fin, { v: 1, op: "deny", request: id, reason: "migration running" }, at(150));
+
+    apply(state, fin, { v: 1, op: "release", paths: ["src/state/**"] }, at(200));
+    expect(state.requests[id]!.state).toBe("denied");
+    expect(state.claims.some((c) => c.ownerId === campo)).toBe(false);
+  });
+});

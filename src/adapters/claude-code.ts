@@ -71,9 +71,15 @@ parley release 'src/backend/finance/**'
 A claim you took by editing expires after 15 idle minutes. A claim you asked for
 explicitly is yours until you leave.
 
+**Release what you have finished with.** If another front is waiting on one of
+your paths, releasing it hands it straight to them — you do not have to answer
+the request separately. Letting go IS the answer.
+
 ## When a file belongs to someone else
 
-Do not edit around it and do not wait silently:
+You only need this when somebody actually holds it; asking for a free file is
+granted instantly and costs nothing. Do not edit around it and do not wait
+silently:
 
 \`\`\`
 parley ask src/backend/finance/services.py --reason "adding one column"

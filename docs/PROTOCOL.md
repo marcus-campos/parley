@@ -289,6 +289,20 @@ Rules:
 `{"all": true}` releases everything you hold. Releasing someone else's claim is
 `NOT_OWNER`.
 
+**Releasing settles whoever was waiting.** Any pending request for a path covered
+by what you just let go is granted automatically, the requester is handed the
+claim so nobody can slip in between, and it is announced:
+
+> `FINANCEIRO released src/state/machine.ts; TESTE-CAMPO was waiting for it and now has it`
+
+The response carries `settled`, the number of requests resolved this way. The
+same happens on `leave`, since leaving is releasing.
+
+Requiring the owner to release *and* answer would be asking twice for one
+decision, and the second half is exactly the half an agent forgets — leaving
+somebody blocked on a file that is already free. Requests already `granted`,
+`denied` or `granted_by_timeout` are untouched.
+
 ### 6.4 Permission
 
 #### `ask`
@@ -300,8 +314,11 @@ Rules:
    "expires_at":"2026-08-18T14:36:02Z"}
 ```
 
-If the path is unclaimed or already yours, the answer is immediate:
-`{"ok":true,"state":"granted","reason":"unclaimed"}`. There is nothing to ask.
+**Asking only becomes a request when somebody actually holds the path.** If it is
+unclaimed, or already yours, the answer is immediate and no request object is
+created at all: `{"ok":true,"state":"granted","reason":"unclaimed"}`. There is
+nothing to ask. This is what keeps a pending list meaningful — anything in it is
+a real contention between two fronts, not protocol ceremony.
 
 Otherwise the owner is pushed a high-priority directed event naming the path,
 the reason, the request id and the remaining time.

@@ -365,8 +365,20 @@ yours until you leave.
 parley ask src/backend/finance/services.py --reason "adding one column"
 ```
 
-The owner is pushed the request and answers `grant` (with `--scope once` or
-`--scope transfer`) or `deny --reason "..."`.
+You only ever need this when someone actually holds the path. Asking for a free
+file is granted instantly and never becomes a pending request — which is what
+keeps the pending list meaningful: everything in it is a real contention between
+two fronts.
+
+The owner answers in one of three ways:
+
+- `parley grant <id>` — hand it over, `--scope once` or `--scope transfer`.
+- `parley deny <id> --reason "..."` — with the reason delivered to the requester.
+- **`parley release <path>` — just let it go.** Releasing a path settles every
+  request waiting on it automatically and hands the claim to whoever was waiting,
+  so nobody can slip in between. Leaving does the same, since leaving is
+  releasing. Requiring the owner to release *and* answer would be asking twice
+  for one decision, and the second half is the half an agent forgets.
 
 **An unanswered request is granted, and announced by name:**
 

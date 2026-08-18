@@ -1,6 +1,6 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, normalizeTerritoryPath, patternsOverlap } from "../repo/paths";
-import { actorOf, pushEvent, type Claim, type Ctx, type Outcome, type State } from "./types";
+import { actorOf, pushEvent, type Claim, type ConvEvent, type Ctx, type Outcome, type State } from "./types";
 
 export interface ConflictReport {
   path: string;
@@ -109,6 +109,54 @@ export function claim(state: State, actorId: string | null, frame: Record<string
   return { state, response: ok({ claimed, auto }), broadcast };
 }
 
+/**
+ * Letting go of a path IS the answer to whoever was waiting for it.
+ *
+ * Requiring the owner to release and then also answer a request would be asking
+ * twice for one decision, and the second half is exactly the half an agent
+ * forgets — leaving somebody blocked on a file that is already free.
+ */
+export function resolvePendingOnRelease(
+  state: State,
+  ownerId: string,
+  releasedPatterns: string[],
+  ctx: Ctx,
+): ConvEvent[] {
+  const events: ConvEvent[] = [];
+  for (const request of Object.values(state.requests)) {
+    if (request.state !== "pending" || request.ownerId !== ownerId) continue;
+    if (!releasedPatterns.some((pattern) => matchesPath(pattern, request.path))) continue;
+    // Nobody else may slip in between the release and the waiting front, so the
+    // requester is handed the claim rather than merely told to go and take it.
+    if (conflictsFor(state, request.path, request.requesterId).length === 0) {
+      state.claims.push({
+        pattern: request.path,
+        ownerId: request.requesterId,
+        intent: request.reason,
+        since: ctx.now,
+        auto: false,
+        lastTouchMs: ctx.nowMs,
+        orphanedAtMs: null,
+      });
+    }
+    request.state = "granted";
+    request.scope = "once";
+
+    const owner = state.participants[ownerId];
+    const requester = state.participants[request.requesterId];
+    events.push(
+      pushEvent(state, ctx, {
+        kind: "system",
+        from: null,
+        to: null,
+        priority: "high",
+        text: `${owner?.name ?? "the owner"} released ${request.path}; ${requester?.name ?? "the requester"} was waiting for it and now has it`,
+      }),
+    );
+  }
+  return events;
+}
+
 export function release(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
@@ -134,17 +182,19 @@ export function release(state: State, actorId: string | null, frame: Record<stri
   const released = target.map((c) => c.pattern);
   state.claims = state.claims.filter((c) => !target.includes(c));
 
-  const broadcast = released.length
-    ? [
-        pushEvent(state, ctx, {
-          kind: "system",
-          from: null,
-          to: null,
-          priority: "normal",
-          text: `${me.name} released ${released.join(", ")}`,
-        }),
-      ]
-    : [];
+  const broadcast: ConvEvent[] = [];
+  if (released.length) {
+    broadcast.push(
+      pushEvent(state, ctx, {
+        kind: "system",
+        from: null,
+        to: null,
+        priority: "normal",
+        text: `${me.name} released ${released.join(", ")}`,
+      }),
+    );
+    broadcast.push(...resolvePendingOnRelease(state, me.id, released, ctx));
+  }
 
-  return { state, response: ok({ released }), broadcast };
+  return { state, response: ok({ released, settled: broadcast.length - 1 }), broadcast };
 }
