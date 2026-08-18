@@ -66,6 +66,16 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $null = [System.Management.Automation.Language.Parser]::ParseFile(
-            "install.ps1", [ref]$null, [ref]$errors)
-          if ($errors) { $errors | ForEach-Object { Write-Error $_ } }
+          # [ref] needs variables that already exist, and ParseFile needs a real
+          # absolute path.
+          $tokens = $null
+          $errs = $null
+          $path = (Resolve-Path ./install.ps1).Path
+          [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs -and $errs.Count -gt 0) {
+            $errs | ForEach-Object {
+              Write-Host "::error file=install.ps1,line=$($_.Extent.StartLineNumber)::$($_.Message)"
+            }
+            exit 1
+          }
+          Write-Host "install.ps1 parses cleanly"

@@ -38,17 +38,25 @@ try {
 
   # Catches a truncated or corrupted download. Fetched over the same channel as
   # the binary, so it is not a security boundary.
+  $TmpSum  = "$TmpBin.sha256"
+  $HaveSum = $true
   try {
-    $TmpSum = "$TmpBin.sha256"
+    # A bare catch on purpose: PowerShell Core raises HttpResponseException here,
+    # not the WebException that older examples catch, so naming the type would
+    # silently miss a plain 404 for the checksum file.
     Invoke-WebRequest -Uri "$Base/$Asset.sha256" -OutFile $TmpSum -UseBasicParsing
+  } catch {
+    $HaveSum = $false
+    Write-Host "parley: no published checksum for this asset, skipping verification"
+  }
+
+  if ($HaveSum) {
     $expected = ((Get-Content $TmpSum -Raw) -split '\s+')[0].Trim().ToLower()
     $actual   = (Get-FileHash -Algorithm SHA256 -Path $TmpBin).Hash.ToLower()
     if ($expected -ne $actual) {
-      Write-Error "checksum mismatch - refusing to install a corrupted binary"
+      throw "checksum mismatch - refusing to install a corrupted binary"
     }
     Write-Host "parley: checksum ok"
-  } catch [System.Net.WebException] {
-    Write-Host "parley: no published checksum for this asset, skipping verification"
   }
 
   $Target = Join-Path $Dir "parley.exe"
@@ -64,7 +72,7 @@ try {
     Write-Host ""
   }
 
-  & $Target --help | Out-Null
+  & $Target --version | Out-Null
   Write-Host "parley: ready. Run 'parley doctor' inside a git repository to verify."
 }
 finally {
