@@ -148,7 +148,14 @@ async function main(): Promise<void> {
       address: resolveAddress(id, env),
       journalPath: journalPathFor(stateDir(id, env)),
     });
-    await daemon.listen();
+    try {
+      await daemon.listen();
+    } catch (e) {
+      // Losing the race is the normal outcome when several hooks fire at once.
+      // Exit quietly; the client will find the daemon that won.
+      if ((e as Error).name === "DaemonAlreadyRunning") process.exit(0);
+      throw e;
+    }
     const shutdown = () => { void daemon.close().then(() => process.exit(0)); };
     process.on("SIGINT", shutdown);
     process.on("SIGTERM", shutdown);

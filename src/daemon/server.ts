@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
@@ -8,7 +8,7 @@ import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
 import type { ConvEvent, State } from "../state/types";
 import { exportNotes } from "../notes/export";
-import { newEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
+import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
 
 interface Conn {
@@ -30,7 +30,29 @@ export interface DaemonOptions {
   onListening?: (endpoint: Endpoint) => void;
 }
 
+export class DaemonAlreadyRunning extends Error {
+  constructor(address: string) {
+    super(`another parley daemon is already serving ${address}`);
+    this.name = "DaemonAlreadyRunning";
+  }
+}
+
 export class ParleyDaemon {
+  /** Does something answer on this socket? Distinguishes live from leftover. */
+  static isServed(path: string, timeoutMs = 300): Promise<boolean> {
+    return new Promise((resolve) => {
+      const socket = connect(path);
+      const settle = (alive: boolean) => {
+        socket.destroy();
+        clearTimeout(timer);
+        resolve(alive);
+      };
+      const timer = setTimeout(() => settle(false), timeoutMs);
+      socket.once("connect", () => settle(true));
+      socket.once("error", () => settle(false));
+    });
+  }
+
   private state: State;
   private readonly journal: Journal;
   private readonly counter = { n: 0 };
@@ -74,9 +96,15 @@ export class ParleyDaemon {
     const { address } = this.opts;
     if (address.kind === "unix") {
       mkdirSync(dirname(address.address), { recursive: true });
-      // A socket file left by a dead daemon blocks bind(); the endpoint entry is
-      // claimed by whoever arrives, so removing it here is the same decision.
       if (existsSync(address.address)) {
+        // A socket file left by a dead daemon blocks bind() and has to go. But
+        // deleting one that is still being served would steal the bus from a
+        // live daemon, and two daemons on one repository means two states, one
+        // of them invisible — and the zombie removes the live endpoint.json
+        // when it later times out. So ask first.
+        if (await ParleyDaemon.isServed(address.address)) {
+          throw new DaemonAlreadyRunning(address.address);
+        }
         try { unlinkSync(address.address); } catch { /* raced with another spawn */ }
       }
     }
@@ -245,12 +273,19 @@ export class ParleyDaemon {
       try { conn.socket.destroy(); } catch { /* already gone */ }
     }
     this.conns.clear();
-    removeEndpoint(this.opts.gitCommonDir);
+    // Only clean up the endpoint if it is still ours. A daemon that lost the
+    // race must not delete the live one's discovery file on its way out.
+    const published = readEndpoint(this.opts.gitCommonDir);
+    if (!published || published.pid === process.pid) removeEndpoint(this.opts.gitCommonDir);
     await new Promise<void>((resolve) => {
       if (!this.server) return resolve();
       this.server.close(() => resolve());
     });
-    if (this.opts.address.kind === "unix" && existsSync(this.opts.address.address)) {
+    if (
+      this.opts.address.kind === "unix" &&
+      existsSync(this.opts.address.address) &&
+      (!published || published.pid === process.pid)
+    ) {
       try { unlinkSync(this.opts.address.address); } catch { /* best effort */ }
     }
     this.server = null;

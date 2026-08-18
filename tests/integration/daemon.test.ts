@@ -171,3 +171,47 @@ describe("a real daemon over a real socket", () => {
     a.close();
   });
 });
+
+describe("only one daemon may serve a repository", () => {
+  test("a second daemon refuses instead of stealing the live socket", async () => {
+    const dir = tempRepo();
+    const first = await startDaemon(dir, join(dir, "journal.ndjson"));
+
+    const intruder = new ParleyDaemon({
+      gitCommonDir: dir,
+      address: { kind: "unix", address: first.endpoint.address },
+      journalPath: join(dir, "journal.ndjson"),
+      tickIntervalMs: 50,
+    });
+
+    let refused = false;
+    try {
+      await intruder.listen();
+    } catch (e) {
+      refused = (e as Error).name === "DaemonAlreadyRunning";
+    }
+    expect(refused).toBe(true);
+
+    // The original is untouched and still answering.
+    const client = await RawClient.connect(first.endpoint.address);
+    expect(await client.send({ op: "status" })).toMatchObject({ ok: true });
+    client.close();
+    expect(readEndpoint(dir)?.pid).toBe(first.endpoint.pid);
+  });
+
+  test("a leftover socket from a dead daemon is cleared, not respected", async () => {
+    const dir = tempRepo();
+    const first = await startDaemon(dir, join(dir, "journal.ndjson"));
+    const address = first.endpoint.address;
+    await first.daemon.close();
+
+    // Recreate the stale file the way a kill -9 would leave it.
+    await Bun.write(address, "");
+    const second = await startDaemon(dir, join(dir, "journal.ndjson"));
+    expect(second.endpoint.address).toBe(address);
+
+    const client = await RawClient.connect(address);
+    expect(await client.send({ op: "status" })).toMatchObject({ ok: true });
+    client.close();
+  });
+});
