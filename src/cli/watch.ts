@@ -224,7 +224,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       ? { op: "say", to: directed[1], text: directed[2] }
       : { op: "say", text: trimmed };
     const r = await client.request(frame);
-    status = r.ok ? "" : `not sent: ${r.error.code}`;
+    if (r.ok) {
+      const sent = (r as unknown as { event?: FeedEvent }).event;
+      if (sent) feed.push(sent);
+      status = "";
+    } else {
+      status = `not sent: ${r.error.code}`;
+    }
     render();
   }
 

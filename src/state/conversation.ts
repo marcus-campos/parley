@@ -28,7 +28,10 @@ export function say(state: State, actorId: string | null, frame: Record<string, 
     text,
   });
 
-  return { state, response: ok({ seq: event.seq }), broadcast: [event] };
+  // The event travels back with the receipt. `drain` deliberately never returns
+  // your own messages — right for an agent, wrong for whoever is typing, who
+  // otherwise gets no evidence at all that anything was sent.
+  return { state, response: ok({ seq: event.seq, event }), broadcast: [event] };
 }
 
 /** Events this participant is entitled to and has not read yet. */

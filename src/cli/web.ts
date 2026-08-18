@@ -147,6 +147,10 @@ export async function runWebPanel(
       if (req.method === "POST" && url.pathname === "/say") {
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const r = await client.request({ op: "say", text: String(body.text ?? ""), to: body.to ?? null });
+        if (r.ok) {
+          const sent = (r as unknown as { event?: unknown }).event;
+          if (sent) feed.push(sent);
+        }
         await broadcast();
         return json(r);
       }

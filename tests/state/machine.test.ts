@@ -184,3 +184,32 @@ describe("history", () => {
     expect(out.events).toHaveLength(5);
   });
 });
+
+describe("say returns what it created", () => {
+  test("the sender gets the event back, since drain will never hand it over", () => {
+    const human = joined(state, "Marcus", { kind: "human", cwd: "/wt/panel" });
+    const out = apply(state, human, { v: 1, op: "say", text: "não dropem coluna hoje" }, at(100));
+
+    const body = out.response as unknown as { seq: number; event: { seq: number; text: string; priority: string; from: { name: string; kind: string } } };
+    expect(body.event.text).toBe("não dropem coluna hoje");
+    expect(body.event.priority).toBe("high");
+    expect(body.event.from).toMatchObject({ name: "Marcus", kind: "human" });
+    expect(body.event.seq).toBe(body.seq);
+
+    // And drain still refuses to give it back, so a panel that appends the
+    // receipt cannot end up showing it twice.
+    const mine = apply(state, human, { v: 1, op: "drain" }, at(200)).response as unknown as { events: unknown[] };
+    expect(mine.events).toHaveLength(0);
+  });
+
+  test("it still reaches the other fronts", () => {
+    const human = joined(state, "Marcus", { kind: "human", cwd: "/wt/panel" });
+    const agent = joined(state, "FINANCEIRO", { cwd: "/wt/fin" }, 10);
+    apply(state, human, { v: 1, op: "say", text: "aviso" }, at(100));
+
+    const inbox = apply(state, agent, { v: 1, op: "drain" }, at(200)).response as unknown as {
+      events: { text: string; priority: string }[];
+    };
+    expect(inbox.events.find((e) => e.text === "aviso")?.priority).toBe("high");
+  });
+});

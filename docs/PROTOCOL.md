@@ -222,8 +222,15 @@ This is the memory of "who touches what" that a markdown board never had.
 
 ```json
 → {"v":1,"op":"say","to":null,"text":"touching alembic, check your heads","priority":"normal"}
-← {"ok":true,"seq":128}
+← {"ok":true,"seq":128,"event":{"seq":128,"kind":"say","from":{…},"to":null,
+    "priority":"normal","text":"touching alembic, check your heads","at":"…"}}
 ```
+
+The receipt carries the whole event back. `drain` never returns your own
+messages — right for an agent, wrong for whoever is typing, who would otherwise
+get no evidence at all that anything was sent. A client that appends this event
+locally cannot end up showing it twice, precisely because `drain` will not
+repeat it.
 
 `to: null` is broadcast; `to: "NAME"` is directed. A message from a participant
 with `kind: "human"` is **always** delivered at `priority: "high"` and arrives
