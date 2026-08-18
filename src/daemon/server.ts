@@ -38,8 +38,22 @@ export class DaemonAlreadyRunning extends Error {
 }
 
 export class ParleyDaemon {
-  /** Does something answer on this socket? Distinguishes live from leftover. */
-  static isServed(path: string, timeoutMs = 300): Promise<boolean> {
+  /**
+   * Does something answer on this socket? Distinguishes live from leftover.
+   *
+   * This probe is not an optimisation, it is the only defence on Unix: binding
+   * a server to a unix socket path that is already being served **succeeds**
+   * here, silently displacing the daemon that was there. bind() never
+   * complains, so asking first is the whole mechanism.
+   *
+   * The timeout is generous because it is almost never reached: a leftover
+   * socket refuses immediately (ECONNREFUSED) and a live one accepts
+   * immediately. It only bites when a connection hangs — and a first connect on
+   * a cold Windows runner can take far longer than a local connect ever
+   * suggests. Timing this too tightly reads "slow" as "dead", and the cost of
+   * that mistake is two daemons on one repository.
+   */
+  static isServed(path: string, timeoutMs = 2_000): Promise<boolean> {
     return new Promise((resolve) => {
       const socket = connect(path);
       const settle = (alive: boolean) => {
@@ -96,12 +110,12 @@ export class ParleyDaemon {
     const { address } = this.opts;
     if (address.kind === "unix") {
       mkdirSync(dirname(address.address), { recursive: true });
+      // A socket file left by a dead daemon blocks bind() and has to go. But
+      // deleting one that is still being served would steal the bus from a live
+      // daemon, and two daemons on one repository means two states, one of them
+      // invisible — and the zombie removes the live endpoint.json when it later
+      // times out. So ask first, and only clear what does not answer.
       if (existsSync(address.address)) {
-        // A socket file left by a dead daemon blocks bind() and has to go. But
-        // deleting one that is still being served would steal the bus from a
-        // live daemon, and two daemons on one repository means two states, one
-        // of them invisible — and the zombie removes the live endpoint.json
-        // when it later times out. So ask first.
         if (await ParleyDaemon.isServed(address.address)) {
           throw new DaemonAlreadyRunning(address.address);
         }
@@ -131,6 +145,13 @@ export class ParleyDaemon {
       };
       if (address.kind === "tcp") server.listen(address.port ?? 0, address.address, done);
       else server.listen(address.address, done);
+    }).catch((e: NodeJS.ErrnoException) => {
+      // Belt and braces. The probe above needs a socket you can stat, which a
+      // Windows named pipe is not — and there bind() does refuse, so this is
+      // the check that covers pipes and any platform where a rebind is an
+      // error rather than a silent takeover.
+      if (e?.code === "EADDRINUSE") throw new DaemonAlreadyRunning(address.address);
+      throw e;
     });
 
     writeEndpoint(this.opts.gitCommonDir, endpoint);
