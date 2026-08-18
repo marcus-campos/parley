@@ -17,8 +17,14 @@ export function exportNotes(notes: Note[], repoRoot: string): string {
   const body = notes.length
     ? notes
         .map((n) => {
-          const tags = n.tags.length ? `\n\n**Tags:** ${n.tags.map((t) => `\`${t}\``).join(", ")}` : "";
-          return `## ${n.title}\n\n_${n.authorName} · ${n.at}_${tags}\n\n${n.body}`.trimEnd();
+          const meta: string[] = [];
+          if (n.tags.length) meta.push(`**Tags:** ${n.tags.map((t) => `\`${t}\``).join(", ")}`);
+          if (n.paths.length) meta.push(`**Paths:** ${n.paths.map((t) => `\`${t}\``).join(", ")}`);
+          const head = n.kind === "decision"
+            ? `## ${n.reversedBy ? "[reversed] " : "[decision] "}${n.title}`
+            : `## ${n.title}`;
+          const block = meta.length ? `\n\n${meta.join("  ")}` : "";
+          return `${head}\n\n_${n.authorName} · ${n.at}_${block}\n\n${n.body}`.trimEnd();
         })
         .join("\n\n---\n\n")
     : "_No notes yet._";
@@ -35,6 +41,8 @@ export interface ImportedNote {
   title: string;
   body: string;
   tags: string[];
+  paths: string[];
+  kind: "note" | "decision";
 }
 
 /**
@@ -52,23 +60,34 @@ export function parseNotes(markdown: string): ImportedNote[] {
 
   for (const section of sections) {
     const lines = section.split("\n");
-    const title = (lines.shift() ?? "").trim();
+    let title = (lines.shift() ?? "").trim();
     if (!title) continue;
 
+    let kind: "note" | "decision" = "note";
+    if (title.startsWith("[decision] ")) { kind = "decision"; title = title.slice(11); }
+    else if (title.startsWith("[reversed] ")) { kind = "decision"; title = title.slice(11); }
+
+    let paths: string[] = [];
     let tags: string[] = [];
     const bodyLines: string[] = [];
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed === "---") break;             // separator between notes
       if (/^_.*_$/.test(trimmed)) continue;     // the author/date byline
-      const tagLine = /^\*\*Tags:\*\*\s*(.+)$/.exec(trimmed);
+      const tagLine = /^\*\*Tags:\*\*\s*(.+?)(?:\s{2,}\*\*Paths:\*\*\s*(.+))?$/.exec(trimmed);
       if (tagLine) {
         tags = tagLine[1]!.split(",").map((t) => t.replace(/`/g, "").trim()).filter(Boolean);
+        if (tagLine[2]) paths = tagLine[2].split(",").map((t) => t.replace(/`/g, "").trim()).filter(Boolean);
+        continue;
+      }
+      const pathLine = /^\*\*Paths:\*\*\s*(.+)$/.exec(trimmed);
+      if (pathLine) {
+        paths = pathLine[1]!.split(",").map((t) => t.replace(/`/g, "").trim()).filter(Boolean);
         continue;
       }
       bodyLines.push(line);
     }
-    notes.push({ title, body: bodyLines.join("\n").trim(), tags });
+    notes.push({ title, body: bodyLines.join("\n").trim(), tags, paths, kind });
   }
   return notes;
 }

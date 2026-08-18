@@ -13,7 +13,7 @@ export const OPS = [
   "say", "drain", "history",
   "claim", "release",
   "ask", "grant", "deny", "requests",
-  "note", "notes",
+  "note", "notes", "reverse", "result", "results",
   "mode", "status",
 ] as const;
 export type Op = (typeof OPS)[number];

@@ -47,8 +47,13 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley grant <request> [--scope once|transfer]
   parley deny <request> --reason "..."
 
-  parley note --title "..." [--body "..."] [--tags a,b]
-  parley notes [--tag x] [--export] [--import]
+  parley note --title "..." [--body "..."] [--tags a,b] [--paths a,b]
+  parley decide --title "..." [--body "..."] [--paths a,b]
+  parley reverse <id> [--reason "..."]
+  parley notes [--tag x] [--path p] [--kind decision] [--export] [--import]
+
+  parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
+  parley results [--fresh] [--key "..."]
 
   parley mode [off|advisory|enforced]
 
@@ -453,15 +458,57 @@ async function main(): Promise<void> {
         return out(p, "parley: denied", r);
       }
 
-      case "note": {
+      case "note":
+      case "decide": {
         const r = await send({
           op: "note",
+          kind: p.command === "decide" ? "decision" : "note",
           title: flagString(p.flags, "title") || p.positional.join(" "),
           body: flagString(p.flags, "body"),
           tags: flagString(p.flags, "tags").split(",").map((t) => t.trim()).filter(Boolean),
+          paths: flagString(p.flags, "paths").split(",").map((t) => t.trim()).filter(Boolean),
         });
         if (!r.ok) fail(p, describeError(r));
-        return out(p, "parley: noted", r);
+        return out(p, p.command === "decide" ? "parley: decision recorded and announced" : "parley: noted", r);
+      }
+
+      case "reverse": {
+        const id = p.positional[0];
+        if (!id) fail(p, "reverse needs the id of a note or decision");
+        const r = await send({ op: "reverse", id, reason: flagString(p.flags, "reason") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: reversed; it no longer binds", r);
+      }
+
+      case "result": {
+        const key = p.positional.join(" ");
+        if (!key) fail(p, `result needs a key, e.g. parley result "bun test" --status pass`);
+        const r = await send({
+          op: "result", key,
+          status: flagString(p.flags, "status", "unknown"),
+          summary: flagString(p.flags, "summary"),
+          paths: flagString(p.flags, "paths").split(",").map((t) => t.trim()).filter(Boolean),
+        });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, `parley: recorded "${key}"`, r);
+      }
+
+      case "results": {
+        const r = await send({
+          op: "results",
+          key: flagString(p.flags, "key") || undefined,
+          fresh: p.flags.fresh === true,
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const list = (r as unknown as {
+          results: { key: string; status: string; summary: string; byName: string; at: string; staleBecause: string | null }[];
+        }).results;
+        if (list.length === 0) return out(p, "parley: nothing recorded yet", r);
+        const rows = list.map((x) => {
+          const state = x.staleBecause ? `STALE (${x.staleBecause})` : "still valid";
+          return `  ${x.status.toUpperCase().padEnd(7)} ${x.key}\n        ${x.summary || "(no summary)"}\n        ${x.byName} at ${x.at.slice(11, 16)} — ${state}`;
+        });
+        return out(p, rows.join("\n"), r);
       }
 
       case "notes": {
@@ -477,7 +524,10 @@ async function main(): Promise<void> {
           let imported = 0;
           for (const note of fromDisk) {
             if (known.has(note.title)) continue;
-            const r = await send({ op: "note", title: note.title, body: note.body, tags: note.tags });
+            const r = await send({
+              op: "note", title: note.title, body: note.body,
+              tags: note.tags, paths: note.paths, kind: note.kind,
+            });
             if (r.ok) imported++;
           }
           return out(
@@ -486,14 +536,31 @@ async function main(): Promise<void> {
             { ok: true, imported, found: fromDisk.length },
           );
         }
-        const r = await send({ op: "notes", tag: flagString(p.flags, "tag") || undefined });
+        const r = await send({
+          op: "notes",
+          tag: flagString(p.flags, "tag") || undefined,
+          path: flagString(p.flags, "path") || undefined,
+          kind: flagString(p.flags, "kind") || undefined,
+          active: p.flags.active === true,
+        });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
         if (p.flags.export) {
           const written = exportNotes(notes, repo.root);
           return out(p, `parley: wrote ${written} (${notes.length} note(s)) — commit it when you are ready`, { ok: true, path: written });
         }
-        return out(p, notes.map((n) => `  ${n.title}${n.tags.length ? `  [${n.tags.join(", ")}]` : ""}`).join("\n") || "parley: no notes yet", r);
+        return out(
+          p,
+          notes
+            .map((n) => {
+              const mark = n.kind === "decision" ? (n.reversedBy ? "[reversed] " : "[DECISION] ") : "";
+              const where = n.paths.length ? `  ${n.paths.join(", ")}` : "";
+              const tags = n.tags.length ? `  [${n.tags.join(", ")}]` : "";
+              return `  ${n.id}  ${mark}${n.title}${tags}${where}`;
+            })
+            .join("\n") || "parley: no notes yet",
+          r,
+        );
       }
 
       case "mode": {

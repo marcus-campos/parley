@@ -1,6 +1,7 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
 import { drain, history, say } from "./conversation";
-import { listNotes, note } from "./notes";
+import { listResults, recordResult } from "./results";
+import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
@@ -79,6 +80,9 @@ export function apply(
     case "requests": return listRequests(state, frame, ctx);
     case "note": return note(state, actorId, frame, ctx);
     case "notes": return listNotes(state, frame);
+    case "reverse": return reverse(state, actorId, frame, ctx);
+    case "result": return recordResult(state, actorId, frame, ctx);
+    case "results": return listResults(state, frame);
     case "mode": return setMode(state, frame, ctx);
     case "status": return status(state, ctx);
     default:

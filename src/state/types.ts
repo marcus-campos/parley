@@ -64,9 +64,45 @@ export interface Note {
   title: string;
   body: string;
   tags: string[];
+  /**
+   * Paths or globs this knowledge is about. A note anchored to a path is
+   * delivered to whoever touches that path, which inverts who does the
+   * remembering: the agent does not have to think to ask.
+   */
+  paths: string[];
+  /**
+   * A `note` is knowledge. A `decision` is binding until reversed — the point
+   * is to stop the next front relitigating something already settled.
+   */
+  kind: "note" | "decision";
+  reversedBy: string | null;
   authorId: string | null;
   authorName: string;
   at: string;
+}
+
+/** Who last touched a path, kept after the claim is gone. */
+export interface Touch {
+  path: string;
+  byId: string;
+  byName: string;
+  intent: string;
+  at: string;
+  atMs: number;
+}
+
+/** A command result worth not running again. */
+export interface CommandResult {
+  key: string;
+  status: "pass" | "fail" | "unknown";
+  summary: string;
+  /** Editing any of these invalidates the result. */
+  paths: string[];
+  byId: string;
+  byName: string;
+  at: string;
+  atMs: number;
+  staleBecause: string | null;
 }
 
 export interface State {
@@ -79,6 +115,9 @@ export interface State {
   /** Read cursor per participant, so each front drains only what it has not seen. */
   cursors: Record<string, number>;
   notes: Note[];
+  /** Bounded log of who last touched each path. */
+  touches: Record<string, Touch>;
+  results: Record<string, CommandResult>;
 }
 
 /**
@@ -100,7 +139,10 @@ export interface Outcome {
 }
 
 export function emptyState(mode: Mode = "advisory"): State {
-  return { mode, seq: 0, participants: {}, claims: [], requests: {}, events: [], cursors: {}, notes: [] };
+  return {
+    mode, seq: 0, participants: {}, claims: [], requests: {},
+    events: [], cursors: {}, notes: [], touches: {}, results: {},
+  };
 }
 
 /** Append a conversation or system event and return it. Mutates `state`. */

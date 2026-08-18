@@ -151,7 +151,32 @@ export async function runHook(event: string): Promise<void> {
     const claimed = await client.request({ op: "claim", paths: [target], auto: true });
     clearTimeout(budget);
 
-    if (claimed.ok) return context(name, [inbox, territoryReminder()].filter(Boolean).join("\n\n"));
+    if (claimed.ok) {
+      // Everything below rides on the call the hook was already making. It
+      // fires only for the path being edited, which is what keeps unsolicited
+      // context rare and precise instead of a running commentary.
+      const settled = claimed as unknown as {
+        notes?: { title: string; body: string; authorName: string; kind: string }[];
+        recent?: { byName: string; intent: string; at: string }[];
+      };
+
+      const known = (settled.notes ?? []).map((n) => {
+        const label = n.kind === "decision" ? "DECISION" : "note";
+        return `  [${label}] ${n.title}${n.body ? `\n      ${n.body.replace(/\n+/g, " ")}` : ""} (${n.authorName})`;
+      });
+      const knowledge = known.length
+        ? `parley: what other fronts have written down about ${target}:\n${known.join("\n")}`
+        : "";
+
+      const touches = (settled.recent ?? []).map(
+        (t) => `  ${t.byName} touched it at ${t.at.slice(11, 16)}${t.intent ? ` — ${t.intent}` : ""}`,
+      );
+      const changed = touches.length
+        ? `parley: recently edited by someone else — read it before assuming what is in it:\n${touches.join("\n")}`
+        : "";
+
+      return context(name, [inbox, knowledge, changed, territoryReminder()].filter(Boolean).join("\n\n"));
+    }
 
     const conflicts = (claimed as unknown as {
       conflicts?: { path: string; owner: { name: string; mission: string }; since: string }[];

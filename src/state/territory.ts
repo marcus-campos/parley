@@ -1,6 +1,56 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, normalizeTerritoryPath, patternsOverlap } from "../repo/paths";
-import { actorOf, pushEvent, type Claim, type ConvEvent, type Ctx, type Outcome, type State } from "./types";
+import { notesForPath } from "./notes";
+import {
+  actorOf, pushEvent,
+  type Claim, type ConvEvent, type Ctx, type Note, type Outcome, type State, type Touch,
+} from "./types";
+
+/** Keeps the touch log from growing without bound on a long-lived daemon. */
+const MAX_TOUCHES = 500;
+
+function recordTouch(state: State, path: string, ownerId: string, intent: string, ctx: Ctx): void {
+  state.touches[path] = {
+    path, byId: ownerId,
+    byName: state.participants[ownerId]?.name ?? "(gone)",
+    intent, at: ctx.now, atMs: ctx.nowMs,
+  };
+  const keys = Object.keys(state.touches);
+  if (keys.length > MAX_TOUCHES) {
+    const oldest = keys
+      .map((k) => state.touches[k]!)
+      .sort((a, b) => a.atMs - b.atMs)
+      .slice(0, keys.length - MAX_TOUCHES);
+    for (const t of oldest) delete state.touches[t.path];
+  }
+}
+
+/**
+ * What someone else did to this path recently, and what is known about it.
+ *
+ * Both travel back on the claim, which is the one call the hook already makes
+ * before an edit — so the agent learns who rewrote the file four minutes ago,
+ * and whatever a previous front wrote down about it, without a second round
+ * trip and without having to think to ask.
+ */
+function contextFor(state: State, paths: string[], meId: string, ctx: Ctx): {
+  recent: Touch[];
+  notes: Note[];
+} {
+  const recent: Touch[] = [];
+  const notes: Note[] = [];
+  const seen = new Set<string>();
+  for (const path of paths) {
+    const touch = state.touches[path];
+    if (touch && touch.byId !== meId && ctx.nowMs - touch.atMs < 60 * 60_000) recent.push(touch);
+    for (const note of notesForPath(state, path)) {
+      if (seen.has(note.id)) continue;
+      seen.add(note.id);
+      notes.push(note);
+    }
+  }
+  return { recent, notes };
+}
 
 export interface ConflictReport {
   path: string;
@@ -69,8 +119,11 @@ export function claim(state: State, actorId: string | null, frame: Record<string
     return { state, response: { ...err("CONFLICT"), conflicts }, broadcast: [] };
   }
 
+  const context = contextFor(state, paths, me.id, ctx);
+
   const claimed: string[] = [];
   for (const pattern of paths) {
+    recordTouch(state, pattern, me.id, intent, ctx);
     const mine = state.claims.find((c) => c.ownerId === me.id && c.pattern === pattern);
     if (mine) {
       mine.lastTouchMs = ctx.nowMs;
@@ -106,7 +159,11 @@ export function claim(state: State, actorId: string | null, frame: Record<string
       ]
     : [];
 
-  return { state, response: ok({ claimed, auto }), broadcast };
+  return {
+    state,
+    response: ok({ claimed, auto, recent: context.recent, notes: context.notes }),
+    broadcast,
+  };
 }
 
 /**

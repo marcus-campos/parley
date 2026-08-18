@@ -103,6 +103,46 @@ Ask the **owner**, never a human. A human cannot grant or deny — the protocol
 refuses it — precisely so that a stalled request never becomes a request for a
 person's attention.
 
+## Anchor knowledge to the files it is about
+
+\`--paths\` is what makes a note find its reader. A note anchored to a path is
+handed to whoever edits that path, automatically, before they touch it — so you
+are not writing for someone who has to remember to look:
+
+\`\`\`
+parley note --title "this serializer is used by the mobile app too" \\
+  --body "renaming fields here breaks the collection screen" \\
+  --paths src/backend/app/accounts/schemas.py
+\`\`\`
+
+**Write one whenever you learn something the file does not say about itself** —
+a hidden coupling, a trap, why the obvious change is wrong. It costs you one
+call and saves the next front the whole investigation you just did.
+
+## Decisions, when the question should stay answered
+
+\`\`\`
+parley decide --title "no Pydantic v2 yet" \\
+  --body "the mobile serializers depend on v1 coercion"
+parley reverse n_0007 --reason "v2 shipped the compat layer"
+\`\`\`
+
+A decision is announced to everyone and **binds until reversed**. Use it so the
+next front does not relitigate what is already settled. If you disagree with a
+standing decision, reverse it on purpose and say why — do not quietly ignore it.
+
+## Do not re-run what someone just ran
+
+\`\`\`
+parley results                       # what is known, and whether it still holds
+parley result "bun test" --status pass \\
+  --summary "145 pass, 0 fail" --paths 'src/**,tests/**'
+\`\`\`
+
+Before running a long suite, check \`parley results\`. If another front ran it
+and nothing it depends on has been touched since, the answer is still good —
+running it again costs minutes and buys nothing. After you run one, record it.
+
 ## Knowledge worth keeping
 
 \`say\` is conversation and dies resolved. \`note\` is knowledge every future
