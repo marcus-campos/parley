@@ -58,3 +58,25 @@ export function drain(state: State, actorId: string | null, ctx: Ctx): Outcome {
 
   return { state, response: ok({ events }), broadcast: [] };
 }
+
+/**
+ * The last N events this participant is entitled to see, WITHOUT moving the read
+ * cursor.
+ *
+ * A joining agent deliberately starts at the current sequence number — nobody
+ * wants a fresh session flooded with an hour of backlog it cannot act on. A
+ * panel is the opposite case: you open it precisely to see what has been going
+ * on. So backlog is a separate request rather than a different kind of join.
+ */
+export function history(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+
+  const raw = typeof frame.limit === "number" ? frame.limit : 200;
+  const limit = Math.max(1, Math.min(1000, Math.floor(raw)));
+  const events = state.events
+    .filter((e) => e.to === null || e.to === me.name || e.from?.id === me.id)
+    .slice(-limit);
+
+  return { state, response: ok({ events }), broadcast: [] };
+}

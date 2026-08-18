@@ -1,5 +1,5 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
-import { drain, say } from "./conversation";
+import { drain, history, say } from "./conversation";
 import { listNotes, note } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
@@ -70,6 +70,7 @@ export function apply(
     case "who": return who(state, ctx);
     case "say": return say(state, actorId, frame, ctx);
     case "drain": return drain(state, actorId, ctx);
+    case "history": return history(state, actorId, frame);
     case "claim": return claim(state, actorId, frame, ctx);
     case "release": return release(state, actorId, frame, ctx);
     case "ask": return ask(state, actorId, frame, ctx);

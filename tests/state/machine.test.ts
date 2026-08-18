@@ -133,3 +133,54 @@ describe("the ephemeral hook path", () => {
     expect(Object.values(state.participants)[0]!.gone).toBe(false);
   });
 });
+
+describe("history", () => {
+  test("a panel joining late still sees what already happened", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    apply(state, fin, { v: 1, op: "say", text: "vou mexer no alembic" }, at(10));
+    apply(state, fin, { v: 1, op: "say", text: "confiram as heads" }, at(20));
+
+    const panel = joined(state, "PANEL", { kind: "human", cwd: "/wt/panel" }, 30);
+    expect((apply(state, panel, { v: 1, op: "drain" }, at(40)).response as unknown as { events: unknown[] }).events)
+      .toHaveLength(0);
+
+    const past = apply(state, panel, { v: 1, op: "history" }, at(50)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(past.events.some((e) => e.text === "vou mexer no alembic")).toBe(true);
+    expect(past.events.some((e) => e.text === "confiram as heads")).toBe(true);
+  });
+
+  test("history does not move the read cursor", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    apply(state, fin, { v: 1, op: "say", text: "olha isso" }, at(20));
+
+    apply(state, campo, { v: 1, op: "history" }, at(30));
+    const drained = apply(state, campo, { v: 1, op: "drain" }, at(40)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(drained.events.some((e) => e.text === "olha isso")).toBe(true);
+  });
+
+  test("it never leaks a message directed at someone else", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    const panel = joined(state, "PANEL", { kind: "human", cwd: "/wt/panel" }, 20);
+    apply(state, fin, { v: 1, op: "say", to: "TESTE-CAMPO", text: "so pra voce" }, at(30));
+
+    const past = apply(state, panel, { v: 1, op: "history" }, at(40)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(past.events.some((e) => e.text === "so pra voce")).toBe(false);
+  });
+
+  test("the limit is clamped, not trusted", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    for (let i = 0; i < 30; i++) apply(state, fin, { v: 1, op: "say", text: `m${i}` }, at(100 + i));
+    const out = apply(state, fin, { v: 1, op: "history", limit: 5 }, at(500)).response as unknown as {
+      events: unknown[];
+    };
+    expect(out.events).toHaveLength(5);
+  });
+});

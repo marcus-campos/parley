@@ -70,6 +70,11 @@ function truncate(s: string, max: number): string {
   return visLen(s) <= max ? s : `${s.slice(0, Math.max(0, max - 1))}${UNICODE ? "…" : "~"}`;
 }
 
+/** Pad to a visible width. `String.padEnd` counts escape bytes and misaligns. */
+function padVis(s: string, width: number): string {
+  return s + " ".repeat(Math.max(0, width - visLen(s)));
+}
+
 function clock(iso: string): string {
   const d = new Date(iso);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -116,6 +121,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   client.onPush((events) => { pushFeed(events as FeedEvent[]); render(); });
 
+  // Seed from the backlog before the first paint. A panel that opens blank on a
+  // bus that has been busy for an hour is telling you the opposite of the truth.
+  async function seed(): Promise<void> {
+    const past = await client.request({ op: "history", limit: 200 });
+    if (past.ok) pushFeed((past as unknown as { events: FeedEvent[] }).events);
+  }
+
   async function refresh(): Promise<void> {
     const [whoR, reqR, drainR] = await Promise.all([
       client.request({ op: "who" }),
@@ -152,8 +164,9 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       for (const f of fronts) {
         const presence = f.connected ? green(G.bullet) : f.idle_s > 240 ? red(G.bullet) : yellow(G.bullet);
         const claims = f.claims.length ? dim(`${f.claims.length} claim${f.claims.length === 1 ? "" : "s"}`) : dim("no claims");
-        const head = `  ${presence} ${bold(f.name.padEnd(14))} ${truncate(f.mission || dim("no mission"), 30).padEnd(30)}`;
-        lines.push(`${head} ${dim(f.harness.padEnd(12))} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`);
+        const mission = f.mission ? truncate(f.mission, 30) : dim("no mission");
+        const head = `  ${presence} ${padVis(bold(f.name), 14)} ${padVis(mission, 30)}`;
+        lines.push(`${head} ${padVis(dim(f.harness), 12)} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`);
         if (f.claims.length) lines.push(dim(`      ${truncate(f.claims.join(", "), w - 8)}`));
       }
     }
@@ -270,5 +283,6 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   const timer = setInterval(() => void refresh(), 1000);
   status = "";
+  await seed();
   await refresh();
 }

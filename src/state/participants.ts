@@ -72,7 +72,6 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     gone: false,
   };
   state.participants[id] = participant;
-  if (state.cursors[id] === undefined) state.cursors[id] = state.seq;
 
   const event = pushEvent(state, ctx, {
     kind: "system",
@@ -81,6 +80,11 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     priority: "normal",
     text: `${name} joined${participant.mission ? ` — ${participant.mission}` : ""}`,
   });
+
+  // The cursor is set AFTER the join event, so a fresh front never drains the
+  // announcement of its own arrival. A front that had left keeps the cursor it
+  // had, and so catches up on everything said while it was away.
+  if (state.cursors[id] === undefined) state.cursors[id] = state.seq;
 
   return {
     state,

@@ -177,8 +177,12 @@ round trip.
   `{"ok":false,"error":{"code":"NAME_TAKEN","suggestion":"FINANCEIRO-2"}}`.
 - A participant that previously left reclaims its own id and cursor, so a
   crash-and-restart does not replay the whole conversation at it.
-- A fresh participant's read cursor starts at the current sequence number. New
-  sessions are not flooded with history.
+- A fresh participant's read cursor starts at the current sequence number, set
+  *after* its own join is announced, so a front never drains the announcement of
+  its own arrival. New sessions are not flooded with history; a panel that wants
+  backlog asks for it with `history`.
+- A participant that had left keeps the cursor it had, so it catches up on
+  everything said while it was away.
 
 #### `rename`
 
@@ -243,6 +247,22 @@ may be watching the whole session and say nothing. See §6.7.
 The read cursor is **per participant**, so each front drains only what it has not
 seen. A participant never receives its own messages. Directed messages reach only
 their addressee. `drain` advances the cursor to the current sequence number.
+
+#### `history`
+
+```json
+→ {"v":1,"op":"history","limit":200}
+← {"ok":true,"events":[…]}
+```
+
+The last N events this participant may see, **without moving the read cursor**.
+Same visibility rules as `drain`, plus your own messages. `limit` is clamped to
+1000.
+
+A joining agent deliberately starts at the current sequence number: nobody wants
+a fresh session flooded with an hour of backlog it cannot act on. A panel is the
+opposite case — you open it precisely to see what has been going on. So backlog
+is a separate request rather than a different kind of join.
 
 ### 6.3 Territory
 

@@ -222,6 +222,7 @@ parley watch [--web] [--port 7717] [--as NAME]     # i / s to speak
 
 parley say [--to NAME] [--priority high] "text"
 parley drain
+parley history [--limit 200]
 
 parley claim <paths...> [--intent "..."] [--auto]
 parley release [<paths...>] [--all]

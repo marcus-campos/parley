@@ -27,6 +27,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley say [--to NAME] [--priority high] "text"
   parley drain
+  parley history [--limit 200]
 
   parley claim <paths...> [--intent "..."] [--auto]
   parley release [<paths...>] [--all]
@@ -293,6 +294,15 @@ async function main(): Promise<void> {
         const events = (r as unknown as { events: { from: { name: string } | null; text: string; priority: string }[] }).events;
         if (events.length === 0) return out(p, "", r);
         const rows = events.map((e) => `  ${e.priority === "high" ? "!" : " "} ${e.from ? `${e.from.name}:` : "*"} ${e.text}`);
+        return out(p, rows.join("\n"), r);
+      }
+
+      case "history": {
+        const r = await send({ op: "history", limit: Number(flagString(p.flags, "limit", "200")) });
+        if (!r.ok) fail(p, describeError(r));
+        const events = (r as unknown as { events: { at: string; from: { name: string } | null; text: string; priority: string }[] }).events;
+        if (events.length === 0) return out(p, "parley: nothing has happened yet", r);
+        const rows = events.map((e) => `  ${e.at.slice(11, 16)} ${e.priority === "high" ? "!" : " "} ${e.from ? `${e.from.name}:` : "*"} ${e.text}`);
         return out(p, rows.join("\n"), r);
       }
 

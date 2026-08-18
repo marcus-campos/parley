@@ -48,6 +48,7 @@ export async function runWebPanel(
 
   const token = randomBytes(16).toString("hex");
   const feed: unknown[] = [];
+  let seeded = false;
   const subscribers = new Set<(chunk: string) => void>();
 
   const isOwnNoise = (e: unknown): boolean => {
@@ -62,6 +63,16 @@ export async function runWebPanel(
   });
 
   async function snapshot(): Promise<Snapshot> {
+    // Seed from the backlog once, before the first snapshot goes out.
+    if (!seeded) {
+      seeded = true;
+      const past = await client.request({ op: "history", limit: 200 });
+      if (past.ok) {
+        for (const e of (past as unknown as { events: unknown[] }).events) {
+          if (!isOwnNoise(e)) feed.push(e);
+        }
+      }
+    }
     const [whoR, reqR, drainR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
