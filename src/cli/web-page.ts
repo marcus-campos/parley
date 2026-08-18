@@ -90,6 +90,13 @@ export const PAGE = String.raw`<!doctype html>
   .link{background:none;border:none;color:var(--mute);cursor:pointer;padding:0;
     text-decoration:underline;font-size:12px}
   .empty{color:var(--mute);font-style:italic}
+  .who-btn{font:inherit;font-size:12px;color:var(--mute);background:none;border:none;
+    border-bottom:1px dotted var(--line);cursor:pointer;padding:0 1px}
+  .who-btn:hover{color:var(--human);border-bottom-color:var(--human)}
+  .note{padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--panel);margin-bottom:6px}
+  .note .t{font-size:13px}
+  .note .m{color:var(--mute);font-size:11.5px;margin-top:3px}
 </style>
 </head>
 <body>
@@ -98,7 +105,7 @@ export const PAGE = String.raw`<!doctype html>
   <span class="mode" id="mode">&mdash;</span>
   <span class="grow"></span>
   <span class="meta" id="repo"></span>
-  <span class="meta" id="you"></span>
+  <button class="who-btn" id="you" title="click to change how you appear on the bus"></button>
   <span class="meta" id="conn">connecting&hellip;</span>
 </header>
 <main>
@@ -107,6 +114,11 @@ export const PAGE = String.raw`<!doctype html>
     <div id="fronts"><p class="empty">nobody on the bus yet</p></div>
     <h2 style="margin-top:22px">Pending permission</h2>
     <div id="requests"><p class="empty">nothing pending</p></div>
+    <h2 style="margin-top:22px">Notes</h2>
+    <div id="notes"><p class="empty">no notes yet</p></div>
+    <p class="hint" style="padding:0">Durable knowledge the fronts left for every
+       future session. <code>parley notes --export</code> writes them to
+       <code>.parley/notes.md</code>, which is versioned in git.</p>
   </aside>
   <section class="feedwrap">
     <div class="feed" id="feed"></div>
@@ -114,7 +126,7 @@ export const PAGE = String.raw`<!doctype html>
       <div class="bar">
         <span>watching &middot; the fronts settle territory and permission among themselves</span>
         <span class="grow"></span>
-        <span><kbd>s</kbd> to say something</span>
+        <span><kbd>s</kbd> to say something &middot; click your name to change it</span>
       </div>
       <form class="composer" id="form" autocomplete="off">
         <input type="text" id="msg" placeholder="goes out as human, at high priority &mdash; @NAME to direct it" />
@@ -150,6 +162,15 @@ document.addEventListener("keydown", (e) => {
 });
 $("cancel").addEventListener("click", () => setSpeaking(false));
 
+// Your name is set here, not with a command-line flag, and it is remembered.
+$("you").addEventListener("click", async () => {
+  const current = $("you").textContent.replace(/^you are /, "");
+  const wanted = window.prompt("How should the fronts see you on this bus?", current);
+  if (wanted === null) return;
+  const r = await post("/rename", { name: wanted });
+  if (!r.ok) window.alert("parley: " + (r.error && (r.error.code || r.error) || "could not rename"));
+});
+
 let atBottom = true;
 $("feed").addEventListener("scroll", () => {
   const el = $("feed");
@@ -161,6 +182,12 @@ function render(s) {
   $("mode").className = "mode " + s.mode;
   $("repo").textContent = s.repo.split("/").pop();
   $("you").textContent = "you are " + s.you;
+
+  $("notes").innerHTML = (s.notes && s.notes.length) ? s.notes.slice().reverse().map((n) =>
+    '<div class="note"><div class="t">'+esc(n.title)+'</div>'
+    + '<div class="m">'+esc(n.authorName)+(n.tags && n.tags.length ? ' &middot; '+esc(n.tags.join(", ")) : '')+'</div>'
+    + '</div>'
+  ).join("") : '<p class="empty">no notes yet</p>';
 
   $("fronts").innerHTML = s.fronts.length ? s.fronts.map((f) => {
     const cls = f.connected ? "live" : (f.idle_s > 240 ? "stale" : "");

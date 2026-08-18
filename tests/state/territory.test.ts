@@ -342,3 +342,36 @@ describe("releasing a lock is the answer", () => {
     expect(state.claims.some((c) => c.ownerId === campo)).toBe(false);
   });
 });
+
+describe("a front that came back keeps what it was holding", () => {
+  const S = "sess-x";
+
+  test("re-attaching inside the grace period un-orphans the claims", () => {
+    const first = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    apply(state, id, { v: 1, op: "claim", paths: ["src/backend/**"] }, at(0));
+
+    // Long enough for the lease to lapse: the agent was thinking, or waiting
+    // on the person, so no hook fired.
+    tick(state, at(DEFAULTS.LEASE_TTL_MS + 1000));
+    expect(state.claims[0]!.orphanedAtMs).not.toBeNull();
+
+    apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(DEFAULTS.LEASE_TTL_MS + 2000));
+    expect(state.claims[0]!.orphanedAtMs).toBeNull();
+    expect(state.claims[0]!.ownerId).toBe(id);
+
+    // And it is not swept away by the next tick either.
+    tick(state, at(DEFAULTS.LEASE_TTL_MS + DEFAULTS.ORPHAN_GRACE_MS + 3000));
+    expect(state.claims).toHaveLength(1);
+  });
+
+  test("a front that never comes back still loses it", () => {
+    const first = apply(state, null, { v: 1, op: "join", name: "GHOST", cwd: "/repo", session: "sess-ghost" }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    apply(state, id, { v: 1, op: "claim", paths: ["src/ghost/**"] }, at(0));
+
+    tick(state, at(DEFAULTS.LEASE_TTL_MS + 1000));
+    tick(state, at(DEFAULTS.LEASE_TTL_MS + DEFAULTS.ORPHAN_GRACE_MS + 2000));
+    expect(state.claims.some((c) => c.pattern === "src/ghost/**")).toBe(false);
+  });
+});

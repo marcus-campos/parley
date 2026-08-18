@@ -2,7 +2,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { ParleyDaemon, journalPathFor } from "../daemon/server";
 import { readEndpoint } from "../daemon/endpoint";
-import { exportNotes } from "../notes/export";
+import { exportNotes, readExportedNotes } from "../notes/export";
 import { DEFAULTS, PROTOCOL_VERSION, type Response } from "../protocol/types";
 import { VERSION } from "../version";
 import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
@@ -42,7 +42,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley deny <request> --reason "..."
 
   parley note --title "..." [--body "..."] [--tags a,b]
-  parley notes [--tag x] [--export]
+  parley notes [--tag x] [--export] [--import]
 
   parley mode [off|advisory|enforced]
 
@@ -94,6 +94,7 @@ async function withSession(
     harness: identity.harness,
     cwd: repo.root,
     kind: parsed.flags.human ? "human" : "agent",
+    session: process.env.PARLEY_SESSION ?? "",
   });
 
   // A derived name that collides takes the suggestion rather than failing: the
@@ -106,6 +107,7 @@ async function withSession(
       harness: identity.harness,
       cwd: repo.root,
       kind: "agent",
+      session: process.env.PARLEY_SESSION ?? "",
     });
   }
   if (!response.ok) {
@@ -235,7 +237,12 @@ async function main(): Promise<void> {
 
   if (parsed.command === "watch") {
     const { runWatch } = await import("./watch");
-    const panelName = flagString(parsed.flags, "as") || process.env.PARLEY_PANEL_NAME || "PANEL";
+    const { readPanelConfig } = await import("./panel-config");
+    const panelName =
+      flagString(parsed.flags, "as") ||
+      process.env.PARLEY_PANEL_NAME ||
+      readPanelConfig(repo.gitCommonDir).name ||
+      "PANEL";
     if (parsed.flags.web) {
       const { runWebPanel } = await import("./web");
       const port = Number(flagString(parsed.flags, "port", "7717"));
@@ -380,6 +387,27 @@ async function main(): Promise<void> {
       }
 
       case "notes": {
+        if (p.flags.import) {
+          const fromDisk = readExportedNotes(repo.root);
+          if (fromDisk.length === 0) {
+            return out(p, "parley: nothing to import — no .parley/notes.md in this repository", { ok: true, imported: 0 });
+          }
+          const current = await send({ op: "notes" });
+          const known = new Set(
+            current.ok ? (current as unknown as { notes: { title: string }[] }).notes.map((n) => n.title) : [],
+          );
+          let imported = 0;
+          for (const note of fromDisk) {
+            if (known.has(note.title)) continue;
+            const r = await send({ op: "note", title: note.title, body: note.body, tags: note.tags });
+            if (r.ok) imported++;
+          }
+          return out(
+            p,
+            `parley: imported ${imported} note(s) from .parley/notes.md (${fromDisk.length - imported} already on the bus)`,
+            { ok: true, imported, found: fromDisk.length },
+          );
+        }
         const r = await send({ op: "notes", tag: flagString(p.flags, "tag") || undefined });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;

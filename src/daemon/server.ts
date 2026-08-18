@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
 import type { ConvEvent, State } from "../state/types";
+import { exportNotes } from "../notes/export";
 import { newEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
 
@@ -193,6 +194,12 @@ export class ParleyDaemon {
 
     this.send(conn, outcome.response);
     if (outcome.broadcast.length) this.push(outcome.broadcast, conn);
+
+    // A note that only exists inside the daemon is a note nobody will find.
+    // Writing the file on every note keeps `.parley/notes.md` current without
+    // anyone having to remember an export step. Committing it stays a decision
+    // a person or an agent makes on purpose — parley never commits.
+    if (frame.op === "note" && outcome.response.ok) this.exportNotes();
   }
 
   private onTick(): void {
@@ -247,6 +254,25 @@ export class ParleyDaemon {
       try { unlinkSync(this.opts.address.address); } catch { /* best effort */ }
     }
     this.server = null;
+  }
+
+  /**
+   * The bus key is the git common dir, so for a normal checkout the worktree
+   * root is its parent. A bare repository has no worktree and gets no file.
+   */
+  private repoRootForExport(): string | null {
+    const common = this.opts.gitCommonDir;
+    return basename(common) === ".git" ? dirname(common) : null;
+  }
+
+  private exportNotes(): void {
+    const root = this.repoRootForExport();
+    if (!root) return;
+    try {
+      exportNotes(this.state.notes, root);
+    } catch (e) {
+      process.stderr.write(`parley: could not write .parley/notes.md: ${(e as Error).message}\n`);
+    }
   }
 
   /** Test seam. */

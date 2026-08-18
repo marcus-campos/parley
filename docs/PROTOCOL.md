@@ -167,6 +167,19 @@ round trip.
 ← {"ok":true,"id":"p_0001","name":"FINANCEIRO","mode":"advisory","peers":[…],"inbox":[]}
 ```
 
+- **`session` is what identity is keyed on**, not the name: an opaque string
+  stable for the lifetime of one agent session (the harness session id, where
+  there is one). Same `session` always means the same front, whatever name it
+  is currently using, and the name it is *already* using wins over whatever the
+  caller re-derived. Without this, a hook that re-derives a name from the
+  worktree on every tool call recreates a front the moment the agent renames
+  itself, and merges two sessions that happen to share a branch.
+- Re-attaching also **renews territory**: claims orphaned while the front was
+  quiet are un-orphaned. A session that paused to think, or to wait on a person,
+  must not lose files it is still holding.
+- The response carries `claims`, your own territory with `idle_s` per path, so a
+  hook can remind the agent to release what it has finished with without a
+  second round trip.
 - `name` is chosen by the agent. `kind` is `"agent"` or `"human"`; a panel or a
   person at a terminal joins as `human`.
 - **Re-attach:** the same `name` from the same `cwd` is the same front coming
@@ -232,7 +245,12 @@ get no evidence at all that anything was sent. A client that appends this event
 locally cannot end up showing it twice, precisely because `drain` will not
 repeat it.
 
-`to: null` is broadcast; `to: "NAME"` is directed. A message from a participant
+`to: null` is broadcast; `to: "NAME"` is directed. A directed message is private
+between the two fronts — but **not from a human**, who receives every event on
+the bus regardless of addressee. A person is accountable for what happens in
+their repository, and coordination they cannot see is coordination they cannot
+correct. This is a local development tool, not a privacy boundary between an
+agent and its operator. A message from a participant
 with `kind: "human"` is **always** delivered at `priority: "high"` and arrives
 marked as human, so the agent weighs it above a peer's opinion.
 
@@ -264,7 +282,14 @@ their addressee. `drain` advances the cursor to the current sequence number.
 
 The last N events this participant may see, **without moving the read cursor**.
 Same visibility rules as `drain`, plus your own messages. `limit` is clamped to
-1000.
+1000; `since` returns only events after that sequence number.
+
+The response also carries `cursor` (where a plain `drain` would resume) and
+`seq` (the newest event on the bus). **Normal reading is `drain`, which is
+incremental by construction** — a participant only ever receives what it has not
+seen, so polling costs nothing when nothing happened. `history` is the escape
+hatch for a front that lost its own context and wants to re-read a window it
+names.
 
 A joining agent deliberately starts at the current sequence number: nobody wants
 a fresh session flooded with an hour of backlog it cannot act on. A panel is the
@@ -395,8 +420,14 @@ and the visibility is what stops it from becoming a habit.
 ← {"ok":true,"notes":[…]}
 ```
 
-Notes are exported to `.parley/notes.md`, versioned in git. Automatic commit is
-deliberately out of scope: a human or an agent commits it, on purpose.
+`.parley/notes.md` is **written by the daemon on every accepted `note`**, so the
+versioned file is always current without anyone remembering an export step.
+`parley notes --export` forces a rewrite, and `parley notes --import` reads the
+file back onto the bus — which is how a fresh clone, or a daemon whose state was
+lost, picks up what the team already knows.
+
+Automatic *commit* is deliberately out of scope: a human or an agent commits it,
+on purpose.
 
 ### 6.6 Listing pending requests
 

@@ -11,6 +11,7 @@ import { relative, isAbsolute } from "node:path";
  */
 
 interface HookInput {
+  session_id?: string;
   hook_event_name?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
@@ -75,19 +76,40 @@ export async function runHook(event: string): Promise<void> {
   }
 
   const identity = resolveIdentity(repo.root, input.cwd ?? process.cwd());
+  // The harness session id is what keeps this front the same front across
+  // every tool call, and across the rename the agent is asked to do.
+  const session = input.session_id ?? process.env.PARLEY_SESSION ?? "";
   let joined = await client.request({
     op: "join", name: identity.name, mission: identity.mission,
-    harness: "claude-code", cwd: repo.root, kind: "agent",
+    harness: "claude-code", cwd: repo.root, kind: "agent", session,
   });
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
     joined = await client.request({
       op: "join", name: String(joined.error.suggestion), mission: identity.mission,
-      harness: "claude-code", cwd: repo.root, kind: "agent",
+      harness: "claude-code", cwd: repo.root, kind: "agent", session,
     });
   }
   if (!joined.ok) { clearTimeout(budget); client.close(); return emit({}); }
 
-  const me = joined as unknown as { id: string; name: string; mode: string; reattached?: boolean };
+  const me = joined as unknown as {
+    id: string; name: string; mode: string; reattached?: boolean;
+    claims?: { pattern: string; auto: boolean; idle_s: number }[];
+  };
+
+  /**
+   * Territory an agent forgot about is the most common way this system gets in
+   * its own way: a front finishes with a subtree and keeps it locked, and
+   * everybody else waits on a file nobody is editing. The reminder fires only
+   * for paths that have gone quiet, and only where the agent is already reading
+   * — asking it to remember on its own does not work.
+   */
+  const STALE_CLAIM_S = 300;
+  function territoryReminder(): string {
+    const stale = (me.claims ?? []).filter((c) => c.idle_s >= STALE_CLAIM_S);
+    if (stale.length === 0) return "";
+    const list = stale.map((c) => `${c.pattern} (idle ${Math.round(c.idle_s / 60)}m)`).join(", ");
+    return `parley: you still hold ${list}. Release whatever you are done with — \`parley release ${stale[0]!.pattern}\` — and re-claim it if you need it again. Holding a path you are not editing blocks the other fronts.`;
+  }
 
   try {
     if (name === "SessionStart") {
@@ -112,7 +134,7 @@ export async function runHook(event: string): Promise<void> {
 
     if (name !== "PreToolUse") {
       clearTimeout(budget);
-      return context(name, inbox);
+      return context(name, [inbox, territoryReminder()].filter(Boolean).join("\n\n"));
     }
 
     // PreToolUse: one hook, one call — drain the inbox and, when the tool is an
@@ -129,7 +151,7 @@ export async function runHook(event: string): Promise<void> {
     const claimed = await client.request({ op: "claim", paths: [target], auto: true });
     clearTimeout(budget);
 
-    if (claimed.ok) return context(name, inbox);
+    if (claimed.ok) return context(name, [inbox, territoryReminder()].filter(Boolean).join("\n\n"));
 
     const conflicts = (claimed as unknown as {
       conflicts?: { path: string; owner: { name: string; mission: string }; since: string }[];

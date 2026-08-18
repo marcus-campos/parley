@@ -16,6 +16,11 @@ export interface Participant {
   connected: boolean;
   /** Left explicitly, or the lease expired. Kept for name reuse on restart. */
   gone: boolean;
+  /**
+   * Opaque, stable for the lifetime of one agent session — the harness session
+   * id where there is one. This, not the name, is what identity is keyed on.
+   */
+  session: string | null;
 }
 
 export interface Claim {

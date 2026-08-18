@@ -397,9 +397,12 @@ quietly becoming the normal path.
 resolved. *"`npx tsc --noEmit` checks nothing in this repo"* is knowledge that is
 worth something to every future front, including the ones that do not exist yet.
 
-Notes export to **`.parley/notes.md`, versioned in git**: they cross machines,
-reach a colleague, and outlive the project. parley never commits for you — a
-human or an agent commits it, on purpose.
+Notes live in **`.parley/notes.md`, versioned in git**: they cross machines,
+reach a colleague, and outlive the project. The file is written **automatically
+whenever a note is added**, so it is always current; `parley notes --import`
+reads it back onto the bus, which is how a fresh clone picks up what the team
+already knows. parley never commits for you — a human or an agent commits it,
+on purpose.
 
 ### Presence, and what happens when a session dies
 

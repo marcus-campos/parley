@@ -1,5 +1,6 @@
 import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
+import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
 
 /**
  * `parley watch` — the panel.
@@ -23,6 +24,13 @@ import type { RepoInfo } from "../repo/locate";
 interface Front {
   name: string; mission: string; harness: string; kind: string;
   connected: boolean; idle_s: number; claims: string[];
+}
+
+interface Note {
+  title: string;
+  tags: string[];
+  authorName: string;
+  at: string;
 }
 
 interface PendingRequest {
@@ -102,12 +110,15 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   let fronts: Front[] = [];
   let pending: PendingRequest[] = [];
+  let notes: Note[] = [];
+  let myName = me.name;
+  type Mode = "watch" | "say" | "name";
+  let composing: Mode = "watch";
   let mode = me.mode;
   const feed: FeedEvent[] = [];
   let input = "";
   let status = "";
   let closing = false;
-  let speaking = false;
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
@@ -129,17 +140,19 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   }
 
   async function refresh(): Promise<void> {
-    const [whoR, reqR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
+      client.request({ op: "notes" }),
       client.request({ op: "drain" }),
     ]);
     if (whoR.ok) {
       const d = whoR as unknown as { mode: string; participants: Front[] };
       mode = d.mode;
-      fronts = d.participants.filter((p) => p.name !== me.name);
+      fronts = d.participants.filter((p) => p.name !== myName);
     }
     if (reqR.ok) pending = (reqR as unknown as { requests: PendingRequest[] }).requests;
+    if (notesR.ok) notes = (notesR as unknown as { notes: Note[] }).notes;
     if (drainR.ok) pushFeed((drainR as unknown as { events: FeedEvent[] }).events);
     render();
   }
@@ -153,7 +166,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
     const modeColour = mode === "enforced" ? red : mode === "off" ? dim : green;
     const title = `parley ${G.dot} ${modeColour(mode)} ${G.dot} ${repo.root.split("/").slice(-1)[0]}`;
-    const right = `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(me.name)}`;
+    const right = `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`;
     const pad = Math.max(1, w - visLen(title) - visLen(right));
     lines.push(bold(title) + " ".repeat(pad) + right);
     lines.push(dim(rule));
@@ -183,6 +196,15 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       }
     }
 
+    if (notes.length) {
+      lines.push("");
+      lines.push(dim(`  NOTES (${notes.length}) ${G.dot} durable knowledge, run \`parley notes --export\` to write .parley/notes.md`));
+      for (const n of notes.slice(-6)) {
+        const tags = n.tags.length ? dim(`  [${n.tags.join(", ")}]`) : "";
+        lines.push(`  ${dim(G.dot)} ${truncate(n.title, w - 30)}${tags}`);
+      }
+    }
+
     lines.push(dim(rule));
 
     // Feed fills whatever vertical space is left, newest at the bottom.
@@ -203,20 +225,38 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     for (let i = recent.length; i < room; i++) lines.push("");
 
     lines.push(dim(rule));
-    lines.push(
-      speaking
-        ? `${status ? `${dim(status)}  ` : ""}${bold(`${G.arrow} `)}${input}${dim("_")}`
-        : dim(`  watching ${G.dot} ${bold("i")}${dim(" to say something")} ${G.dot} Ctrl+C to leave`),
-    );
+    if (composing === "watch") {
+      lines.push(
+        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
+      );
+    } else {
+      const label = composing === "name" ? "your name:" : "";
+      lines.push(`${label ? `${dim(label)} ` : ""}${bold(`${G.arrow} `)}${input}${dim("_")}${status ? `  ${dim(status)}` : ""}`);
+    }
 
     // Redraw in one write: clear, home, print. Avoids the tearing you get from
     // clearing and printing as two syscalls on a slow terminal.
     process.stdout.write(`${ESC}H${ESC}J${lines.join("\n")}`);
   }
 
-  async function submit(text: string): Promise<void> {
+  async function submit(mode: Mode, text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
+
+    if (mode === "name") {
+      const wanted = sanitiseName(trimmed);
+      if (!wanted) { status = "that name has nothing usable in it"; return render(); }
+      const r = await client.request({ op: "rename", name: wanted });
+      if (r.ok) {
+        myName = (r as unknown as { name: string }).name;
+        writePanelConfig(repo.gitCommonDir, { ...readPanelConfig(repo.gitCommonDir), name: myName });
+        status = `you are ${myName} from now on, here and next time`;
+      } else {
+        status = `could not rename: ${r.error.code}${"suggestion" in r.error ? ` (try ${String(r.error.suggestion)})` : ""}`;
+      }
+      return render();
+    }
+
     // Voice only. A human does not grant, deny or arbitrate from here — the
     // fronts resolve territory among themselves, by design.
     const directed = /^@(\S+)\s+([\s\S]+)$/.exec(trimmed);
@@ -264,18 +304,20 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
         const code = ch.charCodeAt(0);
         if (code === 3 || code === 4) return void shutdown();  // Ctrl+C / Ctrl+D
 
-        if (!speaking) {
-          if (ch === "i" || ch === "I") { speaking = true; input = ""; status = ""; }
-          else if (ch === "q") return void shutdown();
+        if (composing === "watch") {
+          if (ch === "i" || ch === "I") { composing = "say"; input = ""; status = ""; }
+          else if (ch === "n" || ch === "N") { composing = "name"; input = ""; status = ""; }
+          else if (ch === "q" || ch === "Q") return void shutdown();
           continue;
         }
 
-        if (code === 27) { speaking = false; input = ""; continue; }        // Esc
+        if (code === 27) { composing = "watch"; input = ""; continue; }     // Esc
         if (code === 13 || code === 10) {
           const text = input;
+          const mode = composing;
           input = "";
-          speaking = false;
-          void submit(text);
+          composing = "watch";
+          void submit(mode, text);
           continue;
         }
         if (code === 127 || code === 8) { input = input.slice(0, -1); continue; }

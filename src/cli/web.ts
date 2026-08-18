@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
+import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
 
 /**
  * `parley watch --web` — the same panel in a browser, for following along on a
@@ -25,6 +26,7 @@ export interface Snapshot {
   you: string;
   fronts: unknown[];
   requests: unknown[];
+  notes: unknown[];
   feed: unknown[];
 }
 
@@ -45,6 +47,7 @@ export async function runWebPanel(
     process.exit(1);
   }
   const me = joined as unknown as { name: string; mode: string };
+  let myName = me.name;
 
   const token = randomBytes(16).toString("hex");
   const feed: unknown[] = [];
@@ -53,7 +56,7 @@ export async function runWebPanel(
 
   const isOwnNoise = (e: unknown): boolean => {
     const ev = e as { kind?: string; text?: string };
-    return ev.kind === "system" && typeof ev.text === "string" && ev.text.startsWith(`${me.name} `);
+    return ev.kind === "system" && typeof ev.text === "string" && ev.text.startsWith(`${myName} `);
   };
 
   client.onPush((events) => {
@@ -73,9 +76,10 @@ export async function runWebPanel(
         }
       }
     }
-    const [whoR, reqR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
+      client.request({ op: "notes" }),
       client.request({ op: "drain" }),
     ]);
     if (drainR.ok) {
@@ -86,9 +90,10 @@ export async function runWebPanel(
     return {
       mode: who?.mode ?? me.mode,
       repo: repo.root,
-      you: me.name,
-      fronts: (who?.participants ?? []).filter((p) => p.name !== me.name),
+      you: myName,
+      fronts: (who?.participants ?? []).filter((p) => p.name !== myName),
       requests: reqR.ok ? (reqR as unknown as { requests: unknown[] }).requests : [],
+      notes: notesR.ok ? (notesR as unknown as { notes: unknown[] }).notes : [],
       feed: feed.slice(-200),
     };
   }
@@ -150,6 +155,20 @@ export async function runWebPanel(
         if (r.ok) {
           const sent = (r as unknown as { event?: unknown }).event;
           if (sent) feed.push(sent);
+        }
+        await broadcast();
+        return json(r);
+      }
+
+      // Your own display name, set from the page instead of from a flag.
+      if (req.method === "POST" && url.pathname === "/rename") {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        const wanted = sanitiseName(String(body.name ?? ""));
+        if (!wanted) return json({ ok: false, error: "that name has nothing usable in it" }, 400);
+        const r = await client.request({ op: "rename", name: wanted });
+        if (r.ok) {
+          myName = (r as unknown as { name: string }).name;
+          writePanelConfig(repo.gitCommonDir, { ...readPanelConfig(repo.gitCommonDir), name: myName });
         }
         await broadcast();
         return json(r);

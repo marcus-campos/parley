@@ -15,20 +15,77 @@ function suggestName(state: State, wanted: string): string {
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 
+/** Your own territory, with how long since each path was last touched. */
+function ownClaims(state: State, ownerId: string, ctx: Ctx) {
+  return state.claims
+    .filter((c) => c.ownerId === ownerId)
+    .map((c) => ({
+      pattern: c.pattern,
+      auto: c.auto,
+      idle_s: Math.max(0, Math.round((ctx.nowMs - c.lastTouchMs) / 1000)),
+    }));
+}
+
 export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const name = str(frame.name).trim();
   if (!name) return { state, response: err("NAME_TAKEN", "a name is required"), broadcast: [] };
 
+  // Identity is keyed on the session, never on the name.
+  //
+  // The hook is an ephemeral process that re-derives a name from the worktree
+  // on every single tool call. Keyed on the name, two things went wrong at
+  // once: an agent that renamed itself came back as a brand new front on its
+  // next tool call, and two sessions in the same worktree derived the same
+  // name and were merged into one. Both were visible as names churning in the
+  // panel.
+  const session = str(frame.session);
+  if (session) {
+    const known = Object.values(state.participants).find((p) => p.session === session);
+    if (known) {
+      known.gone = false;
+      known.lastSeenMs = ctx.nowMs;
+      if (frame.connected === true) known.connected = true;
+      // Coming back renews the territory. A front that paused — thinking, or
+      // waiting on the person — must not lose files it is still holding just
+      // because a hook did not fire for a few minutes.
+      for (const c of state.claims) {
+        if (c.ownerId === known.id) c.orphanedAtMs = null;
+      }
+      // The name it is using now wins over whatever the caller re-derived.
+      if (typeof frame.mission === "string" && frame.mission && !known.mission) {
+        known.mission = frame.mission;
+      }
+      return {
+        state,
+        response: ok({
+          id: known.id,
+          name: known.name,
+          mission: known.mission,
+          mode: state.mode,
+          reattached: true,
+          claims: ownClaims(state, known.id, ctx),
+          peers: liveParticipants(state)
+            .filter((p) => p.id !== known.id)
+            .map((p) => publicParticipant(p, state, ctx)),
+          inbox: [],
+        }),
+        broadcast: [],
+      };
+    }
+  }
+
   const taken = byName(state, name);
   if (taken) {
-    // The CLI path is ephemeral: a hook connects, speaks and exits on every
-    // tool call. Same name from the same worktree is the same front coming
-    // back, so it re-attaches and renews its lease instead of colliding with
-    // itself. A different worktree with the same name is a genuine collision.
-    const sameWorktree = typeof frame.cwd === "string" && frame.cwd !== "" && frame.cwd === taken.cwd;
+    // Fallback for callers with no session id (a plain shell, another tool):
+    // same name from the same worktree is the same front coming back.
+    const sameWorktree =
+      !session && typeof frame.cwd === "string" && frame.cwd !== "" && frame.cwd === taken.cwd;
     if (sameWorktree) {
       taken.lastSeenMs = ctx.nowMs;
       if (frame.connected === true) taken.connected = true;
+      for (const c of state.claims) {
+        if (c.ownerId === taken.id) c.orphanedAtMs = null;
+      }
       if (typeof frame.mission === "string" && frame.mission) taken.mission = frame.mission;
       return {
         state,
@@ -37,6 +94,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
           name: taken.name,
           mode: state.mode,
           reattached: true,
+          claims: ownClaims(state, taken.id, ctx),
           peers: liveParticipants(state)
             .filter((p) => p.id !== taken.id)
             .map((p) => publicParticipant(p, state, ctx)),
@@ -66,6 +124,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     harness: str(frame.harness, "unknown"),
     kind: (str(frame.kind, "agent") === "human" ? "human" : "agent") as ParticipantKind,
     cwd: str(frame.cwd),
+    session: session || null,
     joinedAt: ctx.now,
     lastSeenMs: ctx.nowMs,
     connected: frame.connected === true,
@@ -92,6 +151,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
       id,
       name,
       mode: state.mode,
+      claims: ownClaims(state, id, ctx),
       peers: liveParticipants(state)
         .filter((p) => p.id !== id)
         .map((p) => publicParticipant(p, state, ctx)),

@@ -1,5 +1,8 @@
 import { err, ok, type Priority } from "../protocol/types";
-import { actorOf, byName, pushEvent, type Ctx, type Outcome, type State } from "./types";
+import {
+  actorOf, byName, pushEvent,
+  type ConvEvent, type Ctx, type Outcome, type Participant, type State,
+} from "./types";
 
 export function say(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
@@ -44,11 +47,21 @@ function selectEvents(state: State, participantId: string) {
   if (!me) return [];
   const cursor = state.cursors[participantId] ?? 0;
   return state.events.filter(
-    (e) =>
-      e.seq > cursor &&
-      e.from?.id !== participantId &&
-      (e.to === null || e.to === me.name),
+    (e) => e.seq > cursor && e.from?.id !== participantId && visibleTo(e, me),
   );
+}
+
+/**
+ * A directed message is private between two fronts — but not from the person
+ * watching. A human is the observer of the whole bus: they are accountable for
+ * what happens in this repository, and coordination they cannot see is
+ * coordination they cannot correct. This is a local development tool, not a
+ * privacy boundary between an agent and its operator.
+ */
+function visibleTo(event: ConvEvent, me: Participant): boolean {
+  if (event.to === null) return true;
+  if (event.to === me.name) return true;
+  return me.kind === "human";
 }
 
 export function drain(state: State, actorId: string | null, ctx: Ctx): Outcome {
@@ -77,9 +90,18 @@ export function history(state: State, actorId: string | null, frame: Record<stri
 
   const raw = typeof frame.limit === "number" ? frame.limit : 200;
   const limit = Math.max(1, Math.min(1000, Math.floor(raw)));
+  const since = typeof frame.since === "number" ? frame.since : 0;
+
   const events = state.events
-    .filter((e) => e.to === null || e.to === me.name || e.from?.id === me.id)
+    .filter((e) => e.seq > since && (visibleTo(e, me) || e.from?.id === me.id))
     .slice(-limit);
 
-  return { state, response: ok({ events }), broadcast: [] };
+  // `cursor` is where a plain `drain` would resume from, so a caller can hand
+  // it back as `since` later — a deliberate re-read of a known window rather
+  // than pulling the whole log again.
+  return {
+    state,
+    response: ok({ events, cursor: state.cursors[me.id] ?? 0, seq: state.seq }),
+    broadcast: [],
+  };
 }

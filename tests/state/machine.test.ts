@@ -163,16 +163,29 @@ describe("history", () => {
     expect(drained.events.some((e) => e.text === "olha isso")).toBe(true);
   });
 
-  test("it never leaks a message directed at someone else", () => {
+  test("an agent's backlog never leaks a message directed at someone else", () => {
     const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
-    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    const mobile = joined(state, "MOBILE", { cwd: "/wt/mob" }, 20);
+    apply(state, fin, { v: 1, op: "say", to: "TESTE-CAMPO", text: "so pra voce" }, at(30));
+
+    const past = apply(state, mobile, { v: 1, op: "history" }, at(40)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(past.events.some((e) => e.text === "so pra voce")).toBe(false);
+  });
+
+  test("a human's backlog does include it, because watching means watching", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
     const panel = joined(state, "PANEL", { kind: "human", cwd: "/wt/panel" }, 20);
     apply(state, fin, { v: 1, op: "say", to: "TESTE-CAMPO", text: "so pra voce" }, at(30));
 
     const past = apply(state, panel, { v: 1, op: "history" }, at(40)).response as unknown as {
-      events: { text: string }[];
+      events: { text: string; to: string | null }[];
     };
-    expect(past.events.some((e) => e.text === "so pra voce")).toBe(false);
+    const seen = past.events.find((e) => e.text === "so pra voce");
+    expect(seen?.to).toBe("TESTE-CAMPO");
   });
 
   test("the limit is clamped, not trusted", () => {
@@ -211,5 +224,120 @@ describe("say returns what it created", () => {
       events: { text: string; priority: string }[];
     };
     expect(inbox.events.find((e) => e.text === "aviso")?.priority).toBe("high");
+  });
+});
+
+describe("identity is keyed on the session, not the name", () => {
+  const S = "sess-abc123";
+
+  test("a front that renamed itself is not recreated by the next hook", () => {
+    // This is the churn: the hook re-derives the branch name on every tool
+    // call, so keyed on the name the agent came back as a brand new front.
+    const first = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    apply(state, id, { v: 1, op: "rename", name: "PRUMO", mission: "fechar pendências" }, at(10));
+
+    const nextHook = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(20));
+    expect(nextHook.response).toMatchObject({ ok: true, id, name: "PRUMO", reattached: true });
+    expect(Object.keys(state.participants)).toHaveLength(1);
+  });
+
+  test("two sessions in the same worktree stay two fronts", () => {
+    // Keyed on name+cwd these merged into one, which is the same bug seen from
+    // the other side: both derive the branch name and both are in one repo.
+    apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: "sess-a" }, at(0));
+    const second = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: "sess-b" }, at(10));
+
+    expect(second.response).toMatchObject({ error: { code: "NAME_TAKEN", suggestion: "DEVELOP-2" } });
+    const retry = apply(state, null, { v: 1, op: "join", name: "DEVELOP-2", cwd: "/repo", session: "sess-b" }, at(20));
+    expect(retry.response.ok).toBe(true);
+    expect(Object.keys(state.participants)).toHaveLength(2);
+  });
+
+  test("a session that dropped comes back as itself, name and all", () => {
+    const first = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    apply(state, id, { v: 1, op: "rename", name: "LEME", mission: "auditoria" }, at(10));
+
+    tick(state, at(DEFAULTS.LEASE_TTL_MS + 1000));
+    expect(state.participants[id]!.gone).toBe(true);
+
+    const back = apply(state, null, { v: 1, op: "join", name: "DEVELOP", cwd: "/repo", session: S }, at(DEFAULTS.LEASE_TTL_MS + 2000));
+    expect(back.response).toMatchObject({ ok: true, id, name: "LEME" });
+    expect(Object.keys(state.participants)).toHaveLength(1);
+  });
+
+  test("callers with no session still re-attach by name and worktree", () => {
+    const first = apply(state, null, { v: 1, op: "join", name: "SHELL", cwd: "/repo" }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    const again = apply(state, null, { v: 1, op: "join", name: "SHELL", cwd: "/repo" }, at(10));
+    expect(again.response).toMatchObject({ ok: true, id, reattached: true });
+  });
+});
+
+describe("what an observer sees, and what it costs to keep watching", () => {
+  test("a human sees a private message between two agents", () => {
+    // Not a privacy boundary: the person is accountable for this repository,
+    // and coordination they cannot see is coordination they cannot correct.
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    const mobile = joined(state, "MOBILE", { cwd: "/wt/mob" }, 20);
+    const human = joined(state, "Marcus", { kind: "human", cwd: "/wt/panel" }, 30);
+
+    apply(state, fin, { v: 1, op: "say", to: "TESTE-CAMPO", text: "só entre nós" }, at(40));
+
+    const forHuman = apply(state, human, { v: 1, op: "drain" }, at(50)).response as unknown as {
+      events: { text: string; to: string | null }[];
+    };
+    const seen = forHuman.events.find((e) => e.text === "só entre nós");
+    expect(seen).toBeDefined();
+    expect(seen!.to).toBe("TESTE-CAMPO");
+
+    // Another agent still does not.
+    const forMobile = apply(state, mobile, { v: 1, op: "drain" }, at(60)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(forMobile.events.some((e) => e.text === "só entre nós")).toBe(false);
+  });
+
+  test("drain is incremental: a second pull costs nothing when nothing happened", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+
+    apply(state, fin, { v: 1, op: "say", text: "primeira" }, at(20));
+    const first = apply(state, campo, { v: 1, op: "drain" }, at(30)).response as unknown as { events: unknown[] };
+    expect(first.events).toHaveLength(1);
+
+    const second = apply(state, campo, { v: 1, op: "drain" }, at(40)).response as unknown as { events: unknown[] };
+    expect(second.events).toHaveLength(0);
+
+    apply(state, fin, { v: 1, op: "say", text: "segunda" }, at(50));
+    const third = apply(state, campo, { v: 1, op: "drain" }, at(60)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(third.events).toHaveLength(1);
+    expect(third.events[0]!.text).toBe("segunda");
+  });
+
+  test("a front that lost its context can re-read a window it names", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    for (const t of ["um", "dois", "três"]) apply(state, fin, { v: 1, op: "say", text: t }, at(20));
+
+    const drained = apply(state, campo, { v: 1, op: "drain" }, at(30)).response as unknown as {
+      events: { seq: number }[];
+    };
+    const firstSeq = drained.events[0]!.seq;
+
+    const again = apply(state, campo, { v: 1, op: "history", since: firstSeq - 1 }, at(40)).response as unknown as {
+      events: { text: string }[];
+      cursor: number;
+    };
+    expect(again.events.map((e) => e.text)).toEqual(["um", "dois", "três"]);
+    expect(again.cursor).toBeGreaterThan(0);
+
+    // And re-reading did not move the cursor, so the next drain is still empty.
+    expect((apply(state, campo, { v: 1, op: "drain" }, at(50)).response as unknown as { events: unknown[] }).events)
+      .toHaveLength(0);
   });
 });

@@ -68,12 +68,22 @@ parley claim 'src/backend/finance/**' --intent "closing refactor"
 parley release 'src/backend/finance/**'
 \`\`\`
 
-A claim you took by editing expires after 15 idle minutes. A claim you asked for
-explicitly is yours until you leave.
+**Release the moment you are done.** Not at the end of the session — the moment
+you stop needing the path:
 
-**Release what you have finished with.** If another front is waiting on one of
-your paths, releasing it hands it straight to them — you do not have to answer
-the request separately. Letting go IS the answer.
+\`\`\`
+parley release 'src/backend/finance/**'
+parley release --all
+\`\`\`
+
+Holding a path you are no longer editing blocks every other front on a file
+nobody is touching. If someone is waiting on it, releasing hands it straight to
+them — you do not answer the request separately. Letting go IS the answer.
+
+**Renewal is automatic while you work**, because every tool call renews your
+lease. If you are going to pause for a long time and still need a path, touch it
+or re-claim it. A claim you took by editing expires after 15 idle minutes; one
+you asked for explicitly is yours until you release it or leave.
 
 ## When a file belongs to someone else
 
