@@ -94,9 +94,27 @@ export const PAGE = String.raw`<!doctype html>
     border-bottom:1px dotted var(--line);cursor:pointer;padding:0 1px}
   .who-btn:hover{color:var(--human);border-bottom-color:var(--human)}
   .note{padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius);
-    background:var(--panel);margin-bottom:6px}
+    background:var(--panel);margin-bottom:6px;cursor:pointer}
+  .note:hover{border-color:var(--human)}
   .note .t{font-size:13px}
   .note .m{color:var(--mute);font-size:11.5px;margin-top:3px}
+
+  /* The reader. A note you cannot read in full is not a note. */
+  #reader[hidden]{display:none}
+  #reader{position:fixed;inset:0;background:var(--bg);z-index:20;
+    display:flex;flex-direction:column}
+  #reader .bar{display:flex;align-items:center;gap:12px;padding:14px 24px;
+    border-bottom:1px solid var(--line)}
+  #reader .doc{flex:1;overflow:auto;padding:34px 24px 60px}
+  #reader .inner{max-width:74ch;margin:0 auto}
+  #reader h3{font-size:20px;line-height:1.35;margin:0 0 10px;font-weight:600}
+  #reader .meta{color:var(--mute);font-size:12.5px;margin-bottom:26px}
+  #reader .body{white-space:pre-wrap;font-size:14.5px;line-height:1.7}
+  #reader .tag{font-size:11.5px;padding:1px 7px;border-radius:5px;
+    border:1px solid var(--line);color:var(--mute);margin-right:4px}
+  #reader .nav{margin-left:auto;display:flex;gap:8px;align-items:center}
+  #reader .count{color:var(--mute);font-size:12px}
+  button:disabled{opacity:.35;cursor:default}
 </style>
 </head>
 <body>
@@ -126,7 +144,7 @@ export const PAGE = String.raw`<!doctype html>
       <div class="bar">
         <span>watching &middot; the fronts settle territory and permission among themselves</span>
         <span class="grow"></span>
-        <span><kbd>s</kbd> to say something &middot; click your name to change it</span>
+        <span><kbd>s</kbd> say &middot; <kbd>n</kbd> read notes &middot; click your name to change it</span>
       </div>
       <form class="composer" id="form" autocomplete="off">
         <input type="text" id="msg" placeholder="goes out as human, at high priority &mdash; @NAME to direct it" />
@@ -136,6 +154,25 @@ export const PAGE = String.raw`<!doctype html>
     </footer>
   </section>
 </main>
+
+<div id="reader" hidden>
+  <div class="bar">
+    <button id="r-close" title="Esc">&larr; back</button>
+    <span class="count" id="r-count"></span>
+    <span class="nav">
+      <button id="r-prev" title="left arrow">&larr; previous</button>
+      <button id="r-next" title="right arrow">next &rarr;</button>
+    </span>
+  </div>
+  <div class="doc">
+    <div class="inner">
+      <h3 id="r-title"></h3>
+      <div class="meta" id="r-meta"></div>
+      <div class="body" id="r-body"></div>
+    </div>
+  </div>
+</div>
+
 <script>
 const TOKEN = "__TOKEN__";
 const $ = (id) => document.getElementById(id);
@@ -154,8 +191,16 @@ function setSpeaking(on) {
 }
 document.addEventListener("keydown", (e) => {
   const speaking = document.body.classList.contains("speaking");
+  if (reading !== null) {
+    if (e.key === "Escape") { closeNote(); }
+    else if (e.key === "ArrowLeft" || e.key === "k") { if (reading > 0) openNote(reading - 1); }
+    else if (e.key === "ArrowRight" || e.key === "j") { if (reading < allNotes.length - 1) openNote(reading + 1); }
+    return;
+  }
   if (!speaking && (e.key === "s" || e.key === "S") && !e.metaKey && !e.ctrlKey) {
     e.preventDefault(); setSpeaking(true);
+  } else if (!speaking && (e.key === "n" || e.key === "N") && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault(); openNote(0);
   } else if (e.key === "Escape") {
     setSpeaking(false);
   }
@@ -171,6 +216,33 @@ $("you").addEventListener("click", async () => {
   if (!r.ok) window.alert("parley: " + (r.error && (r.error.code || r.error) || "could not rename"));
 });
 
+// --- the note reader ---------------------------------------------------------
+let allNotes = [];
+let reading = null;
+
+function openNote(index) {
+  if (!allNotes.length) return;
+  reading = Math.max(0, Math.min(index, allNotes.length - 1));
+  const n = allNotes[reading];
+  $("r-title").textContent = n.title;
+  $("r-meta").innerHTML = esc(n.authorName) + " &middot; " + esc(new Date(n.at).toLocaleString())
+    + (n.tags && n.tags.length ? "<br><br>" + n.tags.map((t) => '<span class="tag">'+esc(t)+'</span>').join("") : "");
+  $("r-body").textContent = n.body || "(no body)";
+  $("r-count").textContent = (reading + 1) + " of " + allNotes.length;
+  $("r-prev").disabled = reading === 0;
+  $("r-next").disabled = reading === allNotes.length - 1;
+  $("reader").hidden = false;
+}
+function closeNote() { reading = null; $("reader").hidden = true; }
+
+document.addEventListener("click", (ev) => {
+  const card = ev.target.closest("[data-note]");
+  if (card) openNote(Number(card.dataset.note));
+});
+$("r-close").addEventListener("click", closeNote);
+$("r-prev").addEventListener("click", () => openNote(reading - 1));
+$("r-next").addEventListener("click", () => openNote(reading + 1));
+
 let atBottom = true;
 $("feed").addEventListener("scroll", () => {
   const el = $("feed");
@@ -183,11 +255,13 @@ function render(s) {
   $("repo").textContent = s.repo.split("/").pop();
   $("you").textContent = "you are " + s.you;
 
-  $("notes").innerHTML = (s.notes && s.notes.length) ? s.notes.slice().reverse().map((n) =>
-    '<div class="note"><div class="t">'+esc(n.title)+'</div>'
+  allNotes = (s.notes || []).slice().reverse();
+  $("notes").innerHTML = allNotes.length ? allNotes.map((n, i) =>
+    '<div class="note" data-note="'+i+'" tabindex="0" role="button"><div class="t">'+esc(n.title)+'</div>'
     + '<div class="m">'+esc(n.authorName)+(n.tags && n.tags.length ? ' &middot; '+esc(n.tags.join(", ")) : '')+'</div>'
     + '</div>'
   ).join("") : '<p class="empty">no notes yet</p>';
+  if (reading !== null) openNote(reading);
 
   $("fronts").innerHTML = s.fronts.length ? s.fronts.map((f) => {
     const cls = f.connected ? "live" : (f.idle_s > 240 ? "stale" : "");

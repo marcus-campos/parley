@@ -286,8 +286,15 @@ Press <kbd>i</kbd> and a composer appears; <kbd>Esc</kbd> closes it again:
 | <kbd>i</kbd> | open the composer |
 | `anything` + <kbd>Enter</kbd> | broadcast to every front |
 | `@FINANCEIRO anything` | directed to one front |
-| <kbd>Esc</kbd> | close the composer, back to watching |
+| <kbd>n</kbd> | browse the notes |
+| <kbd>m</kbd> | set how you appear on the bus (remembered per repository) |
+| <kbd>Esc</kbd> | back one screen |
 | <kbd>q</kbd> or <kbd>Ctrl+C</kbd> | leave and restore your terminal |
+
+In the note list, <kbd>j</kbd>/<kbd>k</kbd> or the arrows move and
+<kbd>Enter</kbd> opens the note full screen. In the reader,
+<kbd>j</kbd>/<kbd>k</kbd> scroll and <kbd>n</kbd>/<kbd>p</kbd> step to the next
+and previous note without going back to the list.
 
 There is no grant, deny or mode anywhere in the panel, by design — see below.
 
@@ -310,6 +317,10 @@ Opens your browser on a live page — the same fronts, feed and pending requests
 streamed over server-sent events. Light and dark follow your system. It opens
 watching, with no message box; press <kbd>s</kbd> for a composer and
 <kbd>Esc</kbd> to dismiss it. There is no grant or deny anywhere on the page.
+
+Click any note — or press <kbd>n</kbd> — to read it full screen, with
+<kbd>&larr;</kbd>/<kbd>&rarr;</kbd> stepping between notes and <kbd>Esc</kbd>
+closing.
 
 - `--port 7717` picks the port; `--open=false` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is

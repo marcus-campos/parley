@@ -5,20 +5,14 @@ import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config"
 /**
  * `parley watch` — the panel.
  *
- * Live fronts, the conversation stream, and pending permission requests in
- * focus with the clock running.
- *
  * It opens **watching**: no input line, no buttons. The fronts settle territory
  * and permission among themselves; a stalled request must never quietly become
  * a request for a person's attention, and a panel with a prompt sitting in it
  * invites exactly that.
  *
- * Pressing `i` opens a composer, `Esc` closes it again. A human does have a
- * voice — what is sent from here reaches every front marked as human and at
- * high priority — it just is not what the interface offers you first.
- *
- * The panel is a convenience, never a dependency: `parley who`, `parley
- * requests` and `parley drain` from a terminal do the same job.
+ * Three screens: the bus, the note list, and one note full screen. Everything
+ * that writes is something you open on purpose — `i` to say, `m` to set your
+ * name — because a human here has a voice and not a vote.
  */
 
 interface Front {
@@ -27,10 +21,8 @@ interface Front {
 }
 
 interface Note {
-  title: string;
-  tags: string[];
-  authorName: string;
-  at: string;
+  id: string; title: string; body: string; tags: string[];
+  authorName: string; at: string;
 }
 
 interface PendingRequest {
@@ -55,8 +47,8 @@ const UNICODE = (() => {
 })();
 
 const G = UNICODE
-  ? { h: "─", bullet: "•", bang: "!", dot: "·", arrow: "›" }
-  : { h: "-", bullet: "*", bang: "!", dot: "-", arrow: ">" };
+  ? { h: "─", bullet: "•", bang: "!", dot: "·", arrow: "›", sel: "▸" }
+  : { h: "-", bullet: "*", bang: "!", dot: "-", arrow: ">", sel: ">" };
 
 const ESC = "\x1b[";
 const dim = (s: string) => `${ESC}2m${s}${ESC}0m`;
@@ -65,22 +57,19 @@ const red = (s: string) => `${ESC}31m${s}${ESC}0m`;
 const yellow = (s: string) => `${ESC}33m${s}${ESC}0m`;
 const cyan = (s: string) => `${ESC}36m${s}${ESC}0m`;
 const green = (s: string) => `${ESC}32m${s}${ESC}0m`;
+const invert = (s: string) => `${ESC}7m${s}${ESC}0m`;
 
-function width(): number { return Math.max(40, process.stdout.columns ?? 80); }
-function height(): number { return Math.max(12, process.stdout.rows ?? 24); }
-
-/** Visible length, ignoring ANSI sequences. */
-function visLen(s: string): number {
-  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
-}
+const width = () => Math.max(40, process.stdout.columns ?? 80);
+const height = () => Math.max(12, process.stdout.rows ?? 24);
+const visLen = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "").length;
 
 function truncate(s: string, max: number): string {
   return visLen(s) <= max ? s : `${s.slice(0, Math.max(0, max - 1))}${UNICODE ? "…" : "~"}`;
 }
 
 /** Pad to a visible width. `String.padEnd` counts escape bytes and misaligns. */
-function padVis(s: string, width: number): string {
-  return s + " ".repeat(Math.max(0, width - visLen(s)));
+function padVis(s: string, w: number): string {
+  return s + " ".repeat(Math.max(0, w - visLen(s)));
 }
 
 function clock(iso: string): string {
@@ -88,11 +77,33 @@ function clock(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function countdown(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
+function stamp(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${clock(iso)}`;
 }
+
+function countdown(seconds: number): string {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+/** Wrap on word boundaries, preserving the blank lines that shape a note. */
+function wrap(text: string, w: number): string[] {
+  const out: string[] = [];
+  for (const paragraph of text.split("\n")) {
+    if (paragraph.trim() === "") { out.push(""); continue; }
+    let line = "";
+    for (const word of paragraph.split(/\s+/)) {
+      if (line === "") line = word;
+      else if (line.length + 1 + word.length <= w) line += ` ${word}`;
+      else { out.push(line); line = word; }
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+type View = "bus" | "notes" | "reader";
+type Composer = "none" | "say" | "name";
 
 export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   const client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir });
@@ -111,20 +122,22 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let fronts: Front[] = [];
   let pending: PendingRequest[] = [];
   let notes: Note[] = [];
-  let myName = me.name;
-  type Mode = "watch" | "say" | "name";
-  let composing: Mode = "watch";
   let mode = me.mode;
+  let myName = me.name;
   const feed: FeedEvent[] = [];
+
+  let view: View = "bus";
+  let composer: Composer = "none";
   let input = "";
   let status = "";
+  let selected = 0;
+  let scroll = 0;
   let closing = false;
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
-      // The panel's own join/leave is noise about the observer, not about the
-      // work. Dropping it keeps an idle bus looking idle.
-      if (e.kind === "system" && e.text.startsWith(`${me.name} `)) continue;
+      // The panel's own join/leave is noise about the observer, not the work.
+      if (e.kind === "system" && e.text.startsWith(`${myName} `)) continue;
       feed.push(e);
     }
     while (feed.length > 500) feed.shift();
@@ -132,8 +145,6 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   client.onPush((events) => { pushFeed(events as FeedEvent[]); render(); });
 
-  // Seed from the backlog before the first paint. A panel that opens blank on a
-  // bus that has been busy for an hour is telling you the opposite of the truth.
   async function seed(): Promise<void> {
     const past = await client.request({ op: "history", limit: 200 });
     if (past.ok) pushFeed((past as unknown as { events: FeedEvent[] }).events);
@@ -152,44 +163,51 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       fronts = d.participants.filter((p) => p.name !== myName);
     }
     if (reqR.ok) pending = (reqR as unknown as { requests: PendingRequest[] }).requests;
-    if (notesR.ok) notes = (notesR as unknown as { notes: Note[] }).notes;
+    if (notesR.ok) {
+      notes = (notesR as unknown as { notes: Note[] }).notes;
+      if (selected >= notes.length) selected = Math.max(0, notes.length - 1);
+    }
     if (drainR.ok) pushFeed((drainR as unknown as { events: FeedEvent[] }).events);
     render();
   }
 
-  function render(): void {
-    if (closing) return;
+  function header(right: string): string[] {
+    const w = width();
+    const colour = mode === "enforced" ? red : mode === "off" ? dim : green;
+    const title = `parley ${G.dot} ${colour(mode)} ${G.dot} ${repo.root.split("/").slice(-1)[0]}`;
+    const pad = Math.max(1, w - visLen(title) - visLen(right));
+    return [bold(title) + " ".repeat(pad) + right, dim(G.h.repeat(w))];
+  }
+
+  function paint(lines: string[]): void {
+    process.stdout.write(`${ESC}H${ESC}J${lines.slice(0, height()).join("\n")}`);
+  }
+
+  function renderBus(): void {
     const w = width();
     const h = height();
-    const lines: string[] = [];
-    const rule = G.h.repeat(w);
+    const lines = header(
+      `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`,
+    );
 
-    const modeColour = mode === "enforced" ? red : mode === "off" ? dim : green;
-    const title = `parley ${G.dot} ${modeColour(mode)} ${G.dot} ${repo.root.split("/").slice(-1)[0]}`;
-    const right = `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`;
-    const pad = Math.max(1, w - visLen(title) - visLen(right));
-    lines.push(bold(title) + " ".repeat(pad) + right);
-    lines.push(dim(rule));
-
-    if (fronts.length === 0) {
-      lines.push(dim("  nobody else on the bus yet"));
-    } else {
-      for (const f of fronts) {
-        const presence = f.connected ? green(G.bullet) : f.idle_s > 240 ? red(G.bullet) : yellow(G.bullet);
-        const claims = f.claims.length ? dim(`${f.claims.length} claim${f.claims.length === 1 ? "" : "s"}`) : dim("no claims");
-        const mission = f.mission ? truncate(f.mission, 30) : dim("no mission");
-        const head = `  ${presence} ${padVis(bold(f.name), 14)} ${padVis(mission, 30)}`;
-        lines.push(`${head} ${padVis(dim(f.harness), 12)} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`);
-        if (f.claims.length) lines.push(dim(`      ${truncate(f.claims.join(", "), w - 8)}`));
-      }
+    if (fronts.length === 0) lines.push(dim("  nobody else on the bus yet"));
+    for (const f of fronts) {
+      const presence = f.connected ? green(G.bullet) : f.idle_s > 240 ? red(G.bullet) : yellow(G.bullet);
+      const claims = f.claims.length
+        ? dim(`${f.claims.length} claim${f.claims.length === 1 ? "" : "s"}`)
+        : dim("no claims");
+      const mission = f.mission ? truncate(f.mission, 30) : dim("no mission");
+      lines.push(
+        `  ${presence} ${padVis(bold(f.name), 14)} ${padVis(mission, 30)} ${padVis(dim(f.harness), 12)} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`,
+      );
+      if (f.claims.length) lines.push(dim(`      ${truncate(f.claims.join(", "), w - 8)}`));
     }
 
     if (pending.length) {
       lines.push("");
       lines.push(yellow(`  PENDING PERMISSION (${pending.length})`));
       for (const r of pending) {
-        const late = r.seconds_left < 60;
-        const timer = (late ? red : yellow)(`${countdown(r.seconds_left)} left`);
+        const timer = (r.seconds_left < 60 ? red : yellow)(`${countdown(r.seconds_left)} left`);
         lines.push(`  ${red(G.bang)} ${bold(r.requester)} wants ${cyan(truncate(r.path, 44))} from ${bold(r.owner)}  ${timer}`);
         lines.push(dim(`      ${truncate(r.reason || "no reason given", w - 10)}`));
         lines.push(dim(`      ${r.owner} settles this; unanswered, it is granted to ${r.requester} and announced`));
@@ -198,18 +216,15 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
     if (notes.length) {
       lines.push("");
-      lines.push(dim(`  NOTES (${notes.length}) ${G.dot} durable knowledge, run \`parley notes --export\` to write .parley/notes.md`));
-      for (const n of notes.slice(-6)) {
-        const tags = n.tags.length ? dim(`  [${n.tags.join(", ")}]`) : "";
-        lines.push(`  ${dim(G.dot)} ${truncate(n.title, w - 30)}${tags}`);
+      lines.push(dim(`  NOTES (${notes.length}) ${G.dot} ${bold("n")}${dim(" to browse and read them")}`));
+      for (const note of notes.slice(-3)) {
+        lines.push(dim(`  ${G.dot} ${truncate(note.title, w - 12)}`));
       }
     }
 
-    lines.push(dim(rule));
+    lines.push(dim(G.h.repeat(w)));
 
-    // Feed fills whatever vertical space is left, newest at the bottom.
-    const reserved = lines.length + 3;
-    const room = Math.max(3, h - reserved);
+    const room = Math.max(3, h - (lines.length + 3));
     const recent = feed.slice(-room);
     for (const e of recent) {
       const time = dim(clock(e.at));
@@ -224,26 +239,90 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     }
     for (let i = recent.length; i < room; i++) lines.push("");
 
-    lines.push(dim(rule));
-    if (composing === "watch") {
+    lines.push(dim(G.h.repeat(w)));
+    if (composer === "none") {
       lines.push(
-        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
+        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
       );
     } else {
-      const label = composing === "name" ? "your name:" : "";
-      lines.push(`${label ? `${dim(label)} ` : ""}${bold(`${G.arrow} `)}${input}${dim("_")}${status ? `  ${dim(status)}` : ""}`);
+      const label = composer === "name" ? dim("your name: ") : "";
+      lines.push(`${label}${bold(`${G.arrow} `)}${input}${dim("_")}${status ? `  ${dim(status)}` : ""}`);
     }
-
-    // Redraw in one write: clear, home, print. Avoids the tearing you get from
-    // clearing and printing as two syscalls on a slow terminal.
-    process.stdout.write(`${ESC}H${ESC}J${lines.join("\n")}`);
+    paint(lines);
   }
 
-  async function submit(mode: Mode, text: string): Promise<void> {
+  function renderNotes(): void {
+    const w = width();
+    const h = height();
+    const lines = header(`${notes.length} note${notes.length === 1 ? "" : "s"} ${G.dot} ${dim("durable knowledge")}`);
+
+    if (notes.length === 0) {
+      lines.push("");
+      lines.push(dim("  No notes yet. A front writes one with:"));
+      lines.push(dim(`    parley note --title "..." --body "..." --tags a,b`));
+    }
+
+    const room = Math.max(3, h - 5);
+    const first = Math.max(0, Math.min(selected - Math.floor(room / 2), notes.length - room));
+    const window = notes.slice(Math.max(0, first), Math.max(0, first) + room);
+
+    window.forEach((note, i) => {
+      const index = Math.max(0, first) + i;
+      const chosen = index === selected;
+      const tags = note.tags.length ? dim(`  [${note.tags.join(", ")}]`) : "";
+      const line = ` ${chosen ? G.sel : " "} ${truncate(note.title, w - 34)}${tags}`;
+      const meta = dim(padVis("", 0) + `${note.authorName} ${G.dot} ${stamp(note.at)}`);
+      lines.push(chosen ? invert(padVis(line, w)) : line);
+      if (chosen) lines.push(`     ${meta}`);
+    });
+
+    while (lines.length < h - 1) lines.push("");
+    lines.push(dim(G.h.repeat(w)));
+    lines.push(
+      dim(`  ${bold("j/k")}${dim(" or arrows move")} ${G.dot} ${bold("enter")}${dim(" read")} ${G.dot} ${bold("esc")}${dim(" back to the bus")}`),
+    );
+    paint(lines);
+  }
+
+  function renderReader(): void {
+    const w = width();
+    const h = height();
+    const note = notes[selected];
+    if (!note) { view = "notes"; return renderNotes(); }
+
+    const lines = header(dim(`note ${selected + 1} of ${notes.length}`));
+    const body = wrap(note.body || "(no body)", Math.min(w - 4, 96));
+    const room = Math.max(3, h - 8);
+    const maxScroll = Math.max(0, body.length - room);
+    if (scroll > maxScroll) scroll = maxScroll;
+
+    lines.push("");
+    lines.push(`  ${bold(truncate(note.title, w - 4))}`);
+    lines.push(dim(`  ${note.authorName} ${G.dot} ${stamp(note.at)}${note.tags.length ? `  [${note.tags.join(", ")}]` : ""}`));
+    lines.push("");
+    for (const line of body.slice(scroll, scroll + room)) lines.push(`  ${line}`);
+
+    while (lines.length < h - 1) lines.push("");
+    lines.push(dim(G.h.repeat(w)));
+    const more = maxScroll > 0 ? ` ${G.dot} ${dim(`${scroll + 1}-${Math.min(scroll + room, body.length)} of ${body.length} lines`)}` : "";
+    lines.push(
+      dim(`  ${bold("j/k")}${dim(" scroll")} ${G.dot} ${bold("n/p")}${dim(" next / previous note")} ${G.dot} ${bold("esc")}${dim(" back")}${more}`),
+    );
+    paint(lines);
+  }
+
+  function render(): void {
+    if (closing) return;
+    if (view === "notes") return renderNotes();
+    if (view === "reader") return renderReader();
+    renderBus();
+  }
+
+  async function submit(kind: Composer, text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
 
-    if (mode === "name") {
+    if (kind === "name") {
       const wanted = sanitiseName(trimmed);
       if (!wanted) { status = "that name has nothing usable in it"; return render(); }
       const r = await client.request({ op: "rename", name: wanted });
@@ -257,13 +336,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       return render();
     }
 
-    // Voice only. A human does not grant, deny or arbitrate from here — the
-    // fronts resolve territory among themselves, by design.
+    // Voice only. A human does not grant, deny or arbitrate from here.
     const directed = /^@(\S+)\s+([\s\S]+)$/.exec(trimmed);
-    const frame = directed
-      ? { op: "say", to: directed[1], text: directed[2] }
-      : { op: "say", text: trimmed };
-    const r = await client.request(frame);
+    const r = await client.request(
+      directed ? { op: "say", to: directed[1], text: directed[2] } : { op: "say", text: trimmed },
+    );
     if (r.ok) {
       const sent = (r as unknown as { event?: FeedEvent }).event;
       if (sent) feed.push(sent);
@@ -287,50 +364,78 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     });
   }
 
+  function onKey(ch: string, code: number, seq: string): boolean {
+    // Arrow keys arrive as an escape sequence, so they are matched whole.
+    const up = seq === `${ESC}A`;
+    const down = seq === `${ESC}B`;
+
+    if (view === "reader") {
+      if (down || ch === "j") { scroll++; return true; }
+      if (up || ch === "k") { scroll = Math.max(0, scroll - 1); return true; }
+      if (ch === "n") { selected = Math.min(notes.length - 1, selected + 1); scroll = 0; return true; }
+      if (ch === "p") { selected = Math.max(0, selected - 1); scroll = 0; return true; }
+      if (code === 27 && seq === "\x1b") { view = "notes"; return true; }
+      if (ch === "q") { view = "notes"; return true; }
+      return false;
+    }
+
+    if (view === "notes") {
+      if (down || ch === "j") { selected = Math.min(notes.length - 1, selected + 1); return true; }
+      if (up || ch === "k") { selected = Math.max(0, selected - 1); return true; }
+      if (code === 13 || code === 10) { if (notes.length) { view = "reader"; scroll = 0; } return true; }
+      if (code === 27 && seq === "\x1b") { view = "bus"; return true; }
+      if (ch === "q") { view = "bus"; return true; }
+      return false;
+    }
+
+    if (composer === "none") {
+      if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }
+      if (ch === "m" || ch === "M") { composer = "name"; input = ""; status = ""; return true; }
+      if (ch === "n" || ch === "N") { view = "notes"; selected = Math.max(0, notes.length - 1); return true; }
+      if (ch === "q" || ch === "Q") { shutdown(); return false; }
+      return false;
+    }
+
+    if (code === 27) { composer = "none"; input = ""; return true; }
+    if (code === 13 || code === 10) {
+      const text = input;
+      const kind = composer;
+      input = "";
+      composer = "none";
+      void submit(kind, text);
+      return true;
+    }
+    if (code === 127 || code === 8) { input = input.slice(0, -1); return true; }
+    if (code === 21) { input = ""; return true; }
+    if (code < 32) return false;
+    input += ch;
+    return true;
+  }
+
   // Alternate screen buffer, so quitting gives the user their scrollback back.
   process.stdout.write(`${ESC}?1049h${ESC}?25l`);
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
   process.stdout.on("resize", render);
 
-  // Raw mode is on from the start even while watching, because that is how the
-  // panel hears the one key that opens the composer.
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk: string) => {
-      for (const ch of chunk) {
-        const code = ch.charCodeAt(0);
-        if (code === 3 || code === 4) return void shutdown();  // Ctrl+C / Ctrl+D
-
-        if (composing === "watch") {
-          if (ch === "i" || ch === "I") { composing = "say"; input = ""; status = ""; }
-          else if (ch === "n" || ch === "N") { composing = "name"; input = ""; status = ""; }
-          else if (ch === "q" || ch === "Q") return void shutdown();
-          continue;
-        }
-
-        if (code === 27) { composing = "watch"; input = ""; continue; }     // Esc
-        if (code === 13 || code === 10) {
-          const text = input;
-          const mode = composing;
-          input = "";
-          composing = "watch";
-          void submit(mode, text);
-          continue;
-        }
-        if (code === 127 || code === 8) { input = input.slice(0, -1); continue; }
-        if (code === 21) { input = ""; continue; }                          // Ctrl+U
-        if (code < 32) continue;
-        input += ch;
+      // Ctrl+C and Ctrl+D end the panel from any screen.
+      if (chunk.includes("\x03") || chunk.includes("\x04")) return void shutdown();
+      let dirty = false;
+      if (chunk.startsWith(ESC) && chunk.length > 1) {
+        dirty = onKey("", 27, chunk);
+      } else {
+        for (const ch of chunk) dirty = onKey(ch, ch.charCodeAt(0), ch) || dirty;
       }
-      render();
+      if (dirty) render();
     });
   }
 
   const timer = setInterval(() => void refresh(), 1000);
-  status = "";
   await seed();
   await refresh();
 }
