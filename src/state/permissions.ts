@@ -100,7 +100,9 @@ export function grant(state: State, actorId: string | null, frame: Record<string
 
   const request = state.requests[String(frame.request ?? "")];
   if (!request) return { state, response: err("NOT_OWNER", "unknown request"), broadcast: [] };
-  if (request.ownerId !== me.id) return { state, response: err("NOT_OWNER", "you do not own this path"), broadcast: [] };
+  if (request.ownerId !== me.id) {
+    return { state, response: err("NOT_OWNER", "you do not own this path"), broadcast: [] };
+  }
   if (request.state !== "pending") {
     return { state, response: err("NOT_OWNER", `request already ${request.state}`), broadcast: [] };
   }
@@ -127,7 +129,9 @@ export function deny(state: State, actorId: string | null, frame: Record<string,
 
   const request = state.requests[String(frame.request ?? "")];
   if (!request) return { state, response: err("NOT_OWNER", "unknown request"), broadcast: [] };
-  if (request.ownerId !== me.id) return { state, response: err("NOT_OWNER", "you do not own this path"), broadcast: [] };
+  if (request.ownerId !== me.id) {
+    return { state, response: err("NOT_OWNER", "you do not own this path"), broadcast: [] };
+  }
   if (request.state !== "pending") {
     return { state, response: err("NOT_OWNER", `request already ${request.state}`), broadcast: [] };
   }
@@ -172,4 +176,27 @@ export function expirePermissions(state: State, ctx: Ctx) {
     );
   }
   return broadcast;
+}
+
+/**
+ * Pending permission requests. An `ask` is pushed only to the owner, so an
+ * observer — the panel, or a human joining mid-flight — has no way to learn
+ * about one from the event stream alone. This is that way.
+ */
+export function listRequests(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const all = frame.all === true;
+  const requests = Object.values(state.requests)
+    .filter((r) => all || r.state === "pending")
+    .map((r) => ({
+      id: r.id,
+      path: r.path,
+      requester: state.participants[r.requesterId]?.name ?? "(gone)",
+      owner: state.participants[r.ownerId]?.name ?? "(gone)",
+      reason: r.reason,
+      state: r.state,
+      created_at: r.createdAt,
+      expires_at: new Date(r.expiresAtMs).toISOString(),
+      seconds_left: Math.max(0, Math.round((r.expiresAtMs - ctx.nowMs) / 1000)),
+    }));
+  return { state, response: ok({ requests }), broadcast: [] };
 }

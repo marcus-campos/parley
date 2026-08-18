@@ -12,7 +12,7 @@ export const OPS = [
   "join", "rename", "leave", "who",
   "say", "drain",
   "claim", "release",
-  "ask", "grant", "deny",
+  "ask", "grant", "deny", "requests",
   "note", "notes",
   "mode", "status",
 ] as const;
@@ -20,7 +20,7 @@ export type Op = (typeof OPS)[number];
 
 export const ERROR_CODES = [
   "NAME_TAKEN", "CONFLICT", "NOT_OWNER", "NOT_JOINED",
-  "UNKNOWN_OP", "PROTOCOL_MISMATCH", "AUTH_REQUIRED",
+  "UNKNOWN_OP", "PROTOCOL_MISMATCH", "AUTH_REQUIRED", "OBSERVER_ONLY",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

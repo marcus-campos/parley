@@ -31,7 +31,12 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley claim <paths...> [--intent "..."] [--auto]
   parley release [<paths...>] [--all]
 
+  parley watch [--web] [--port 7717]
+                             live panel: fronts, feed and pending requests.
+                             Opens watching; press i (or s on the web) to speak.
+
   parley ask <path> --reason "..." [--ttl 300]
+  parley requests [--all]
   parley grant <request> [--scope once|transfer]
   parley deny <request> --reason "..."
 
@@ -227,6 +232,17 @@ async function main(): Promise<void> {
     }
   }
 
+  if (parsed.command === "watch") {
+    const { runWatch } = await import("./watch");
+    const panelName = flagString(parsed.flags, "as") || process.env.PARLEY_PANEL_NAME || "PANEL";
+    if (parsed.flags.web) {
+      const { runWebPanel } = await import("./web");
+      const port = Number(flagString(parsed.flags, "port", "7717"));
+      return runWebPanel(repo, panelName, port, parsed.flags.open !== false);
+    }
+    return runWatch(repo, panelName);
+  }
+
   // Everything below needs a session on the bus.
   await withSession(parsed, repo, async (client) => {
     const p = parsed;
@@ -317,6 +333,15 @@ async function main(): Promise<void> {
         );
       }
 
+      case "requests": {
+        const r = await send({ op: "requests", all: p.flags.all === true });
+        if (!r.ok) fail(p, describeError(r));
+        const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
+        if (list.length === 0) return out(p, "parley: nothing pending", r);
+        const rows = list.map((q) => `  ${q.id}  ${q.requester} wants ${q.path} from ${q.owner}  (${q.seconds_left}s left)\n        ${q.reason || "no reason given"}`);
+        return out(p, rows.join("\n"), r);
+      }
+
       case "grant": {
         const id = p.positional[0];
         if (!id) fail(p, "grant needs a request id");
@@ -362,8 +387,6 @@ async function main(): Promise<void> {
         return out(p, `parley: mode ${(r as unknown as { mode: string }).mode}`, r);
       }
 
-      case "watch":
-        return fail(p, "the watch panel ships in a later release; use `parley who` and `parley drain`");
 
       default:
         process.stdout.write(USAGE);

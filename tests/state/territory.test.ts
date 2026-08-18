@@ -223,3 +223,71 @@ describe("lease and auto-claim interact as designed", () => {
     expect(state.claims[0]!.orphanedAtMs).not.toBeNull();
   });
 });
+
+describe("listing pending requests", () => {
+  test("an observer can see a request that was only pushed to its owner", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "one column", ttl_s: 300 }, at(0));
+
+    const r = apply(state, fin, { v: 1, op: "requests" }, at(60_000));
+    const list = (r.response as unknown as { requests: Record<string, unknown>[] }).requests;
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({
+      path: "src/x.ts", requester: "TESTE-CAMPO", owner: "FINANCEIRO",
+      reason: "one column", state: "pending", seconds_left: 240,
+    });
+  });
+
+  test("settled requests are hidden unless asked for", () => {
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(0));
+    apply(state, fin, { v: 1, op: "grant", request: (asked.response as unknown as { request: string }).request }, at(100));
+
+    expect((apply(state, fin, { v: 1, op: "requests" }, at(200)).response as unknown as { requests: unknown[] }).requests).toHaveLength(0);
+    expect((apply(state, fin, { v: 1, op: "requests", all: true }, at(200)).response as unknown as { requests: unknown[] }).requests).toHaveLength(1);
+  });
+});
+
+describe("a human has a voice, not a vote", () => {
+  test("a human cannot grant, however much they would like to", () => {
+    const human = joined(state, "Marcus", 0, { kind: "human" });
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+
+    const out = apply(state, human, { v: 1, op: "grant", request: id }, at(200));
+    expect(out.response).toMatchObject({ error: { code: "OBSERVER_ONLY" } });
+    expect(Object.values(state.requests)[0]!.state).toBe("pending");
+  });
+
+  test("a human cannot deny either", () => {
+    const human = joined(state, "Marcus", 0, { kind: "human" });
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+    expect(apply(state, human, { v: 1, op: "deny", request: id }, at(200)).response)
+      .toMatchObject({ error: { code: "OBSERVER_ONLY" } });
+  });
+
+  test("but a human speaks, and it lands at high priority on every front", () => {
+    const human = joined(state, "Marcus", 0, { kind: "human" });
+    const said = apply(state, human, { v: 1, op: "say", text: "não dropem coluna nenhuma hoje" }, at(100));
+    expect(said.response.ok).toBe(true);
+
+    const inbox = apply(state, fin, { v: 1, op: "drain" }, at(200)).response as unknown as {
+      events: { text: string; priority: string; from: { kind: string } }[];
+    };
+    const msg = inbox.events.find((e) => e.text.startsWith("não dropem"))!;
+    expect(msg.priority).toBe("high");
+    expect(msg.from.kind).toBe("human");
+  });
+
+  test("an agent still cannot settle a request that is not theirs", () => {
+    const other = joined(state, "MOBILE", 0);
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+    expect(apply(state, other, { v: 1, op: "grant", request: id }, at(200)).response)
+      .toMatchObject({ error: { code: "NOT_OWNER" } });
+  });
+});

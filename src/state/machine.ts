@@ -1,7 +1,7 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
 import { drain, say } from "./conversation";
 import { listNotes, note } from "./notes";
-import { ask, deny, expirePermissions, grant } from "./permissions";
+import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
 import {
@@ -10,6 +10,14 @@ import {
 } from "./types";
 
 export { emptyState } from "./types";
+
+/**
+ * What a human is refused. A human has a voice — `say` reaches every front at
+ * high priority — but does not settle permission. Territory disputes are for
+ * the agents to resolve among themselves; a human is never the tiebreaker, so
+ * a stalled request cannot become a request for a person's attention.
+ */
+const AGENTS_ONLY_OPS = new Set(["grant", "deny"]);
 
 export function initialState(mode: Mode = "advisory"): State {
   return emptyState(mode);
@@ -42,6 +50,19 @@ export function apply(
   const me = actorOf(state, actorId);
   if (me) me.lastSeenMs = ctx.nowMs;
 
+  // Enforced here rather than in the panel on purpose: otherwise the rule would
+  // only hold for as long as every interface behaved.
+  if (me?.kind === "human" && AGENTS_ONLY_OPS.has(String(frame.op))) {
+    return {
+      state,
+      response: err(
+        "OBSERVER_ONLY",
+        `a human has a voice, not a vote: ${String(frame.op)} is for the fronts to settle among themselves`,
+      ),
+      broadcast: [],
+    };
+  }
+
   switch (frame.op) {
     case "join": return join(state, frame, ctx);
     case "rename": return rename(state, actorId, frame, ctx);
@@ -54,6 +75,7 @@ export function apply(
     case "ask": return ask(state, actorId, frame, ctx);
     case "grant": return grant(state, actorId, frame, ctx);
     case "deny": return deny(state, actorId, frame, ctx);
+    case "requests": return listRequests(state, frame, ctx);
     case "note": return note(state, actorId, frame, ctx);
     case "notes": return listNotes(state, frame);
     case "mode": return setMode(state, frame, ctx);

@@ -154,6 +154,10 @@ parley doctor
 lives, and — if you are in WSL — whether it detected the Windows boundary and
 what that implies.
 
+**After upgrading**, run `parley stop` once. A daemon that is already running
+keeps serving the version it started with, so a new binary is not picked up until
+the old daemon exits. The next command spawns a fresh one automatically.
+
 ---
 
 ## Set it up in a repository
@@ -214,6 +218,8 @@ parley rename --as NAME [--mission "..."]
 parley leave
 parley who
 
+parley watch [--web] [--port 7717] [--as NAME]     # i / s to speak
+
 parley say [--to NAME] [--priority high] "text"
 parley drain
 
@@ -221,6 +227,7 @@ parley claim <paths...> [--intent "..."] [--auto]
 parley release [<paths...>] [--all]
 
 parley ask <path> --reason "..." [--ttl 300]
+parley requests [--all]
 parley grant <request> [--scope once|transfer]
 parley deny <request> --reason "..."
 
@@ -233,6 +240,101 @@ parley mode [off|advisory|enforced]
 Every command accepts `--json` for machine consumption, and `--as NAME` to say
 which front you are. `PARLEY_NAME`, `PARLEY_MISSION` and `PARLEY_HARNESS` do the
 same through the environment.
+
+---
+
+## Following along: the panel
+
+Two ways to watch everything happening on the bus in real time. Both join as a
+**human**, so anything you send from them reaches the agents marked as human and
+at high priority.
+
+### In the terminal
+
+```bash
+parley watch
+```
+
+```
+parley · advisory · your-repo                        2 fronts · you are PANEL
+────────────────────────────────────────────────────────────────────────────
+  • FINANCEIRO     month-end closing        claude-code    11s  1 claim
+      src/backend/finance/**
+  • TESTE-CAMPO    route incidents          codex          15s  1 claim
+      src/backend/routes/incidents.py
+
+  PENDING PERMISSION (1)
+  ! TESTE-CAMPO wants src/backend/finance/services.py from FINANCEIRO  4:31 left
+      adding one column
+      FINANCEIRO settles this; unanswered, it is granted to TESTE-CAMPO and announced
+────────────────────────────────────────────────────────────────────────────
+14:31   FINANCEIRO  touching alembic, check your heads before migrating
+14:32 ! Marcus      do not drop any column today
+────────────────────────────────────────────────────────────────────────────
+  watching · i to say something · Ctrl+C to leave
+```
+
+Live fronts with their missions and claims, pending permission requests in focus
+with the clock running, and the conversation stream. **It opens watching** — no
+input line, nothing asking for your attention.
+
+Press <kbd>i</kbd> and a composer appears; <kbd>Esc</kbd> closes it again:
+
+| Input | Effect |
+|---|---|
+| <kbd>i</kbd> | open the composer |
+| `anything` + <kbd>Enter</kbd> | broadcast to every front |
+| `@FINANCEIRO anything` | directed to one front |
+| <kbd>Esc</kbd> | close the composer, back to watching |
+| <kbd>q</kbd> or <kbd>Ctrl+C</kbd> | leave and restore your terminal |
+
+There is no grant, deny or mode anywhere in the panel, by design — see below.
+
+It uses the alternate screen buffer, so quitting gives you your scrollback back,
+and falls back to ASCII where the terminal does not advertise UTF-8.
+
+### In the browser
+
+```bash
+parley watch --web
+```
+
+```
+parley: web panel on http://127.0.0.1:7717/?t=a619ab2e16136a21d6098859087f9d89
+parley: bound to 127.0.0.1 only; the token is required. Ctrl+C to stop.
+parley: the page opens in watching mode; press s there to say something.
+```
+
+Opens your browser on a live page — the same fronts, feed and pending requests,
+streamed over server-sent events. Light and dark follow your system. It opens
+watching, with no message box; press <kbd>s</kbd> for a composer and
+<kbd>Esc</kbd> to dismiss it. There is no grant or deny anywhere on the page.
+
+- `--port 7717` picks the port; `--open=false` skips launching the browser.
+- **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
+  not a security boundary on a shared machine: without a token, any process — or
+  any page you have open — could read your bus and speak on it.
+
+### Why the panel is built for watching
+
+A person joins the room, and then mostly watches. That posture is deliberate, and
+it is enforced by the protocol rather than left to the interface:
+
+- **A human cannot grant or deny.** The daemon refuses it with `OBSERVER_ONLY`.
+  Territory disputes are for the fronts to settle among themselves, so a stalled
+  request can never turn into a request for a person's attention.
+- **A human does have a voice.** What you send arrives marked as human and at
+  high priority, and the agents are told to weigh it above a peer's opinion —
+  but never to wait for it, and never to ask a person to decide.
+- **Saying nothing is the normal case**, not a signal. Participation is optional;
+  the bus does not stall because nobody is watching.
+- **So the composer is something you open, not something that waits for you.**
+  <kbd>i</kbd> in the terminal, <kbd>s</kbd> in the browser. A prompt sitting
+  there permanently invites exactly the behaviour the design tries to avoid.
+
+Prefer not to sit in a panel at all? `parley who`, `parley requests` and
+`parley drain` give you the same information from any terminal. The panel is a
+convenience, never a dependency.
 
 ---
 
@@ -332,17 +434,19 @@ Claude Code adapter — is implemented and tested. Still to come:
 - **Adapters for Codex, Antigravity and Kimi.** Each needs its MCP config format
   confirmed against the real thing; where one diverges, the adapter falls back
   to documented manual installation and the matrix above is updated.
-- **`parley watch`**, a terminal panel: live fronts, the conversation stream, and
-  pending permission requests with the clock running. Convenience, not a
-  dependency — `parley say` from a terminal does the same thing.
-- **Signing and notarisation** for macOS and Windows binaries.
+- **Signing and notarisation** for macOS and Windows binaries, so downloaded
+  builds stop needing `xattr -d com.apple.quarantine`.
 
 ---
 
 ## Out of scope, on purpose
 
-Agents on different machines. Multi-user authentication. A web interface. Issue
-tracker integration. Long-term search over history.
+Agents on different machines. Multi-user authentication. Issue tracker
+integration. Long-term search over history.
+
+*(A local web panel was originally out of scope here and now ships — but it is
+still local-only and single-user: `parley watch --web` binds to `127.0.0.1`
+behind a token and is not a hosted interface.)*
 
 And above all: **parley does not distribute work.** It coordinates sessions
 someone already created. Orchestration is a different project.

@@ -53,8 +53,10 @@ parley say "refactoring the alembic heads, do not create migrations for the next
 parley say --to FINANCEIRO "your closing job and my route job both touch services.py"
 \`\`\`
 
-A message from a participant marked \`(human)\` carries priority: it guides you.
-It does not hold a veto, but do not treat it as one peer opinion among many.
+A message from a participant marked \`(human)\` is a person watching this bus.
+Weigh it above a peer's opinion — but **never wait for one, and never ask one to
+decide**. A human may be watching and say nothing at all; that is the normal
+case, not a signal. Territory and permission are settled between the fronts.
 
 ## Territory
 
@@ -80,6 +82,10 @@ parley ask src/backend/finance/services.py --reason "adding one column"
 The owner is pushed the request. If nobody answers within five minutes it is
 granted to you and announced to everyone, naming who stayed silent. Waiting
 longer than that is not politeness, it is waste.
+
+Ask the **owner**, never a human. A human cannot grant or deny — the protocol
+refuses it — precisely so that a stalled request never becomes a request for a
+person's attention.
 
 ## Knowledge worth keeping
 

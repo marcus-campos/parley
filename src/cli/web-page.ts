@@ -1,0 +1,225 @@
+/**
+ * The whole web panel: one self-contained page, no network fetches.
+ *
+ * Kept strictly ASCII on purpose. The bundler escapes non-ASCII characters into
+ * `\uXXXX`, and this template is tagged `String.raw` (the client-side regex
+ * needs its backslashes intact), so an escape would survive into the HTML
+ * verbatim and render as literal `…`. HTML entities go through untouched.
+ */
+export const PAGE = String.raw`<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>parley</title>
+<style>
+  :root {
+    --bg:#fbfaf8; --panel:#fff; --ink:#1a1a19; --mute:#6f6d68; --line:#e6e3dd;
+    --accent:#2f6f57; --warn:#9a6a00; --danger:#a33a2a; --human:#1f5f8b; --radius:10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#131412; --panel:#1b1c19; --ink:#eceae5; --mute:#9a978f; --line:#2c2e29;
+      --accent:#6fbf9a; --warn:#d9a441; --danger:#e0705c; --human:#74b3dd;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);overflow:hidden;
+    font:14px/1.55 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    padding:14px 20px;border-bottom:1px solid var(--line)}
+  h1{font-size:15px;margin:0;letter-spacing:.02em}
+  .mode{padding:2px 9px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+  .mode.advisory{color:var(--accent)} .mode.enforced{color:var(--danger)} .mode.off{color:var(--mute)}
+  .grow{flex:1}
+  .meta{color:var(--mute);font-size:12px}
+  #conn.live{color:var(--accent)} #conn.down{color:var(--danger)}
+
+  main{display:grid;grid-template-columns:minmax(260px,330px) 1fr;
+    height:calc(100vh - 53px)}
+  @media (max-width:820px){
+    body{overflow:auto} main{grid-template-columns:1fr;height:auto}
+  }
+  aside{border-right:1px solid var(--line);overflow:auto;padding:16px 18px}
+  section.feedwrap{display:flex;flex-direction:column;min-height:0}
+  h2{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);margin:0 0 10px}
+
+  .front{padding:10px 12px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--panel);margin-bottom:8px}
+  .front .top{display:flex;align-items:center;gap:8px}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--mute)}
+  .dot.live{background:var(--accent)} .dot.stale{background:var(--danger)}
+  .name{font-weight:600}
+  .front .mission{color:var(--mute);font-size:12.5px;margin-top:2px}
+  .claims{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+  .claim{font-size:11.5px;padding:1px 7px;border-radius:5px;border:1px solid var(--line);
+    color:var(--mute);word-break:break-all}
+
+  .req{border:1px solid var(--warn);border-radius:var(--radius);padding:11px 12px;
+    margin-bottom:8px;background:var(--panel)}
+  .req .head{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .req .timer{color:var(--warn);font-variant-numeric:tabular-nums;flex:none;font-size:12.5px}
+  .req .timer.late{color:var(--danger)}
+  .req .path{color:var(--human);word-break:break-all;display:block;margin:5px 0}
+  .req .why{color:var(--mute);font-size:12.5px;margin-bottom:8px}
+  .req .settle{color:var(--mute);font-size:11.5px;border-top:1px dashed var(--line);padding-top:7px}
+
+  .feed{flex:1;overflow:auto;padding:16px 20px;min-height:0;display:flex;
+    flex-direction:column;gap:5px;justify-content:flex-end}
+  .ev{display:flex;gap:10px;align-items:baseline;flex:none}
+  .ev time{color:var(--mute);font-size:12px;flex:none;font-variant-numeric:tabular-nums}
+  .ev .who{font-weight:600;flex:none}
+  .ev .who.human{color:var(--human)}
+  .ev.system{color:var(--mute)}
+  .ev.high .body{border-left:2px solid var(--danger);padding-left:8px}
+  .ev .body{word-break:break-word}
+
+  footer{border-top:1px solid var(--line);padding:11px 20px}
+  .bar{display:flex;align-items:center;gap:10px;color:var(--mute);font-size:12px}
+  kbd{font:inherit;font-size:11px;border:1px solid var(--line);border-bottom-width:2px;
+    border-radius:4px;padding:0 5px;color:var(--ink)}
+  .composer{display:none;gap:8px}
+  body.speaking .composer{display:flex}
+  body.speaking .bar{display:none}
+  input[type=text]{flex:1;font:inherit;padding:8px 12px;border-radius:8px;
+    border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+  input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  button{font:inherit;font-size:12.5px;padding:7px 13px;border-radius:8px;cursor:pointer;
+    border:1px solid var(--line);background:transparent;color:var(--ink)}
+  button:hover{border-color:var(--mute)}
+  .link{background:none;border:none;color:var(--mute);cursor:pointer;padding:0;
+    text-decoration:underline;font-size:12px}
+  .empty{color:var(--mute);font-style:italic}
+</style>
+</head>
+<body>
+<header>
+  <h1>parley</h1>
+  <span class="mode" id="mode">&mdash;</span>
+  <span class="grow"></span>
+  <span class="meta" id="repo"></span>
+  <span class="meta" id="you"></span>
+  <span class="meta" id="conn">connecting&hellip;</span>
+</header>
+<main>
+  <aside>
+    <h2>Fronts</h2>
+    <div id="fronts"><p class="empty">nobody on the bus yet</p></div>
+    <h2 style="margin-top:22px">Pending permission</h2>
+    <div id="requests"><p class="empty">nothing pending</p></div>
+  </aside>
+  <section class="feedwrap">
+    <div class="feed" id="feed"></div>
+    <footer>
+      <div class="bar">
+        <span>watching &middot; the fronts settle territory and permission among themselves</span>
+        <span class="grow"></span>
+        <span><kbd>s</kbd> to say something</span>
+      </div>
+      <form class="composer" id="form" autocomplete="off">
+        <input type="text" id="msg" placeholder="goes out as human, at high priority &mdash; @NAME to direct it" />
+        <button type="submit">Send</button>
+        <button type="button" class="link" id="cancel">esc</button>
+      </form>
+    </footer>
+  </section>
+</main>
+<script>
+const TOKEN = "__TOKEN__";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const hhmm = (iso) => { const d = new Date(iso);
+  return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); };
+const mmss = (s) => Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+
+// Speaking is a mode you enter, not a box that sits there waiting. The default
+// posture is watching; a human gives an opinion now and then, and is never
+// expected to.
+function setSpeaking(on) {
+  document.body.classList.toggle("speaking", on);
+  if (on) $("msg").focus(); else $("msg").blur();
+}
+document.addEventListener("keydown", (e) => {
+  const speaking = document.body.classList.contains("speaking");
+  if (!speaking && (e.key === "s" || e.key === "S") && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault(); setSpeaking(true);
+  } else if (e.key === "Escape") {
+    setSpeaking(false);
+  }
+});
+$("cancel").addEventListener("click", () => setSpeaking(false));
+
+let atBottom = true;
+$("feed").addEventListener("scroll", () => {
+  const el = $("feed");
+  atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+});
+
+function render(s) {
+  $("mode").textContent = s.mode;
+  $("mode").className = "mode " + s.mode;
+  $("repo").textContent = s.repo.split("/").pop();
+  $("you").textContent = "you are " + s.you;
+
+  $("fronts").innerHTML = s.fronts.length ? s.fronts.map((f) => {
+    const cls = f.connected ? "live" : (f.idle_s > 240 ? "stale" : "");
+    const claims = (f.claims || []).map((c) => '<span class="claim">'+esc(c)+'</span>').join("");
+    return '<div class="front"><div class="top"><span class="dot '+cls+'"></span>'
+      + '<span class="name">'+esc(f.name)+'</span>'
+      + '<span class="grow"></span><span class="meta">'+esc(f.harness)+' &middot; '+f.idle_s+'s</span></div>'
+      + '<div class="mission">'+esc(f.mission || "no mission declared")+'</div>'
+      + (claims ? '<div class="claims">'+claims+'</div>' : '')
+      + '</div>';
+  }).join("") : '<p class="empty">nobody else on the bus yet</p>';
+
+  $("requests").innerHTML = s.requests.length ? s.requests.map((r) =>
+    '<div class="req"><div class="head"><strong>'+esc(r.requester)+'</strong>'
+    + '<span class="timer'+(r.seconds_left<60?' late':'')+'">'+mmss(r.seconds_left)+' left</span></div>'
+    + '<span class="path">'+esc(r.path)+'</span>'
+    + '<div class="meta">from <strong>'+esc(r.owner)+'</strong></div>'
+    + '<div class="why">'+esc(r.reason || "no reason given")+'</div>'
+    + '<div class="settle">'+esc(r.owner)+' settles this. Unanswered, it is granted to '
+    + esc(r.requester)+' and announced.</div></div>'
+  ).join("") : '<p class="empty">nothing pending</p>';
+
+  $("feed").innerHTML = s.feed.map((e) => {
+    const t = '<time>'+hhmm(e.at)+'</time>';
+    if (e.kind === "system" || !e.from)
+      return '<div class="ev system">'+t+'<span class="body">&middot; '+esc(e.text)+'</span></div>';
+    const who = '<span class="who'+(e.from.kind==="human"?" human":"")+'">'+esc(e.from.name)+'</span>';
+    const to = e.to ? '<span class="meta">&rsaquo;'+esc(e.to)+'</span> ' : '';
+    return '<div class="ev'+(e.priority==="high"?" high":"")+'">'+t+who
+      +'<span class="body">'+to+esc(e.text)+'</span></div>';
+  }).join("");
+  if (atBottom) $("feed").scrollTop = $("feed").scrollHeight;
+}
+
+async function post(path, body) {
+  return fetch(path + "?t=" + TOKEN, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-parley-token": TOKEN },
+    body: JSON.stringify(body),
+  }).then((r) => r.json()).catch(() => ({ ok: false }));
+}
+
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const text = $("msg").value.trim();
+  if (!text) return;
+  $("msg").value = "";
+  const m = /^@(\S+)\s+([\s\S]+)$/.exec(text);
+  await post("/say", m ? { to: m[1], text: m[2] } : { text: text });
+  setSpeaking(false);
+});
+
+const es = new EventSource("/events?t=" + TOKEN);
+es.onopen = () => { $("conn").textContent = "live"; $("conn").className = "meta live"; };
+es.onerror = () => { $("conn").textContent = "reconnecting"; $("conn").className = "meta down"; };
+es.onmessage = (e) => {
+  $("conn").textContent = "live"; $("conn").className = "meta live";
+  render(JSON.parse(e.data));
+};
+</script>
+</body>
+</html>`;

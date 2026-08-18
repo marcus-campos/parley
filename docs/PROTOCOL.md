@@ -145,6 +145,7 @@ A closed list. Anything outside it is a protocol violation.
 | `UNKNOWN_OP` | Unrecognised `op`, or a malformed frame. |
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
+| `OBSERVER_ONLY` | A participant with `kind: "human"` tried to `grant` or `deny`. A human has a voice, not a vote. |
 
 Success is always `{"ok": true, ...}`. Failure is always
 `{"ok": false, "error": {"code": ..., "message"?: ...}, ...}`. Extra detail that
@@ -222,8 +223,11 @@ This is the memory of "who touches what" that a markdown board never had.
 
 `to: null` is broadcast; `to: "NAME"` is directed. A message from a participant
 with `kind: "human"` is **always** delivered at `priority: "high"` and arrives
-marked as human, so the agent does not weigh it as one peer opinion among many.
-The human voice guides; it does not hold a veto over the autonomous flow.
+marked as human, so the agent weighs it above a peer's opinion.
+
+But the human voice guides and never gates. An agent must not wait for a human,
+must not ask one to decide, and must treat silence as the normal case — a person
+may be watching the whole session and say nothing. See §6.7.
 
 #### `drain`
 
@@ -313,7 +317,8 @@ the reason, the request id and the remaining time.
   it to the requester.
 - `scope: "transfer"` moves the whole overlapping claim to the requester.
 - `deny` takes a `reason`, which is delivered to the requester.
-- Only the owner may answer. A settled request cannot be answered again.
+- **Only the owner may answer.** Not a human, not another front. A settled
+  request cannot be answered again.
 
 State machine: `pending → granted | denied | granted_by_timeout`.
 
@@ -349,7 +354,45 @@ and the visibility is what stops it from becoming a habit.
 Notes are exported to `.parley/notes.md`, versioned in git. Automatic commit is
 deliberately out of scope: a human or an agent commits it, on purpose.
 
-### 6.6 Mode and status
+### 6.6 Listing pending requests
+
+```json
+→ {"v":1,"op":"requests","all":false}
+← {"ok":true,"requests":[
+     {"id":"r_0003","path":"src/backend/finance/services.py",
+      "requester":"TESTE-CAMPO","owner":"FINANCEIRO","reason":"add one column",
+      "state":"pending","created_at":"2026-08-18T14:31:02Z",
+      "expires_at":"2026-08-18T14:36:02Z","seconds_left":240}]}
+```
+
+An `ask` is pushed only to the owner, so an observer — a panel, or a front that
+joined mid-flight — has no way to learn about one from the event stream alone.
+This is that way. `"all": true` includes settled requests.
+
+### 6.7 Humans on the bus
+
+A participant may join with `kind: "human"`. The rules that follow are enforced
+by the daemon, not by whichever interface the person happens to be using —
+otherwise they would hold only for as long as every client behaved.
+
+| A human… | |
+|---|---|
+| `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
+| `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
+| `grant`, `deny` | **refused** with `OBSERVER_ONLY` |
+
+The reasoning: permission disputes are for the fronts to settle among
+themselves. If a human could arbitrate, an unanswered request would degrade into
+a request for a person's attention, and the autonomous flow would acquire a
+human-shaped bottleneck — which is the exact failure the five-minute expiry
+grant exists to prevent.
+
+So a human is an observer with a voice. Participation is optional and silence is
+the expected state. An interface built on this protocol should reflect that
+posture: parley's own panels ship read-only, and only grow an input when the
+person explicitly asks for one.
+
+### 6.8 Mode and status
 
 ```json
 → {"v":1,"op":"mode","mode":"enforced"}

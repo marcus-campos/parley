@@ -13,8 +13,9 @@ export function say(state: State, actorId: string | null, frame: Record<string, 
     return { state, response: err("NOT_JOINED", `no live participant named ${to}`), broadcast: [] };
   }
 
-  // A human always speaks with priority. The agent must not weigh it as peer
-  // opinion — it guides without holding a veto.
+  // A human always speaks with priority, and arrives marked as human. It guides
+  // without holding a veto — the agent must not weigh it as one peer opinion
+  // among many, and must not wait for it either.
   const priority: Priority =
     me.kind === "human" ? "high" : frame.priority === "high" ? "high" : "normal";
 
