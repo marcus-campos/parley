@@ -138,6 +138,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     to: null,
     priority: "normal",
     text: `${name} joined${participant.mission ? ` — ${participant.mission}` : ""}`,
+    about: id,
   });
 
   // The cursor is set AFTER the join event, so a fresh front never drains the
@@ -193,6 +194,7 @@ export function rename(state: State, actorId: string | null, frame: Record<strin
       before === me.name
         ? `${me.name} is now on: ${me.mission}`
         : `${before} is now ${me.name}${me.mission ? ` — ${me.mission}` : ""}`,
+    about: me.id,
   });
 
   return { state, response: ok({ id: me.id, name: me.name, mission: me.mission }), broadcast: [event] };
@@ -213,6 +215,7 @@ export function leave(state: State, actorId: string | null, ctx: Ctx): Outcome {
     to: null,
     priority: "normal",
     text: `${me.name} left${released.length ? `, releasing ${released.length} claim(s)` : ""}`,
+    about: me.id,
   });
 
   // Leaving is releasing, so anyone waiting on those paths is served too.

@@ -57,6 +57,12 @@ export interface ConvEvent {
   priority: Priority;
   text: string;
   at: string;
+  /**
+   * The participant a system event is *about*. They already know what they did,
+   * so it is never delivered back to them. Matching on the name inside the text
+   * would break the moment someone renames themselves.
+   */
+  about?: string | null;
 }
 
 export interface Note {

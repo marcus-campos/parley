@@ -47,7 +47,11 @@ function selectEvents(state: State, participantId: string) {
   if (!me) return [];
   const cursor = state.cursors[participantId] ?? 0;
   return state.events.filter(
-    (e) => e.seq > cursor && e.from?.id !== participantId && visibleTo(e, me),
+    (e) =>
+      e.seq > cursor &&
+      e.from?.id !== participantId &&
+      e.about !== participantId &&
+      visibleTo(e, me),
   );
 }
 
@@ -93,7 +97,7 @@ export function history(state: State, actorId: string | null, frame: Record<stri
   const since = typeof frame.since === "number" ? frame.since : 0;
 
   const events = state.events
-    .filter((e) => e.seq > since && (visibleTo(e, me) || e.from?.id === me.id))
+    .filter((e) => e.seq > since && e.about !== me.id && (visibleTo(e, me) || e.from?.id === me.id))
     .slice(-limit);
 
   // `cursor` is where a plain `drain` would resume from, so a caller can hand

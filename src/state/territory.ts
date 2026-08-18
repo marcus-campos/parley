@@ -155,6 +155,7 @@ export function claim(state: State, actorId: string | null, frame: Record<string
           to: null,
           priority: "normal",
           text: `${me.name} claimed ${claimed.join(", ")}${intent ? ` — ${intent}` : ""}`,
+          about: me.id,
         }),
       ]
     : [];
@@ -248,6 +249,7 @@ export function release(state: State, actorId: string | null, frame: Record<stri
         to: null,
         priority: "normal",
         text: `${me.name} released ${released.join(", ")}`,
+        about: me.id,
       }),
     );
     broadcast.push(...resolvePendingOnRelease(state, me.id, released, ctx));

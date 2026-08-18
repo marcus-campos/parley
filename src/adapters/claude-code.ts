@@ -333,8 +333,10 @@ export interface InitOptions { assumeYes: boolean; json: boolean }
 export async function installClaudeCode(repo: RepoInfo, opts: InitOptions): Promise<void> {
   const claudeDir = join(repo.root, ".claude");
   const detected = existsSync(claudeDir);
-  if (!detected && !opts.assumeYes) {
-    hookOutput(opts.json, `parley: no .claude/ in ${repo.root} — nothing detected to configure.\nRun with --yes to create it anyway.`, { ok: false, detected: false });
+  if (!detected) {
+    // No Claude Code here, but there may well be another harness. Skip this
+    // adapter rather than the whole of init.
+    if (!opts.json) process.stdout.write(`parley: no .claude/ in ${repo.root}, skipping the Claude Code adapter.\n`);
     return;
   }
 
@@ -381,6 +383,7 @@ export async function installClaudeCode(repo: RepoInfo, opts: InitOptions): Prom
 
 export async function uninstallClaudeCode(repo: RepoInfo, opts: { json: boolean }): Promise<void> {
   const settingsPath = join(repo.root, ".claude", "settings.json");
+  if (!existsSync(settingsPath)) return;
   const settings = readSettings(settingsPath);
   const { merged, removed } = stripHooks((settings.hooks as HookMap) ?? {});
   const next = { ...settings, hooks: merged };

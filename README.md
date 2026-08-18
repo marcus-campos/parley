@@ -485,16 +485,26 @@ it — *"FINANCEIRO dropped holding 3 claim(s)"* — and they are released after
 No makeup. Only Claude Code has a pre-tool gate, so it is the only harness where
 everything works without the agent remembering anything.
 
-| Harness | Joins by itself | Messages arrive by themselves | Automatic territory | `enforced` |
-|---|---|---|---|---|
-| **Claude Code** | yes (hook) | yes (hook) | yes (hook) | **yes** |
-| Codex | on first MCP call¹ | rides the response¹ | manual | no |
-| Antigravity | on first MCP call¹ | rides the response¹ | manual | no |
-| Kimi | on first MCP call¹ | rides the response¹ | manual | no |
-| Anything with a shell | manual | manual | manual | no |
+| Harness | Joins by itself | Messages arrive by themselves | Automatic territory | `enforced` | Configured by `init` |
+|---|---|---|---|---|---|
+| **Claude Code** | yes (hook) | yes (hook) | yes (hook) | **yes** | yes |
+| Codex | on first MCP call | rides every MCP response | manual | no | yes |
+| Any MCP client reading `.mcp.json` | on first MCP call | rides every MCP response | manual | no | yes |
+| Antigravity | on first MCP call | rides every MCP response | manual | no | **snippet only**¹ |
+| Kimi | on first MCP call | rides every MCP response | manual | no | **snippet only**¹ |
+| Anything with a shell | manual | manual | manual | no | `AGENTS.md` |
 
-¹ The MCP server ships in a later release. Today, every one of these works
-through the CLI, manually. See the roadmap.
+¹ Their MCP config format is not confirmed, so `init` prints the snippet instead
+of writing a file. A config written on a guess fails silently and you have no
+idea why. If you know the right file for one of these, a pull request naming it
+is the most useful thing you can send.
+
+Only Claude Code has a pre-tool gate, so it is the only harness where everything
+happens without the agent remembering anything. Everywhere else the deal is
+honest and different: the agent joins on its first tool call, territory is
+manual, and **every MCP tool response carries the pending inbox in its footer**
+— which turns "never reads its messages" into "reads them whenever it touches
+parley at all".
 
 ---
 

@@ -136,8 +136,6 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
-      // The panel's own join/leave is noise about the observer, not the work.
-      if (e.kind === "system" && e.text.startsWith(`${myName} `)) continue;
       feed.push(e);
     }
     while (feed.length > 500) feed.shift();

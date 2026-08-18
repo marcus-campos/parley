@@ -89,13 +89,8 @@ export async function runWebPanel(
   let seeded = false;
   const subscribers = new Set<(chunk: string) => void>();
 
-  const isOwnNoise = (e: unknown): boolean => {
-    const ev = e as { kind?: string; text?: string };
-    return ev.kind === "system" && typeof ev.text === "string" && ev.text.startsWith(`${myName} `);
-  };
-
   client.onPush((events) => {
-    for (const e of events) if (!isOwnNoise(e)) feed.push(e);
+    for (const e of events) feed.push(e);
     while (feed.length > 500) feed.shift();
     void broadcast();
   });
@@ -106,9 +101,7 @@ export async function runWebPanel(
       seeded = true;
       const past = await client.request({ op: "history", limit: 200 });
       if (past.ok) {
-        for (const e of (past as unknown as { events: unknown[] }).events) {
-          if (!isOwnNoise(e)) feed.push(e);
-        }
+        for (const e of (past as unknown as { events: unknown[] }).events) feed.push(e);
       }
     }
     const [whoR, reqR, notesR, drainR] = await Promise.all([
@@ -118,7 +111,7 @@ export async function runWebPanel(
       client.request({ op: "drain" }),
     ]);
     if (drainR.ok) {
-      for (const e of (drainR as unknown as { events: unknown[] }).events) if (!isOwnNoise(e)) feed.push(e);
+      for (const e of (drainR as unknown as { events: unknown[] }).events) feed.push(e);
       while (feed.length > 500) feed.shift();
     }
     const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { name: string }[] }) : null;

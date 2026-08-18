@@ -8,7 +8,7 @@ import { VERSION } from "../version";
 import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
-import { adapterStatus, installClaudeCode, uninstallClaudeCode } from "../adapters/claude-code";
+import { adapterStatus } from "../adapters/claude-code";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { resolveIdentity } from "./identity";
 
@@ -18,6 +18,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley update [--check] [--yes]
                              replace this binary with the latest release
+  parley mcp                 run as an MCP server over stdio (for Codex, Kimi,
+                             Antigravity and anything else that speaks MCP)
   parley init [--yes]        install hooks and skill for detected harnesses
   parley uninit              remove what init wrote
   parley doctor              diagnose transport, repo identity and the WSL boundary
@@ -136,6 +138,12 @@ async function withSession(
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
+  // The MCP server: stdio JSON-RPC, for every harness without a pre-tool gate.
+  if (argv[0] === "mcp") {
+    const { runMcpServer } = await import("../mcp/server");
+    return runMcpServer();
+  }
+
   // The Claude Code hook runner: JSON in, JSON out, never a shell one-liner.
   if (argv[0] === "hook") {
     const { runHook } = await import("../adapters/hook");
@@ -215,10 +223,14 @@ async function main(): Promise<void> {
   const env = detectAddrEnv(repo.canonical);
 
   switch (parsed.command) {
-    case "init":
-      return void installClaudeCode(repo, { assumeYes: parsed.flags.yes === true, json: parsed.flags.json === true });
-    case "uninit":
-      return void uninstallClaudeCode(repo, { json: parsed.flags.json === true });
+    case "init": {
+      const { runInit } = await import("../adapters/install");
+      return runInit(repo, { assumeYes: parsed.flags.yes === true, json: parsed.flags.json === true });
+    }
+    case "uninit": {
+      const { runUninit } = await import("../adapters/install");
+      return runUninit(repo, { json: parsed.flags.json === true });
+    }
 
     case "doctor": {
       const address = resolveAddress(repo.repoId, env);

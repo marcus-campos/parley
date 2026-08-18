@@ -341,3 +341,43 @@ describe("what an observer sees, and what it costs to keep watching", () => {
       .toHaveLength(0);
   });
 });
+
+describe("a front is never told about its own actions", () => {
+  test("your own join, claim and release do not come back to you", () => {
+    const fin = joined(state, "FINANCEIRO", { cwd: "/wt/fin" });
+    const campo = joined(state, "TESTE-CAMPO", { cwd: "/wt/campo" }, 10);
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/a.ts"] }, at(20));
+    apply(state, fin, { v: 1, op: "release", paths: ["src/a.ts"] }, at(30));
+
+    const mine = apply(state, fin, { v: 1, op: "drain" }, at(40)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(mine.events.some((e) => e.text.includes("FINANCEIRO claimed"))).toBe(false);
+    expect(mine.events.some((e) => e.text.includes("FINANCEIRO released"))).toBe(false);
+    expect(mine.events.some((e) => e.text.includes("FINANCEIRO joined"))).toBe(false);
+
+    // Everyone else does hear about it — that is the whole point of the bus.
+    const theirs = apply(state, campo, { v: 1, op: "drain" }, at(50)).response as unknown as {
+      events: { text: string }[];
+    };
+    expect(theirs.events.some((e) => e.text.includes("FINANCEIRO claimed"))).toBe(true);
+  });
+
+  test("renaming yourself does not survive as news to you", () => {
+    const fin = joined(state, "WORKTREE-FIN", { cwd: "/wt/fin" });
+    apply(state, fin, { v: 1, op: "rename", name: "FINANCEIRO", mission: "fechamento" }, at(20));
+    const mine = apply(state, fin, { v: 1, op: "drain" }, at(30)).response as unknown as { events: unknown[] };
+    expect(mine.events).toHaveLength(0);
+  });
+
+  test("the filter follows the participant, not the name they had", () => {
+    // Matching on the name inside the text would break here.
+    const fin = joined(state, "WORKTREE-FIN", { cwd: "/wt/fin" });
+    apply(state, fin, { v: 1, op: "claim", paths: ["src/a.ts"] }, at(20));
+    apply(state, fin, { v: 1, op: "rename", name: "PRUMO" }, at(30));
+    apply(state, fin, { v: 1, op: "release", paths: ["src/a.ts"] }, at(40));
+
+    const mine = apply(state, fin, { v: 1, op: "drain" }, at(50)).response as unknown as { events: unknown[] };
+    expect(mine.events).toHaveLength(0);
+  });
+});
