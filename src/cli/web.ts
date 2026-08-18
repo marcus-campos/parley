@@ -4,6 +4,8 @@ import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 /**
  * `parley watch --web` — the same panel in a browser, for following along on a
@@ -28,6 +30,39 @@ export interface Snapshot {
   requests: unknown[];
   notes: unknown[];
   feed: unknown[];
+}
+
+/**
+ * Where a detached panel records itself, so a second `--detach` finds the one
+ * already running instead of starting a second copy on another port.
+ */
+interface RunningPanel { pid: number; url: string; port: number }
+
+function panelStatePath(gitCommonDir: string): string {
+  return join(gitCommonDir, "parley", "panel-web.json");
+}
+
+export function readRunningPanel(gitCommonDir: string): RunningPanel | null {
+  const path = panelStatePath(gitCommonDir);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as RunningPanel;
+    // A recorded pid that no longer exists is a leftover, not a running panel.
+    process.kill(parsed.pid, 0);
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeRunningPanel(gitCommonDir: string, panel: RunningPanel): void {
+  const path = panelStatePath(gitCommonDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(panel, null, 2)}\n`, "utf8");
+}
+
+export function clearRunningPanel(gitCommonDir: string): void {
+  try { rmSync(panelStatePath(gitCommonDir), { force: true }); } catch { /* nothing there */ }
 }
 
 export async function runWebPanel(
@@ -179,6 +214,7 @@ export async function runWebPanel(
   });
 
   const address = `http://127.0.0.1:${server.port}/?t=${token}`;
+  writeRunningPanel(repo.gitCommonDir, { pid: process.pid, url: address, port: Number(server.port) });
   process.stdout.write(`parley: web panel on ${address}\n`);
   process.stdout.write(`parley: bound to 127.0.0.1 only; the token is required. Ctrl+C to stop.\n`);
   process.stdout.write(`parley: the page opens in watching mode; press s there to say something.\n`);
@@ -196,6 +232,7 @@ export async function runWebPanel(
     void client.request({ op: "leave" }).finally(() => {
       client.close();
       server.stop(true);
+      clearRunningPanel(repo.gitCommonDir);
       process.stdout.write("\nparley: web panel closed\n");
       process.exit(0);
     });

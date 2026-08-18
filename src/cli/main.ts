@@ -12,6 +12,8 @@ import { adapterStatus, installClaudeCode, uninstallClaudeCode } from "../adapte
 import { flagString, parseArgs, type Parsed } from "./args";
 import { resolveIdentity } from "./identity";
 
+const COMPILED_CLI = import.meta.url.includes("$bunfs");
+
 const USAGE = `parley — coordination bus for concurrent agent sessions in one repository
 
   parley update [--check] [--yes]
@@ -34,9 +36,11 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley claim <paths...> [--intent "..."] [--auto]
   parley release [<paths...>] [--all]
 
-  parley watch [--web] [--port 7717]
+  parley watch [--web] [--port 7717] [--detach] [--stop]
                              live panel: fronts, feed and pending requests.
                              Opens watching; press i (or s on the web) to speak.
+                             --detach keeps the web panel up after you close the
+                             terminal; --stop shuts that one down.
 
   parley ask <path> --reason "..." [--ttl 300]
   parley requests [--all]
@@ -280,8 +284,46 @@ async function main(): Promise<void> {
       readPanelConfig(repo.gitCommonDir).name ||
       "PANEL";
     if (parsed.flags.web) {
-      const { runWebPanel } = await import("./web");
+      const { clearRunningPanel, readRunningPanel, runWebPanel } = await import("./web");
       const port = Number(flagString(parsed.flags, "port", "7717"));
+      const running = readRunningPanel(repo.gitCommonDir);
+
+      if (parsed.flags.stop) {
+        if (!running) return out(parsed, "parley: no web panel running for this repository", { ok: true, stopped: false });
+        try { process.kill(running.pid, "SIGTERM"); } catch { /* already gone */ }
+        clearRunningPanel(repo.gitCommonDir);
+        return out(parsed, `parley: stopped the web panel (pid ${running.pid})`, { ok: true, stopped: true });
+      }
+
+      // A panel is a long-lived thing you glance at, so a second launch should
+      // hand you the one that is already up rather than opening a rival on
+      // another port with a different token.
+      if (running) {
+        return out(parsed, `parley: web panel already running on ${running.url}`, { ok: true, url: running.url, reused: true });
+      }
+
+      if (parsed.flags.detach) {
+        const { spawn } = await import("node:child_process");
+        const args = process.argv.slice(1).filter((a) => a !== "--detach");
+        const child = spawn(process.execPath, COMPILED_CLI ? args.slice(1) : args, {
+          detached: true, stdio: "ignore", windowsHide: true,
+        });
+        child.unref();
+        // Wait for it to record itself, so we can print the URL it chose.
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 50));
+          const up = readRunningPanel(repo.gitCommonDir);
+          if (up) {
+            return out(
+              parsed,
+              `parley: web panel on ${up.url}\nparley: it keeps running after you close this terminal. Stop it with: parley watch --web --stop`,
+              { ok: true, url: up.url, pid: up.pid, detached: true },
+            );
+          }
+        }
+        return fail(parsed, "started the web panel but it never came up");
+      }
+
       return runWebPanel(repo, panelName, port, parsed.flags.open !== false);
     }
     return runWatch(repo, panelName);

@@ -187,6 +187,23 @@ you.
 
 ---
 
+## What runs by itself, and what you launch
+
+Once `parley init` has run in a repository — **once, not per session** — agent
+sessions need nothing from you:
+
+| | |
+|---|---|
+| A new agent session joins the bus | automatic (`SessionStart` hook) |
+| Messages arrive in its context | automatic (`UserPromptSubmit`, `PreToolUse`) |
+| Territory is claimed on first edit | automatic (`PreToolUse`) |
+| It leaves and hands territory back | automatic (`SessionEnd`) |
+| The daemon starts | automatic, on the first command that needs it |
+
+What you run on purpose is the panel, because it is a thing you look at:
+`parley watch`, or `parley watch --web --detach` once, and then just open the
+browser whenever you want to see what is going on.
+
 ## Set it up in a repository
 
 ```bash
@@ -349,6 +366,10 @@ Click any note — or press <kbd>n</kbd> — to read it full screen, with
 <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> stepping between notes and <kbd>Esc</kbd>
 closing.
 
+- `--detach` leaves it running after you close the terminal, prints the URL and
+  exits. A second `--detach` hands you the panel already running instead of
+  opening a rival on another port with a different token.
+  `parley watch --web --stop` shuts it down.
 - `--port 7717` picks the port; `--open=false` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
   not a security boundary on a shared machine: without a token, any process — or
