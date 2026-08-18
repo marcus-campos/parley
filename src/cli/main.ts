@@ -3,7 +3,8 @@ import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { ParleyDaemon, journalPathFor } from "../daemon/server";
 import { readEndpoint } from "../daemon/endpoint";
 import { exportNotes } from "../notes/export";
-import { DEFAULTS, type Response } from "../protocol/types";
+import { DEFAULTS, PROTOCOL_VERSION, type Response } from "../protocol/types";
+import { VERSION } from "../version";
 import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
@@ -40,6 +41,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley mode [off|advisory|enforced]
 
 Global flags: --json (machine output), --as NAME, --quiet
+              --help, --version
 `;
 
 function out(parsed: Parsed, human: string, payload: unknown): void {
@@ -144,8 +146,15 @@ async function main(): Promise<void> {
   }
 
   const parsed = parseArgs(argv);
-  if (parsed.command === "help" || parsed.flags.help) {
+
+  // `--help` and `--version` are consumed as the command name by the parser, so
+  // they are matched here explicitly. Both must work outside a git repository.
+  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || parsed.flags.help) {
     process.stdout.write(USAGE);
+    return;
+  }
+  if (["version", "--version", "-v"].includes(parsed.command) || parsed.flags.version) {
+    process.stdout.write(`parley ${VERSION} (protocol v${PROTOCOL_VERSION})\n`);
     return;
   }
 

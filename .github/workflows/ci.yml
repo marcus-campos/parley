@@ -32,15 +32,40 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
-        run: bun test
-
+      # Build before test: tests/cli/binary.test.ts exercises the compiled
+      # binary and skips itself when dist/ is absent.
       - name: Build the binary
         run: bun run build
+
+      - name: Test
+        run: bun test
 
       - name: Smoke test the built binary
         shell: bash
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then BIN=./dist/parley.exe; else BIN=./dist/parley; fi
+          "$BIN" --version
           "$BIN" doctor
           "$BIN" status
+
+  installer:
+    name: lint the install scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: POSIX syntax check
+        run: sh -n install.sh
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck install.sh
+
+      - name: PowerShell syntax check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            "install.ps1", [ref]$null, [ref]$errors)
+          if ($errors) { $errors | ForEach-Object { Write-Error $_ } }

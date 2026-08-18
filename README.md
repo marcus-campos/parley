@@ -45,23 +45,54 @@ system at all.
 
 ## Install
 
-### Build from source (works today, on any platform Bun supports)
+### One line — macOS, Linux, WSL
 
 ```bash
-git clone https://github.com/marcus-campos/parley.git
-cd parley
-bun install
-bun run build          # produces ./dist/parley, a standalone binary, no runtime needed
-sudo mv dist/parley /usr/local/bin/parley
+curl -fsSL https://raw.githubusercontent.com/marcus-campos/parley/main/install.sh | sh
 ```
 
-Requires [Bun](https://bun.sh) 1.3+ to build. The resulting binary has no runtime
-dependency — it does not need Bun, Node, or anything else on the target machine.
+Or with wget:
 
-### Download a release binary
+```bash
+wget -qO- https://raw.githubusercontent.com/marcus-campos/parley/main/install.sh | sh
+```
 
-Every tagged release publishes standalone binaries on the
-[Releases page](https://github.com/marcus-campos/parley/releases):
+The script detects your OS and architecture, downloads the matching binary from
+the latest release, verifies its SHA-256, installs it to the first writable of
+`/usr/local/bin` or `~/.local/bin`, and tells you if that directory is not on
+your `PATH`.
+
+It takes two environment overrides:
+
+```bash
+PARLEY_VERSION=v0.1.0 sh install.sh              # pin a version
+PARLEY_INSTALL_DIR=~/bin sh install.sh           # choose the directory
+```
+
+> Piping a script into a shell means running code you have not read. If you
+> would rather not: `curl -fsSL .../install.sh -o install.sh`, read it — it is
+> ~120 lines of POSIX `sh` — then `sh install.sh`.
+
+### One line — Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/marcus-campos/parley/main/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\parley\bin` and adds it to your user `PATH`. Open a
+new terminal afterwards.
+
+**Windows on arm64 has no prebuilt binary** — Bun cannot cross-compile to it yet.
+Build from source there, or run the x64 build under emulation.
+
+**In WSL, use the macOS/Linux one-liner, not this one.** WSL and Windows are two
+operating systems, and parley bridges them over authenticated loopback; each
+side needs its own binary. `parley doctor` tells you which side you are on.
+
+### Manual download
+
+Every tagged release publishes standalone binaries with checksums on the
+[Releases page](https://github.com/marcus-campos/parley/releases).
 
 | Platform | Asset |
 |---|---|
@@ -71,13 +102,19 @@ Every tagged release publishes standalone binaries on the
 | macOS arm64 (Apple Silicon) | `parley-darwin-arm64` |
 | Windows x64 | `parley-windows-x64.exe` |
 
-Windows on arm64 is missing because Bun cannot cross-compile to it yet; build
-from source there, or run the x64 binary under emulation.
+```bash
+# macOS, Apple Silicon
+curl -fsSL -o parley https://github.com/marcus-campos/parley/releases/latest/download/parley-darwin-arm64
+curl -fsSL -o parley.sha256 https://github.com/marcus-campos/parley/releases/latest/download/parley-darwin-arm64.sha256
+shasum -a 256 -c parley.sha256
+chmod +x parley && sudo mv parley /usr/local/bin/parley
+```
+
+On macOS, Gatekeeper may refuse a downloaded binary that is not yet notarised.
+Clear the quarantine attribute:
 
 ```bash
-# macOS arm64 example
-curl -fsSL -o parley https://github.com/marcus-campos/parley/releases/latest/download/parley-darwin-arm64
-chmod +x parley && sudo mv parley /usr/local/bin/parley
+xattr -d com.apple.quarantine /usr/local/bin/parley
 ```
 
 ### npm
@@ -90,9 +127,26 @@ npm i -g @marcus-campos/parley
 > so the npm wrapper is scoped. The binary, the repository and the command are
 > all still `parley`.
 
+### Build from source
+
+Only needed for Windows arm64, an unsupported platform, or to work on parley
+itself. Requires [Bun](https://bun.sh) 1.3+.
+
+```bash
+git clone https://github.com/marcus-campos/parley.git
+cd parley
+bun install
+bun run build          # produces ./dist/parley
+sudo mv dist/parley /usr/local/bin/parley
+```
+
+The resulting binary has no runtime dependency — it does not need Bun, Node, or
+anything else on the target machine.
+
 ### Verify
 
 ```bash
+parley --version
 parley doctor
 ```
 
