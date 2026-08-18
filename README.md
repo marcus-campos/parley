@@ -156,6 +156,13 @@ daemon that is already up keeps serving the version it started with, and
 forgetting that step is what produces confusing bug reports. The next command
 spawns a fresh one.
 
+Run inside a repository, it then **offers to refresh the installed adapter**. The
+binary is only half the install: the hooks and the skill were written by whatever
+version ran `init`, and the skill is what the agent actually reads — the
+instructions should not be the stalest part of your setup. It shows what is out
+of date and asks; `--yes` skips the question. `parley doctor` reports the same
+thing under `adapter`.
+
 If the binary lives somewhere you cannot write, it says so and tells you to
 re-run with `sudo`. Running from a source checkout, it says that too, and points
 at `git pull && bun run build` instead of doing something surprising.

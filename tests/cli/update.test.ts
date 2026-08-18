@@ -36,3 +36,87 @@ describe("targetForThisMachine", () => {
     expect("error" in target || published.has(target.asset)).toBe(true);
   });
 });
+
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { adapterStatus, refreshAdapter } from "../../src/adapters/claude-code";
+
+function repoWithAdapter(skill: string, hooks: unknown): string {
+  const dir = mkdtempSync(join(tmpdir(), "parley-adapter-"));
+  mkdirSync(join(dir, ".claude", "skills", "parley"), { recursive: true });
+  writeFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), skill, "utf8");
+  writeFileSync(join(dir, ".claude", "settings.json"), JSON.stringify({ hooks }, null, 2), "utf8");
+  return dir;
+}
+
+describe("adapterStatus", () => {
+  test("a repository with nothing installed reports so", () => {
+    const dir = mkdtempSync(join(tmpdir(), "parley-adapter-"));
+    try {
+      expect(adapterStatus(dir).installed).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a skill written by an older version is spotted as outdated", () => {
+    const dir = repoWithAdapter("---\nname: parley\n---\n\nold text\n", {
+      SessionStart: [{ hooks: [{ type: "command", command: "parley hook SessionStart", timeout: 5 }] }],
+    });
+    try {
+      const status = adapterStatus(dir);
+      expect(status.installed).toBe(true);
+      expect(status.skillCurrent).toBe(false);
+      expect(status.skillEdited).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("refreshAdapter", () => {
+  test("rewrites the skill and the hooks to what this version ships", async () => {
+    const dir = repoWithAdapter("stale", { SessionStart: [{ hooks: [{ type: "command", command: "parley hook SessionStart" }] }] });
+    try {
+      const changed = await refreshAdapter(dir, { assumeYes: true, json: true });
+      expect(changed).toBe(true);
+
+      const after = adapterStatus(dir);
+      expect(after.skillCurrent).toBe(true);
+      expect(after.hooksCurrent).toBe(true);
+
+      // The instructions the agent reads are the point of the refresh.
+      const skill = readFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), "utf8");
+      expect(skill).toContain("Release the moment you are done");
+      expect(skill).toContain("parley notes --import");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("it does nothing when there is nothing installed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parley-adapter-"));
+    try {
+      expect(await refreshAdapter(dir, { assumeYes: true, json: true })).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an already-current adapter is left alone", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "parley-adapter-"));
+    try {
+      mkdirSync(join(dir, ".claude"), { recursive: true });
+      writeFileSync(join(dir, ".claude", "settings.json"), "{}", "utf8");
+      await refreshAdapter(dir, { assumeYes: true, json: true });   // installs nothing: not installed
+      // Install it properly, then a second refresh must be a no-op.
+      const first = repoWithAdapter("stale", {});
+      await refreshAdapter(first, { assumeYes: true, json: true });
+      expect(await refreshAdapter(first, { assumeYes: true, json: true })).toBe(false);
+      rmSync(first, { recursive: true, force: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

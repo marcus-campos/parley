@@ -8,7 +8,7 @@ import { VERSION } from "../version";
 import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
-import { installClaudeCode, uninstallClaudeCode } from "../adapters/claude-code";
+import { adapterStatus, installClaudeCode, uninstallClaudeCode } from "../adapters/claude-code";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { resolveIdentity } from "./identity";
 
@@ -180,12 +180,18 @@ async function main(): Promise<void> {
   if (parsed.command === "update") {
     const { runUpdate } = await import("./update");
     let gitCommonDir: string | null = null;
-    try { gitCommonDir = locateRepo().gitCommonDir; } catch { gitCommonDir = null; }
+    let repoRoot: string | null = null;
+    try {
+      const found = locateRepo();
+      gitCommonDir = found.gitCommonDir;
+      repoRoot = found.root;
+    } catch { /* updating from anywhere is fine */ }
     return runUpdate({
       checkOnly: parsed.flags.check === true,
       assumeYes: parsed.flags.yes === true,
       json: parsed.flags.json === true,
       gitCommonDir,
+      repoRoot,
     });
   }
 
@@ -223,6 +229,12 @@ async function main(): Promise<void> {
         state_dir: stateDir(repo.repoId, env),
         endpoint: endpoint ? "present" : "absent",
         daemon_pid: endpoint?.pid ?? null,
+        adapter: (() => {
+          const a = adapterStatus(repo.root);
+          if (!a.installed) return "not installed (run: parley init)";
+          if (a.skillCurrent && a.hooksCurrent) return `current (${VERSION})`;
+          return "OUTDATED — run: parley update";
+        })(),
       };
       const lines = Object.entries(report).map(([k, v]) => `  ${k.padEnd(18)} ${String(v)}`);
       if (report.boundary_mode) {

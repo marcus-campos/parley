@@ -112,11 +112,28 @@ session needs, including sessions that do not exist yet:
 parley note --title "CI here runs tsc -b, not tsc --noEmit" \\
   --body "the root tsconfig is solution-style, so --noEmit checks nothing" \\
   --tags ci,typescript
-parley notes --export
+parley notes
 \`\`\`
 
-\`--export\` writes \`.parley/notes.md\`, which is versioned in git. Commit it
-when it makes sense; parley never commits for you.
+\`.parley/notes.md\` is written for you every time a note is added, and it is
+versioned in git — so a note reaches a colleague, another machine, and every
+future session. Commit it when it makes sense; parley never commits for you.
+\`parley notes --import\` reads that file back onto the bus, which is what a
+fresh clone needs.
+
+## If you lose your context
+
+Your inbox is incremental: \`parley drain\` only ever gives you what you have not
+seen, so calling it costs nothing when nothing happened. If your context window
+dropped what you already read and you need it back:
+
+\`\`\`
+parley history --limit 100
+parley notes
+parley who
+\`\`\`
+
+\`history\` does not move your read cursor, so it never costs you a message.
 
 ## If parley is not running
 
@@ -184,6 +201,91 @@ async function confirm(question: string): Promise<boolean> {
   const answer = await new Promise<string>((resolve) => rl.question(`${question} [y/N] `, resolve));
   rl.close();
   return /^y(es)?$/i.test(answer.trim());
+}
+
+export interface AdapterStatus {
+  installed: boolean;
+  /** The skill on disk is byte-identical to what this version ships. */
+  skillCurrent: boolean;
+  /** Our hook entries in settings.json match what this version installs. */
+  hooksCurrent: boolean;
+  /** Someone edited the skill by hand; refreshing would discard that. */
+  skillEdited: boolean;
+  skillPath: string;
+  settingsPath: string;
+}
+
+/**
+ * What is installed here versus what this binary ships.
+ *
+ * `parley update` replaces the executable, and for a long while that was all it
+ * did — leaving the skill and hooks written by whatever version happened to run
+ * `init`. The instructions an agent actually reads were the stalest part of the
+ * install, which is the wrong thing to let drift.
+ */
+export function adapterStatus(repoRoot: string): AdapterStatus {
+  const claudeDir = join(repoRoot, ".claude");
+  const settingsPath = join(claudeDir, "settings.json");
+  const skillPath = join(claudeDir, "skills", "parley", "SKILL.md");
+
+  const settings = readSettings(settingsPath);
+  const installedHooks = (settings.hooks as HookMap) ?? {};
+  const ours = Object.entries(installedHooks).filter(([, ms]) => ms.some(isParleyMatcher));
+  const installed = ours.length > 0 || existsSync(skillPath);
+
+  const { merged } = mergeHooks(installedHooks);
+  const hooksCurrent =
+    ours.length > 0 && JSON.stringify(merged) === JSON.stringify(installedHooks);
+
+  const onDisk = existsSync(skillPath) ? readFileSync(skillPath, "utf8") : "";
+  const skillCurrent = onDisk === SKILL;
+  // A hand-edited skill is one that is neither current nor any shape we wrote;
+  // we cannot tell which version produced it, so we warn rather than assume.
+  const skillEdited = onDisk !== "" && !skillCurrent;
+
+  return { installed, skillCurrent, hooksCurrent, skillEdited, skillPath, settingsPath };
+}
+
+/** Rewrite the skill and hooks to what this version ships. */
+export async function refreshAdapter(
+  repoRoot: string,
+  opts: { assumeYes: boolean; json: boolean },
+): Promise<boolean> {
+  const status = adapterStatus(repoRoot);
+  if (!status.installed) return false;
+  if (status.skillCurrent && status.hooksCurrent) return false;
+
+  if (!opts.json) {
+    process.stdout.write("\nparley: the Claude Code adapter in this repository is from an older version.\n");
+    if (!status.skillCurrent) {
+      process.stdout.write(`        ${status.skillPath}\n`);
+      process.stdout.write("          the skill is what the agent reads to learn the verbs; yours predates\n");
+      process.stdout.write("          the current instructions.\n");
+    }
+    if (!status.hooksCurrent) {
+      process.stdout.write(`        ${status.settingsPath}\n`);
+      process.stdout.write("          the hook entries differ from what this version installs.\n");
+    }
+    if (status.skillEdited) {
+      process.stdout.write("        NOTE: the skill differs from every version we ship, so it may have been\n");
+      process.stdout.write("        edited by hand. Refreshing discards those edits.\n");
+    }
+  }
+
+  if (!opts.assumeYes && !(await confirm("Refresh it?"))) {
+    hookOutput(opts.json, "parley: left the adapter as it is.", { ok: true, refreshed: false });
+    return false;
+  }
+
+  const claudeDir = join(repoRoot, ".claude");
+  const settings = readSettings(status.settingsPath);
+  const { merged } = mergeHooks((settings.hooks as HookMap) ?? {});
+  mkdirSync(join(claudeDir, "skills", "parley"), { recursive: true });
+  writeFileSync(status.settingsPath, `${JSON.stringify({ ...settings, hooks: merged }, null, 2)}\n`, "utf8");
+  writeFileSync(status.skillPath, SKILL, "utf8");
+
+  hookOutput(opts.json, "parley: adapter refreshed.", { ok: true, refreshed: true });
+  return true;
 }
 
 export interface InitOptions { assumeYes: boolean; json: boolean }

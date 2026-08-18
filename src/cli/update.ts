@@ -21,6 +21,8 @@ export interface UpdateOptions {
   assumeYes: boolean;
   json: boolean;
   gitCommonDir: string | null;
+  /** Worktree root, when the command was run inside a repository. */
+  repoRoot: string | null;
 }
 
 interface Target { asset: string; label: string }
@@ -120,6 +122,12 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
       `parley ${VERSION} is the latest release${compareVersions(VERSION, latest) > 0 ? ` (ahead of ${latest})` : ""}.`,
       { ok: true, current: VERSION, latest, update_available: false },
     );
+    // Up to date does not mean installed-and-up-to-date: someone who updated
+    // the binary by hand still has the old skill sitting in the repository.
+    if (!opts.checkOnly && opts.repoRoot) {
+      const { refreshAdapter } = await import("../adapters/claude-code");
+      await refreshAdapter(opts.repoRoot, { assumeYes: opts.assumeYes, json: opts.json });
+    }
     return;
   }
 
@@ -215,6 +223,14 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     `parley: updated ${VERSION} -> ${latest}.${stopped ? " Stopped the running daemon so the new version is picked up." : ""}`,
     { ok: true, from: VERSION, to: latest, daemon_stopped: stopped },
   );
+
+  // The binary is only half the install. The hooks and the skill were written
+  // by whatever version ran `init`, and the skill is what the agent actually
+  // reads — the stalest part of the install should not be the instructions.
+  if (opts.repoRoot) {
+    const { refreshAdapter } = await import("../adapters/claude-code");
+    await refreshAdapter(opts.repoRoot, { assumeYes: opts.assumeYes, json: opts.json });
+  }
 }
 
 export function binaryMtime(): string | null {
