@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and publish (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-linux-x64
+            asset: parley-linux-x64
+          - target: bun-linux-arm64
+            asset: parley-linux-arm64
+          - target: bun-darwin-x64
+            asset: parley-darwin-x64
+          - target: bun-darwin-arm64
+            asset: parley-darwin-arm64
+          - target: bun-windows-x64
+            asset: parley-windows-x64.exe
+          # Windows on arm64 is absent because Bun cannot cross-compile to it.
+          # Do not add it back without checking `bun build --compile --target`.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Compile
+        run: |
+          bun build --compile --minify \
+            --target=${{ matrix.target }} \
+            src/cli/main.ts \
+            --outfile dist/${{ matrix.asset }}
+
+      - name: Checksum
+        run: |
+          cd dist
+          sha256sum ${{ matrix.asset }} > ${{ matrix.asset }}.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List what will be published
+        run: ls -la artifacts
+
+      - name: Create or update the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: artifacts/*
+          fail_on_unmatched_files: true
+
+  npm:
+    name: publish to npm
+    needs: build
+    runs-on: ubuntu-latest
+    # Scoped because the unscoped `parley` name on npm belongs to an unrelated
+    # flow-control library. Skipped entirely when no NPM_TOKEN is configured,
+    # so a release never fails just because npm is not set up yet.
+    if: ${{ github.event_name == 'push' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Check for a token
+        id: token
+        run: |
+          if [ -n "${NPM_TOKEN}" ]; then echo "present=true" >> "$GITHUB_OUTPUT";
+          else echo "present=false" >> "$GITHUB_OUTPUT"; echo "::notice::NPM_TOKEN not set, skipping npm publish"; fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish
+        if: steps.token.outputs.present == 'true'
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

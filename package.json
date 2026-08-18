@@ -1,0 +1,23 @@
+{
+  "name": "@marcus-campos/parley",
+  "version": "0.1.0",
+  "description": "Coordination bus for concurrent agent sessions in one repository",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "parley": "./dist/parley"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build --compile --minify src/cli/main.ts --outfile dist/parley"
+  },
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "keywords": ["agents", "coordination", "claude-code", "mcp", "multi-agent"],
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
+  }
+}

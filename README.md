@@ -1,0 +1,313 @@
+# parley
+
+**A coordination bus for concurrent agent sessions working in one repository.**
+
+Running four or five agent sessions on the same repository works. The problem is
+that each session is blind to the others. They duplicate work, edit the same file
+in parallel, create two migration heads from the same parent, and discover the
+damage only when CI turns red.
+
+parley gives those sessions a way to see each other: who is here, what each one
+is working on, who currently holds which files, and a channel to say something
+before the collision instead of after it.
+
+```
+$ parley who
+parley (advisory)
+  FINANCEIRO       month-end closing            claude-code   12s idle  3 claim(s)
+  TESTE-CAMPO      route incident triage        codex          4s idle  1 claim(s)
+
+$ parley claim 'src/backend/finance/**' --intent "closing refactor"
+parley: claimed src/backend/finance/**
+
+$ parley claim src/backend/finance/services.py     # from the other session
+parley: CONFLICT
+  src/backend/finance/services.py held by FINANCEIRO (month-end closing) since 2026-08-18T13:50:00Z
+Ask for it:  parley ask src/backend/finance/services.py --reason "..."
+```
+
+- **Protocol reference:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
+- **How it works inside:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+
+---
+
+## The one rule
+
+**A broken parley must never stop the work.**
+
+If the daemon is unreachable, `enforced` degrades to `advisory` and says so
+loudly. If a hook overruns its time budget, it lets go. If the journal has a torn
+line from a `kill -9`, the daemon drops that line and boots anyway. A
+coordination system that freezes the machine when it fails is worse than no
+system at all.
+
+---
+
+## Install
+
+### Build from source (works today, on any platform Bun supports)
+
+```bash
+git clone https://github.com/marcus-campos/parley.git
+cd parley
+bun install
+bun run build          # produces ./dist/parley, a standalone binary, no runtime needed
+sudo mv dist/parley /usr/local/bin/parley
+```
+
+Requires [Bun](https://bun.sh) 1.3+ to build. The resulting binary has no runtime
+dependency — it does not need Bun, Node, or anything else on the target machine.
+
+### Download a release binary
+
+Every tagged release publishes standalone binaries on the
+[Releases page](https://github.com/marcus-campos/parley/releases):
+
+| Platform | Asset |
+|---|---|
+| Linux x64 | `parley-linux-x64` |
+| Linux arm64 | `parley-linux-arm64` |
+| macOS x64 (Intel) | `parley-darwin-x64` |
+| macOS arm64 (Apple Silicon) | `parley-darwin-arm64` |
+| Windows x64 | `parley-windows-x64.exe` |
+
+Windows on arm64 is missing because Bun cannot cross-compile to it yet; build
+from source there, or run the x64 binary under emulation.
+
+```bash
+# macOS arm64 example
+curl -fsSL -o parley https://github.com/marcus-campos/parley/releases/latest/download/parley-darwin-arm64
+chmod +x parley && sudo mv parley /usr/local/bin/parley
+```
+
+### npm
+
+```bash
+npm i -g @marcus-campos/parley
+```
+
+> The unscoped `parley` name on npm belongs to an unrelated flow-control library,
+> so the npm wrapper is scoped. The binary, the repository and the command are
+> all still `parley`.
+
+### Verify
+
+```bash
+parley doctor
+```
+
+`doctor` prints the repository identity, the transport it will use, where state
+lives, and — if you are in WSL — whether it detected the Windows boundary and
+what that implies.
+
+---
+
+## Set it up in a repository
+
+```bash
+cd your-repo
+parley init
+```
+
+`init` detects the harnesses you have installed, **shows you the diff of what it
+would write**, asks for confirmation, and only then writes. It never edits your
+configuration blind. `parley uninit` removes exactly what it wrote.
+
+For Claude Code it installs four hooks in `.claude/settings.json` and a skill in
+`.claude/skills/parley/`:
+
+| Hook | What it does |
+|---|---|
+| `SessionStart` | Joins the bus under a name derived from the worktree or branch, then tells the agent to rename itself and declare a mission. An agent that forgets to introduce itself still shows up in `who` instead of being a ghost editing files. |
+| `UserPromptSubmit` | Drains the inbox and injects it as context. |
+| `PreToolUse` | One hook, one call: drains the inbox and, when the tool is `Edit`/`Write`/`NotebookEdit`, settles territory in the same answer. |
+| `SessionEnd` | Leaves and hands territory back. |
+
+The skill is the other half: hooks handle what should be automatic (territory,
+inbox), and the skill teaches the agent to use the deliberate verbs — `say`,
+`ask`, `note` — on purpose.
+
+---
+
+## The three modes
+
+The mode belongs to **the repository**, not to a session, and it is held by the
+daemon. If each session picked its own, one session in `advisory` would drive
+over the others and `enforced` would be theatre.
+
+| Mode | Territory and permission | Conversation and notes |
+|---|---|---|
+| `off` | disabled: no claim, no auto-claim, no `ask` | work normally |
+| `advisory` | claim and auto-claim active; a conflict warns loudly but does not block | work normally |
+| `enforced` | a conflict **blocks the edit** until granted | work normally |
+
+```bash
+parley mode enforced
+```
+
+`enforced` is only honest where the harness has a pre-tool gate. Today that is
+Claude Code. See the compatibility matrix below.
+
+---
+
+## Commands
+
+```
+parley init | uninit | doctor | status | stop
+
+parley join --as NAME [--mission "..."]
+parley rename --as NAME [--mission "..."]
+parley leave
+parley who
+
+parley say [--to NAME] [--priority high] "text"
+parley drain
+
+parley claim <paths...> [--intent "..."] [--auto]
+parley release [<paths...>] [--all]
+
+parley ask <path> --reason "..." [--ttl 300]
+parley grant <request> [--scope once|transfer]
+parley deny <request> --reason "..."
+
+parley note --title "..." [--body "..."] [--tags a,b]
+parley notes [--tag x] [--export]
+
+parley mode [off|advisory|enforced]
+```
+
+Every command accepts `--json` for machine consumption, and `--as NAME` to say
+which front you are. `PARLEY_NAME`, `PARLEY_MISSION` and `PARLEY_HARNESS` do the
+same through the environment.
+
+---
+
+## How the pieces behave
+
+### Territory
+
+A path is always POSIX and relative to the repository root. `src\app.ts` and
+`src/app.ts` are the same territory — without that rule a session on Windows and
+a session in WSL would hold the same file without ever colliding, which is the
+worst failure class, the silent one.
+
+Claims accept a concrete path or a glob. A bare directory covers everything
+beneath it. Overlap is decided conservatively: when two wildcard patterns cannot
+be compared exactly, parley reports a conflict. A false conflict costs one
+conversation; a false clear costs two agents editing the same file.
+
+**Auto-claim.** The first edit of a free file claims it automatically, through
+the hook. Agents ignore protocol constantly, so auto-claim is what makes `who`
+reflect reality rather than intention. An auto-claim expires after 15 idle
+minutes — otherwise a front that swept the repository would end up owning half
+of it. A claim you asked for explicitly never expires from inactivity; it is
+yours until you leave.
+
+### Permission
+
+```bash
+parley ask src/backend/finance/services.py --reason "adding one column"
+```
+
+The owner is pushed the request and answers `grant` (with `--scope once` or
+`--scope transfer`) or `deny --reason "..."`.
+
+**An unanswered request is granted, and announced by name:**
+
+> `TESTE-CAMPO took src/backend/finance/services.py by timeout; FINANCEIRO did not answer in 5 min.`
+
+An idle agent is the most expensive waste in the system, so the deadline
+concedes. Naming who stayed silent in a broadcast is what stops the timeout from
+quietly becoming the normal path.
+
+### Conversation vs. notes
+
+`say` and `note` exist separately because they have different useful lifetimes.
+
+*"CI is red on develop, I fixed it in branch X"* is conversation — it dies
+resolved. *"`npx tsc --noEmit` checks nothing in this repo"* is knowledge that is
+worth something to every future front, including the ones that do not exist yet.
+
+Notes export to **`.parley/notes.md`, versioned in git**: they cross machines,
+reach a colleague, and outlive the project. parley never commits for you — a
+human or an agent commits it, on purpose.
+
+### Presence, and what happens when a session dies
+
+Presence comes from two sources, because both exist in practice:
+
+- **A live connection**, when there is one. An MCP server process lives as long
+  as the session does. If the connection drops, the daemon knows immediately.
+- **A lease with a TTL**, for the CLI path. A hook is an ephemeral process: it
+  connects, speaks, and exits — presence cannot depend on it staying. Every call
+  renews the lease (5 minutes by default), and hooks fire on every tool call, so
+  renewal is constant. A dead session stops renewing and expires.
+
+Either way, when a front drops, its claims become `orphaned`, the bus announces
+it — *"FINANCEIRO dropped holding 3 claim(s)"* — and they are released after a
+60-second grace period.
+
+---
+
+## Compatibility matrix
+
+No makeup. Only Claude Code has a pre-tool gate, so it is the only harness where
+everything works without the agent remembering anything.
+
+| Harness | Joins by itself | Messages arrive by themselves | Automatic territory | `enforced` |
+|---|---|---|---|---|
+| **Claude Code** | yes (hook) | yes (hook) | yes (hook) | **yes** |
+| Codex | on first MCP call¹ | rides the response¹ | manual | no |
+| Antigravity | on first MCP call¹ | rides the response¹ | manual | no |
+| Kimi | on first MCP call¹ | rides the response¹ | manual | no |
+| Anything with a shell | manual | manual | manual | no |
+
+¹ The MCP server ships in a later release. Today, every one of these works
+through the CLI, manually. See the roadmap.
+
+---
+
+## Roadmap
+
+The core — protocol, daemon, journal, territory, permission, notes, CLI, and the
+Claude Code adapter — is implemented and tested. Still to come:
+
+- **MCP server**, so agents can call `say` / `who` / `ask` / `note` as tools. It
+  will carry pending messages in the footer of every tool response, which turns
+  "never reads the inbox" into "reads whenever it interacts".
+- **Adapters for Codex, Antigravity and Kimi.** Each needs its MCP config format
+  confirmed against the real thing; where one diverges, the adapter falls back
+  to documented manual installation and the matrix above is updated.
+- **`parley watch`**, a terminal panel: live fronts, the conversation stream, and
+  pending permission requests with the clock running. Convenience, not a
+  dependency — `parley say` from a terminal does the same thing.
+- **Signing and notarisation** for macOS and Windows binaries.
+
+---
+
+## Out of scope, on purpose
+
+Agents on different machines. Multi-user authentication. A web interface. Issue
+tracker integration. Long-term search over history.
+
+And above all: **parley does not distribute work.** It coordinates sessions
+someone already created. Orchestration is a different project.
+
+---
+
+## Development
+
+```bash
+bun install
+bun test            # unit + integration, including a real daemon over a real socket
+bun run typecheck
+bun run build
+```
+
+The state machine is pure: no `Date.now()`, no `Math.random()`, no I/O. Time and
+identity are injected through a `Ctx`. That is what makes a two-client race a
+deterministic unit test instead of a flaky one.
+
+## License
+
+MIT © Marcus Vinicius Campos
