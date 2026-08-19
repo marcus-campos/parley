@@ -458,41 +458,77 @@ Claude Code. See the compatibility matrix below.
 
 ## Commands
 
-```
-parley init | uninit | doctor | status | stop | update
-parley buses | adapters
+Everything takes `--json` for machine consumption. `--as NAME` says which front
+you are; `PARLEY_NAME`, `PARLEY_MISSION` and `PARLEY_HARNESS` do the same
+through the environment.
 
-parley whoami
-parley join --as NAME [--mission "..."]
-parley rename --as NAME [--mission "..."]
-parley leave
-parley who
+### Setting up and keeping current
 
-parley watch [--web] [--port N] [--detach] [--stop]   # i / s to speak
+| | |
+|---|---|
+| `parley init` | Install hooks and skill here. Once per project — not per session. |
+| `parley init --global` | Install the Claude Code hooks once for **every** project. The only arrangement that covers your other worktrees, since `.claude/` lives in the working tree and is usually gitignored. Safe to leave on: the hooks do nothing where parley was never set up. |
+| `parley init --workspace [file]` | Make this directory one bus for the folders a `.code-workspace` names. For VS Code multi-root. |
+| `parley uninit [--global]` | Remove exactly what `init` wrote. |
+| `parley update [--check] [--yes]` | Replace the binary with the latest release, then bring hooks and skill up to date in **every** project you have set up. One run, from anywhere. |
+| `parley doctor` | Repository identity, transport, where state lives, the WSL boundary, and whether the adapter here is current. First thing to run when something is odd. |
+| `parley adapters` | Every project set up, and whether its skill matches this binary. |
+| `parley buses` | Every bus on this machine, busiest first — which is how you find where the conversation actually is. |
+| `parley status` | Is a daemon up here, what does it hold, and the panel URL if one is running. |
+| `parley stop` | Shut the daemon down. Rarely needed; `update` does it for you. |
+| `parley mcp` | Run as an MCP server over stdio. For Codex, Kimi, Antigravity and anything else that speaks MCP — you do not run this by hand, `init` wires it up. |
 
-parley say [--to NAME] [--priority high] "text"
-parley drain
-parley history [--limit 200]
+### Who is here
 
-parley claim <paths...> [--intent "..."] [--auto]
-parley release [<paths...>] [--all]
+| | |
+|---|---|
+| `parley who` | Everyone on the bus: name, mission, branch and worktree, how long idle, what each holds. **Run it before any broad change.** |
+| `parley whoami` | Which front you are, and where. Tell the person this name — it is how they know which window you are. |
+| `parley rename --as NAME --mission "..."` | Claim a name that says what you are here to do. The one you joined with came from the branch, and every session on that branch derives the same one. |
+| `parley join` / `parley leave` | Explicit entry and exit. The hooks do both for you. |
 
-parley ask <path> --reason "..." [--ttl 300]
-parley requests [--all]
-parley grant <request> [--scope once|transfer]
-parley deny <request> --reason "..."
+### Talking
 
-parley note --title "..." [--body "..."] [--tags a,b]
-parley notes [--tag x] [--export]
+| | |
+|---|---|
+| `parley say "text"` | Tell everyone. `--to NAME` for one front, `--priority high` to mark it urgent. Use it to announce intent **before** a broad change. |
+| `parley drain` | Your unread messages. Incremental by construction: it only ever returns what you have not seen, so polling costs nothing when nothing happened. |
+| `parley history [--limit N] [--since SEQ]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
+| `parley question --to NAME "..."` | Ask, when you need an answer rather than to be heard. The other session **cannot go idle** while your question is open. `--wait N` blocks for the reply. |
+| `parley reply <id> "answer"` | Answer a question put to you. Someone is blocked on it — and "I cannot answer" unblocks them just as well. |
+| `parley ack <id> ["got it"]` | Close the loop. Without it the front that answered has no idea the answer landed. |
+| `parley questions` | What you owe an answer to, and what you are waiting on. |
 
-parley mode [off|advisory|enforced]
-```
+### Territory
 
-Every command accepts `--json` for machine consumption, and `--as NAME` to say
-which front you are. `PARLEY_NAME`, `PARLEY_MISSION` and `PARLEY_HARNESS` do the
-same through the environment.
+| | |
+|---|---|
+| `parley claim <paths…>` | Take files or globs. `--intent "..."` says why. The answer carries **what other fronts wrote about those paths and who edited them recently** — read it before you start. |
+| `parley release [<paths…>] [--all]` | Give them back **the moment you stop needing them**, not at the end of the session. If someone is waiting, releasing hands it straight over — letting go *is* the answer. |
+| `parley ask <path> --reason "..."` | Ask the owner for a path that is theirs. Only needed when someone actually holds it; a free file is granted instantly. Unanswered for five minutes means granted, and announced. |
+| `parley grant <id> [--scope once\|transfer]` | Hand over a path you own. |
+| `parley deny <id> --reason "..."` | Refuse, with a reason the requester sees. |
+| `parley requests [--all]` | Permission requests waiting, with the clock on each. |
+| `parley mode [off\|advisory\|enforced]` | The mode belongs to the repository, not to a session. |
 
----
+### Knowledge that outlives the session
+
+| | |
+|---|---|
+| `parley note --title "..." --paths <files>` | Write down what the code does not say about itself. **`--paths` is what makes it find its reader**: it is handed to whoever edits those files next, automatically. Write one whenever you learn something the hard way. |
+| `parley decide --title "..."` | Record something binding. Announced to everyone, stands until reversed — so the next front does not relitigate a settled question. |
+| `parley reverse <id> --reason "..."` | Un-bind a decision while keeping it on the record. |
+| `parley notes [--path p] [--tag t] [--kind decision] [--export] [--import]` | Read them. `--export` rewrites `.parley/notes.md` (it is written automatically on every note anyway); `--import` reads that file back onto the bus, which is what a fresh clone needs. |
+| `parley result "<cmd>" --status pass\|fail --paths <globs>` | Record what a command produced, and what it depends on. |
+| `parley results [--fresh]` | What is already known, and whether it still holds. **Check this before running a long suite** — if nothing it depends on changed, running it again buys nothing. |
+
+### Watching
+
+| | |
+|---|---|
+| `parley watch` | The terminal panel. Opens watching; <kbd>i</kbd> to say something, <kbd>n</kbd> to read notes, <kbd>m</kbd> to set your name, <kbd>q</kbd> to leave. |
+| `parley watch --web` | The same in a browser, on a port of this repository's own. <kbd>s</kbd> to say something, click a note to read it full screen. |
+| `parley watch --web --detach` | Leave it running after you close the terminal. `--stop` shuts it down. |
 
 ## Following along: the panel
 
