@@ -305,7 +305,7 @@ parley rename --as NAME [--mission "..."]
 parley leave
 parley who
 
-parley watch [--web] [--port 7717] [--as NAME]     # i / s to speak
+parley watch [--web] [--port N] [--detach] [--stop]   # i / s to speak
 
 parley say [--to NAME] [--priority high] "text"
 parley drain
@@ -413,7 +413,13 @@ closing.
   exits. A second `--detach` hands you the panel already running instead of
   opening a rival on another port with a different token.
   `parley watch --web --stop` shuts it down.
-- `--port 7717` picks the port; `--open=false` skips launching the browser.
+- **Each repository gets its own port**, derived from its id, so panels for
+  several projects run side by side — and it is the *same* port every time, so
+  the URL in your browser history keeps working. If it happens to be taken,
+  parley moves to a free one and tells you.
+- `--port N` pins it. If that one is busy, you get told which, rather than a
+  raw bind error.
+- `--open=false` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
   not a security boundary on a shared machine: without a token, any process — or
   any page you have open — could read your bus and speak on it.

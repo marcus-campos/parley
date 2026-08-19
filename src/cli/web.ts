@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
+import { createServer } from "node:net";
 import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
@@ -65,11 +66,39 @@ export function clearRunningPanel(gitCommonDir: string): void {
   try { rmSync(panelStatePath(gitCommonDir), { force: true }); } catch { /* nothing there */ }
 }
 
+/**
+ * A port of this repository's own, derived from its id.
+ *
+ * One fixed default means the second project you open a panel for simply fails,
+ * which is not a reasonable thing to do to someone who works across several
+ * repositories at once. Deriving from the repo id gives each project a port
+ * that is its own and, more importantly, the *same* one every time — so the
+ * URL in your browser history keeps working.
+ */
+export function defaultPortFor(repoId: string): number {
+  const span = 200;
+  const base = 7717;
+  let hash = 0;
+  for (const ch of repoId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+  return base + (hash % span);
+}
+
+/** Is something already listening there? */
+function portFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once("error", () => resolve(false));
+    probe.once("listening", () => probe.close(() => resolve(true)));
+    probe.listen(port, "127.0.0.1");
+  });
+}
+
 export async function runWebPanel(
   repo: RepoInfo,
   name: string,
   port: number,
   openBrowser: boolean,
+  portWasChosen = false,
 ): Promise<void> {
   const client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir });
   const joined = await client.request({
@@ -140,9 +169,24 @@ export async function runWebPanel(
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
+  // An explicitly chosen port that is busy is an error worth naming. The
+  // derived default being busy is not the user's problem, so we move.
+  let chosen = port;
+  if (!(await portFree(chosen))) {
+    if (portWasChosen) {
+      client.close();
+      process.stderr.write(
+        `parley: port ${chosen} is already in use. Another panel, or something else, is on it.\n` +
+          `        Leave --port off and parley picks a free one for this repository.\n`,
+      );
+      process.exit(1);
+    }
+    chosen = 0;
+  }
+
   const server = Bun.serve({
     hostname: "127.0.0.1",
-    port,
+    port: chosen,
     async fetch(req) {
       const url = new URL(req.url);
 

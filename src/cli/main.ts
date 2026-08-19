@@ -50,11 +50,13 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley claim <paths...> [--intent "..."] [--auto]
   parley release [<paths...>] [--all]
 
-  parley watch [--web] [--port 7717] [--detach] [--stop]
+  parley watch [--web] [--port N] [--detach] [--stop]
                              live panel: fronts, feed and pending requests.
                              Opens watching; press i (or s on the web) to speak.
                              --detach keeps the web panel up after you close the
-                             terminal; --stop shuts that one down.
+                             terminal; --stop shuts that one down. Each
+                             repository gets its own port, so panels for several
+                             projects run side by side.
 
   parley ask <path> --reason "..." [--ttl 300]
   parley requests [--all]
@@ -338,10 +340,13 @@ async function main(): Promise<void> {
       const response = await client.request({ op: "status" });
       client.close();
       const s = response as unknown as Record<string, unknown>;
+      const { readRunningPanel } = await import("./web");
+      const panel = readRunningPanel(repo.gitCommonDir);
       return out(
         parsed,
-        `parley up  pid ${endpoint.pid}  mode ${s.mode}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending`,
-        response,
+        `parley up  pid ${endpoint.pid}  mode ${s.mode}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending` +
+          (panel ? `\n  web panel: ${panel.url}` : ""),
+        { ...(response as object), panel: panel?.url ?? null },
       );
     }
 
@@ -362,8 +367,9 @@ async function main(): Promise<void> {
       readPanelConfig(repo.gitCommonDir).name ||
       "PANEL";
     if (parsed.flags.web) {
-      const { clearRunningPanel, readRunningPanel, runWebPanel } = await import("./web");
-      const port = Number(flagString(parsed.flags, "port", "7717"));
+      const { clearRunningPanel, defaultPortFor, readRunningPanel, runWebPanel } = await import("./web");
+      const explicitPort = flagString(parsed.flags, "port");
+      const port = explicitPort ? Number(explicitPort) : defaultPortFor(repo.repoId);
       const running = readRunningPanel(repo.gitCommonDir);
 
       if (parsed.flags.stop) {
@@ -402,7 +408,7 @@ async function main(): Promise<void> {
         return fail(parsed, "started the web panel but it never came up");
       }
 
-      return runWebPanel(repo, panelName, port, parsed.flags.open !== false);
+      return runWebPanel(repo, panelName, port, parsed.flags.open !== false, explicitPort !== "");
     }
     return runWatch(repo, panelName);
   }

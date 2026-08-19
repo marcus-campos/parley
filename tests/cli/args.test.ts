@@ -34,3 +34,28 @@ describe("parseArgs", () => {
     expect(flagString(p.flags, "missing", "fallback")).toBe("fallback");
   });
 });
+
+import { defaultPortFor } from "../../src/cli/web";
+
+describe("the web panel port", () => {
+  test("is derived from the repository, so two projects do not collide", () => {
+    // One fixed default meant the second project you opened a panel for simply
+    // failed to start.
+    const a = defaultPortFor("2ff64cd9cc60be28");
+    const b = defaultPortFor("4d631eb877fe1b17");
+    expect(a).not.toBe(b);
+  });
+
+  test("is the same every time for the same repository", () => {
+    // The URL in your browser history has to keep working.
+    expect(defaultPortFor("2ff64cd9cc60be28")).toBe(defaultPortFor("2ff64cd9cc60be28"));
+  });
+
+  test("stays in a sane range", () => {
+    for (const id of ["a", "2ff64cd9cc60be28", "ffffffffffffffff", "0000000000000000"]) {
+      const port = defaultPortFor(id);
+      expect(port).toBeGreaterThanOrEqual(7717);
+      expect(port).toBeLessThan(7717 + 200);
+    }
+  });
+});
