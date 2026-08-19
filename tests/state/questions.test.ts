@@ -209,3 +209,46 @@ describe("permission nudges each side exactly once", () => {
     ).settled_for_me).toHaveLength(0);
   });
 });
+
+describe("waking a front that has stopped", () => {
+  test("an idle front with a wake address is offered as wakeable", () => {
+    apply(state, null, {
+      v: 1, op: "join", name: "SLEEPY", cwd: "/wt/s", session: "s",
+      wake: "uds:/tmp/cc-socks/999.sock",
+    }, at(0));
+
+    // Long enough that its next tool call is not coming soon.
+    const asked = apply(state, develop, {
+      v: 1, op: "question", to: "SLEEPY", text: "posso mexer?",
+    }, at(10 * 60_000));
+
+    const wake = body<{ wake: { address: string; why: string; how: string } | null }>(asked.response).wake;
+    expect(wake).not.toBeNull();
+    expect(wake!.address).toBe("uds:/tmp/cc-socks/999.sock");
+    expect(wake!.why).toContain("idle");
+  });
+
+  test("a front that is working is not offered — it reads its inbox in seconds", () => {
+    apply(state, null, {
+      v: 1, op: "join", name: "BUSY", cwd: "/wt/b", session: "b",
+      wake: "uds:/tmp/cc-socks/1000.sock",
+    }, at(0));
+    const asked = apply(state, develop, { v: 1, op: "question", to: "BUSY", text: "?" }, at(30_000));
+    expect(body<{ wake: unknown }>(asked.response).wake).toBeNull();
+  });
+
+  test("a front holding an open connection is never offered a wake", () => {
+    apply(state, null, {
+      v: 1, op: "join", name: "LIVE", cwd: "/wt/l", session: "l",
+      connected: true, wake: "uds:/tmp/cc-socks/1001.sock",
+    }, at(0));
+    const asked = apply(state, develop, { v: 1, op: "question", to: "LIVE", text: "?" }, at(10 * 60_000));
+    expect(body<{ wake: unknown }>(asked.response).wake).toBeNull();
+  });
+
+  test("no wake address means no offer, rather than a broken suggestion", () => {
+    apply(state, null, { v: 1, op: "join", name: "PLAIN", cwd: "/wt/p", session: "p" }, at(0));
+    const asked = apply(state, develop, { v: 1, op: "question", to: "PLAIN", text: "?" }, at(10 * 60_000));
+    expect(body<{ wake: unknown }>(asked.response).wake).toBeNull();
+  });
+});

@@ -1,7 +1,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { DEFAULTS } from "../protocol/types";
 import { locateRepo } from "../repo/locate";
-import { resolveIdentity } from "../cli/identity";
+import { resolveIdentity, wakeAddress } from "../cli/identity";
 import { relative, isAbsolute } from "node:path";
 import { rememberSession } from "../cli/session";
 import { isEnabledForRepo } from "./claude-code";
@@ -100,13 +100,13 @@ export async function runHook(event: string): Promise<void> {
   let joined = await client.request({
     op: "join", name: identity.name, mission: identity.mission,
     harness: "claude-code", cwd: repo.cwd, kind: "agent",
-    branch: identity.branch, session,
+    branch: identity.branch, wake: wakeAddress(), session,
   });
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
     joined = await client.request({
       op: "join", name: String(joined.error.suggestion), mission: identity.mission,
       harness: "claude-code", cwd: repo.cwd, kind: "agent",
-      branch: identity.branch, session,
+      branch: identity.branch, wake: wakeAddress(), session,
     });
   }
   if (!joined.ok) { clearTimeout(budget); client.close(); return emit({}); }

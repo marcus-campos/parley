@@ -747,12 +747,28 @@ it is what you need before deciding to wait:
 `parley question` reports the same thing when you ask, so you wait on purpose
 rather than in the dark.
 
-**The one thing parley cannot do** is wake a session that has already stopped.
-The `Stop` hook keeps a front from *going* idle while it owes an answer, which
-covers the common case — but a session sitting there waiting for its person will
-not hear anything until it acts again. A harness with a direct session-to-session
-message tool can do that; parley will not pretend to, and will not write to
-another harness's private socket on a guess.
+**Waking a session that has already stopped** is the one thing parley does not do
+itself. The `Stop` hook keeps a front from *going* idle while it owes an answer,
+which covers the common case — but a session sitting there waiting for its person
+hears nothing until it acts again.
+
+parley will not write to another harness's private socket on a guess: the format
+belongs to the harness, and malformed bytes into somebody's live session is not a
+risk worth taking for a convenience. What it does instead is **hand you the
+doorbell**. A front registers the wake address its harness publishes, and when
+you question one that has gone quiet:
+
+```
+parley: asked BUSSOLA (q_0007).
+  they read their inbox on their next tool call, and have been idle 11m — this may sit for a while
+  BUSSOLA has been idle 11m and will not see this until it acts again.
+  To wake it now: uds:/tmp/cc-socks/15979.sock — use your harness's session-message
+  tool to nudge it; the question is already on the bus and it will find it with `parley questions`.
+```
+
+The question stays on the bus, where everyone and every future session can see
+it. The nudge is a doorbell, not the message. A front that is merely working
+gets no such offer — it reads its inbox within seconds anyway.
 
 For a harness with **no** such tool — Codex, Kimi, Antigravity — this is moot:
 the MCP server holds an open connection, so delivery is immediate and parley is

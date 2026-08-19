@@ -45,6 +45,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
       known.gone = false;
       known.lastSeenMs = ctx.nowMs;
       if (typeof frame.branch === "string" && frame.branch) known.branch = frame.branch;
+      if (typeof frame.wake === "string" && frame.wake) known.wake = frame.wake;
       if (frame.connected === true) known.connected = true;
       // Coming back renews the territory. A front that paused — thinking, or
       // waiting on the person — must not lose files it is still holding just
@@ -141,6 +142,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     // A front that holds the connection open is pushed to; one that connects,
     // speaks and exits reads its inbox on its next call.
     delivery: frame.connected === true ? "live" : frame.harness === "shell" ? "manual" : "hooks",
+    wake: str(frame.wake) || null,
   };
   state.participants[id] = participant;
 

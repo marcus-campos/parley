@@ -50,6 +50,7 @@ export function askFront(state: State, actorId: string | null, frame: Record<str
   // purpose and waiting in the dark — which is what makes somebody reach for a
   // side channel instead.
   const idle = Math.round((ctx.nowMs - target.lastSeenMs) / 1000);
+  const asleep = target.delivery !== "live" && idle > 120;
   const reach =
     target.delivery === "live"
       ? "they hold an open connection, so it is already in front of them"
@@ -64,6 +65,15 @@ export function askFront(state: State, actorId: string | null, frame: Record<str
       to: target.name,
       delivery: target.delivery,
       reach,
+      // Only offered when it would actually change anything: a front that is
+      // working reads its inbox in seconds and does not need waking.
+      wake: asleep && target.wake
+        ? {
+            address: target.wake,
+            why: `${target.name} has been idle ${Math.round(idle / 60)}m and will not see this until it acts again`,
+            how: "use your harness's session-message tool to nudge it; the question is already on the bus and it will find it with `parley questions`",
+          }
+        : null,
       expires_at: new Date(question.expiresAtMs).toISOString(),
     }),
     broadcast: [event],

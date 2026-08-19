@@ -52,6 +52,12 @@ export function resolveIdentity(root: string, cwd: string, explicitName?: string
   };
 }
 
+/** Where this session can be woken, if its harness publishes such an address. */
+export function wakeAddress(): string {
+  const socket = process.env.CLAUDE_CODE_MESSAGING_SOCKET?.trim();
+  return socket ? `uds:${socket}` : "";
+}
+
 function detectHarness(): string {
   if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_ENTRYPOINT) return "claude-code";
   if (process.env.CODEX_SANDBOX || process.env.CODEX_HOME) return "codex";

@@ -25,6 +25,14 @@ export interface Participant {
    */
   delivery: "live" | "hooks" | "manual";
   /**
+   * How this session can be woken from outside, when its harness offers such a
+   * thing. parley never writes here itself — the format belongs to the harness
+   * and guessing it would mean sending malformed bytes into somebody's live
+   * session. It is recorded so that whoever needs to wake this front can be
+   * told exactly how, using the tool their own harness already gives them.
+   */
+  wake: string | null;
+  /**
    * Opaque, stable for the lifetime of one agent session — the harness session
    * id where there is one. This, not the name, is what identity is keyed on.
    */
@@ -231,6 +239,7 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
     // delivery recorded. Reporting `undefined` for the field the skill tells
     // the agent to decide on is worse than assuming the common case.
     delivery: p.delivery ?? (p.connected ? "live" : "hooks"),
+    wake: p.wake ?? null,
     /**
      * Plain-language version of the same thing. "live" holds an open
      * connection and is pushed to immediately; "hooks" is an ephemeral CLI

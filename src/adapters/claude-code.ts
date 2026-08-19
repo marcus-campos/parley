@@ -190,6 +190,22 @@ So: decide from that, instead of guessing. And if you do use a side channel for
 something that matters, **write it to parley too** — a decision or a finding that
 exists only inside one conversation is lost to everyone else.
 
+### Waking a front that has stopped
+
+If \`parley question\` answers with a \`wake\` address, the front you asked has
+been idle a while and will not see your question until it acts again. Do both,
+in this order:
+
+1. The question is already on the bus — it stays open and they cannot end their
+   next turn without answering it.
+2. Nudge them with your harness's own session-message tool, at the address
+   parley gave you, saying only "you have a parley question, run
+   \`parley questions\`". Keep the content in parley; the nudge is a doorbell,
+   not the message.
+
+That way the record lives on the bus, where everyone and every future session
+can see it, and the side channel does the one job parley cannot.
+
 ## Asking another front, and getting an answer
 
 \`say\` puts a message in someone's inbox, which an idle session will not read

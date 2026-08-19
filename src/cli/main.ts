@@ -12,7 +12,7 @@ import { adapterStatus } from "../adapters/claude-code";
 import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
-import { resolveIdentity } from "./identity";
+import { resolveIdentity, wakeAddress } from "./identity";
 
 const COMPILED_CLI = import.meta.url.includes("$bunfs");
 
@@ -127,6 +127,7 @@ async function withSession(
     cwd: repo.cwd,
     kind: parsed.flags.human ? "human" : "agent",
     branch: identity.branch,
+    wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
   });
 
@@ -593,13 +594,19 @@ async function main(): Promise<void> {
         if (!r.ok) fail(p, describeError(r));
         const id = (r as unknown as { question: string }).question;
 
-        const reach = (r as unknown as { reach?: string }).reach ?? "";
+        const body = r as unknown as {
+          reach?: string;
+          wake?: { address: string; why: string; how: string } | null;
+        };
         if (wait <= 0) {
-          return out(
-            p,
-            `parley: asked ${to} (${id}).\n  ${reach}\n  They cannot finish their turn without answering you.`,
-            r,
-          );
+          const lines = [`parley: asked ${to} (${id}).`, `  ${body.reach ?? ""}`];
+          if (body.wake) {
+            lines.push(`  ${body.wake.why}.`);
+            lines.push(`  To wake it now: ${body.wake.address} — ${body.wake.how}.`);
+          } else {
+            lines.push("  They cannot finish their turn without answering you.");
+          }
+          return out(p, lines.join("\n"), r);
         }
 
         // Poll rather than hold the socket open: the daemon answers in
