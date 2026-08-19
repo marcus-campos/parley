@@ -38,6 +38,10 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley who
 
   parley say [--to NAME] [--priority high] "text"
+  parley question --to NAME "..." [--wait 60] [--ttl 600]
+  parley reply <id> "answer"
+  parley ack <id> ["got it, doing X"]
+  parley questions
   parley drain
   parley history [--limit 200]
 
@@ -412,6 +416,75 @@ async function main(): Promise<void> {
           ];
         });
         return out(p, `parley (${data.mode})\n${rows.join("\n")}`, r);
+      }
+
+      case "question": {
+        const to = flagString(p.flags, "to");
+        if (!to) fail(p, `question needs --to NAME`);
+        const text = p.positional.join(" ");
+        if (!text) fail(p, "question needs something to ask");
+        const wait = Number(flagString(p.flags, "wait", "0"));
+        const r = await send({ op: "question", to, text, ttl_s: Number(flagString(p.flags, "ttl", "600")) });
+        if (!r.ok) fail(p, describeError(r));
+        const id = (r as unknown as { question: string }).question;
+
+        if (wait <= 0) {
+          return out(p, `parley: asked ${to} (${id}). They will be interrupted before going idle.`, r);
+        }
+
+        // Poll rather than hold the socket open: the daemon answers in
+        // microseconds and the asker is a short-lived process either way.
+        const deadline = Date.now() + wait * 1000;
+        while (Date.now() < deadline) {
+          await new Promise((res) => setTimeout(res, 1000));
+          const status = await send({ op: "question_status", id });
+          if (!status.ok) break;
+          const d = status as unknown as { answered: boolean; answer: string | null; expired: boolean };
+          if (d.answered) return out(p, `${to}: ${d.answer}`, status);
+          if (d.expired) break;
+        }
+        return out(
+          p,
+          `parley: ${to} has not answered ${id} yet. It stays open — you will get the answer in your inbox.`,
+          { ok: true, question: id, answered: false },
+        );
+      }
+
+      case "ack": {
+        const id = p.positional[0];
+        if (!id) fail(p, "ack needs a question id");
+        const r = await send({ op: "ack", id, text: p.positional.slice(1).join(" ") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: acknowledged", r);
+      }
+
+      case "reply": {
+        const id = p.positional[0];
+        if (!id) fail(p, "reply needs a question id");
+        const text = p.positional.slice(1).join(" ") || flagString(p.flags, "text");
+        if (!text) fail(p, "reply needs an answer");
+        const r = await send({ op: "reply", id, text });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: answered", r);
+      }
+
+      case "questions": {
+        const r = await send({ op: "questions" });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as {
+          owed: { id: string; from: string; text: string; seconds_left: number }[];
+          waiting: { id: string; to: string; text: string; seconds_left: number }[];
+        };
+        const lines: string[] = [];
+        if (d.owed.length) {
+          lines.push("  YOU OWE AN ANSWER:");
+          for (const q of d.owed) lines.push(`    ${q.id}  ${q.from} asks: ${q.text}  (${q.seconds_left}s left)`);
+        }
+        if (d.waiting.length) {
+          lines.push("  YOU ARE WAITING ON:");
+          for (const q of d.waiting) lines.push(`    ${q.id}  you asked ${q.to}: ${q.text}  (${q.seconds_left}s left)`);
+        }
+        return out(p, lines.join("\n") || "parley: no open questions", r);
       }
 
       case "say": {

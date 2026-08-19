@@ -48,6 +48,9 @@ export interface PermissionRequest {
   expiresAtMs: number;
   scope: GrantScope | null;
   denyReason: string | null;
+  /** Each side gets one hard nudge, so nobody can be pushed round in circles. */
+  ownerNudgedAtMs: number | null;
+  requesterNudgedAtMs: number | null;
 }
 
 export interface ConvEvent {
@@ -99,6 +102,32 @@ export interface Touch {
   atMs: number;
 }
 
+/**
+ * A question one front put to another and is waiting on.
+ *
+ * Separate from a `say` because it has a state: somebody owes an answer. That
+ * is what lets the recipient's harness refuse to go idle while the question is
+ * open, and what lets the asker block until it arrives.
+ */
+export interface Question {
+  id: string;
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  text: string;
+  at: string;
+  atMs: number;
+  expiresAtMs: number;
+  answer: string | null;
+  answeredAtMs: number | null;
+  /** Set when the asker has read the answer, and when it said so. */
+  answerSeenAtMs: number | null;
+  acknowledgedAtMs: number | null;
+  /** Set once it has been pushed hard at the recipient, so it only does so once. */
+  deliveredAtMs: number | null;
+}
+
 /** A command result worth not running again. */
 export interface CommandResult {
   key: string;
@@ -126,6 +155,7 @@ export interface State {
   /** Bounded log of who last touched each path. */
   touches: Record<string, Touch>;
   results: Record<string, CommandResult>;
+  questions: Record<string, Question>;
 }
 
 /**
@@ -149,7 +179,7 @@ export interface Outcome {
 export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, seq: 0, participants: {}, claims: [], requests: {},
-    events: [], cursors: {}, notes: [], touches: {}, results: {},
+    events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
   };
 }
 

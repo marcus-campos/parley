@@ -151,7 +151,73 @@ export async function runHook(event: string): Promise<void> {
       );
     }
 
-    if (name === "SessionEnd" || name === "Stop") {
+    if (name === "Stop") {
+      // The one place parley can make an idle agent answer.
+      //
+      // A direct question to a session that has stopped goes unanswered until
+      // its person happens to type something — which can be hours. Claude Code
+      // lets a Stop hook refuse the stop, so a front does not go idle while it
+      // owes someone an answer.
+      //
+      // Each question does this exactly once: `deliver` marks it, and an
+      // already-delivered question never blocks again. Two agents cannot
+      // ping-pong each other into a loop.
+      const [pending, perms] = await Promise.all([
+        client.request({ op: "questions", deliver: true }),
+        client.request({ op: "requests", deliver: true }),
+      ]);
+      clearTimeout(budget);
+
+      const parts: string[] = [];
+
+      if (pending.ok) {
+        const q = pending as unknown as {
+          undelivered: { id: string; from: string; text: string; seconds_left: number }[];
+          unseen_answers: { id: string; from: string; text: string; answer: string }[];
+        };
+        if (q.undelivered.length) {
+          parts.push(
+            `Another front is blocked waiting on you to answer:\n` +
+              q.undelivered.map((x) => `- ${x.from} asks (${x.id}, ${x.seconds_left}s left): ${x.text}`).join("\n") +
+              `\nAnswer now: \`parley reply <id> "your answer"\`. If you cannot answer, say so — that unblocks them too.`,
+          );
+        }
+        if (q.unseen_answers.length) {
+          parts.push(
+            `You asked, and they answered — read it before you finish:\n` +
+              q.unseen_answers.map((x) => `- ${x.from} on "${x.text}": ${x.answer}`).join("\n") +
+              `\nAct on it, then close the loop so they know it landed: \`parley ack <id> "got it, doing X"\`.`,
+          );
+        }
+      }
+
+      if (perms.ok) {
+        const p = perms as unknown as {
+          needs_my_decision: { id: string; requester: string; path: string; reason: string; seconds_left: number }[];
+          settled_for_me: { id: string; path: string; state: string; deny_reason: string | null }[];
+        };
+        if (p.needs_my_decision.length) {
+          parts.push(
+            `You hold paths another front is waiting on:\n` +
+              p.needs_my_decision.map((x) => `- ${x.requester} wants ${x.path} (${x.id}, ${x.seconds_left}s left): ${x.reason}`).join("\n") +
+              `\nSettle it: \`parley grant <id>\`, \`parley deny <id> --reason "..."\`, or simply ` +
+              `\`parley release <path>\` if you are done with it — releasing hands it straight over.`,
+          );
+        }
+        if (p.settled_for_me.length) {
+          parts.push(
+            `A path you asked for has been settled:\n` +
+              p.settled_for_me.map((x) => `- ${x.path}: ${x.state}${x.deny_reason ? ` — ${x.deny_reason}` : ""}`).join("\n") +
+              `\nIf it was granted, do the edit now while it is yours, then release it.`,
+          );
+        }
+      }
+
+      if (parts.length === 0) return emit({});
+      return emit({ decision: "block", reason: parts.join("\n\n") });
+    }
+
+    if (name === "SessionEnd") {
       await client.request({ op: "leave" });
       clearTimeout(budget);
       return emit({});

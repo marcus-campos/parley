@@ -89,6 +89,8 @@ const PARLEY_HOOKS: HookMap = {
       hooks: [{ type: "command", command: "parley hook PreToolUse", timeout: 5 }],
     },
   ],
+  // Stop is what stops a front going idle while another is blocked on it.
+  Stop: [{ hooks: [{ type: "command", command: "parley hook Stop", timeout: 8 }] }],
   SessionEnd: [{ hooks: [{ type: "command", command: "parley hook SessionEnd", timeout: 5 }] }],
 };
 
@@ -166,6 +168,23 @@ them — you do not answer the request separately. Letting go IS the answer.
 lease. If you are going to pause for a long time and still need a path, touch it
 or re-claim it. A claim you took by editing expires after 15 idle minutes; one
 you asked for explicitly is yours until you release it or leave.
+
+## Asking another front, and getting an answer
+
+\`say\` puts a message in someone's inbox, which an idle session will not read
+until its person prompts it again. When you actually need an answer, ask:
+
+\`\`\`
+parley question --to BUSSOLA "voce esta segurando finance/services.py? preciso de 3 linhas nele"
+parley questions          # what you owe an answer to, and what you are waiting on
+parley reply q_0003 "nao encosto nele, pode ir"
+\`\`\`
+
+A question is different from a message: someone owes an answer. The other
+front's session **will not go idle while your question is open** — it is
+interrupted and told to answer. So ask instead of guessing, and **answer
+promptly when asked**: whoever asked is blocked on you. If you cannot answer,
+say that — it unblocks them just as well.
 
 ## When a file belongs to someone else
 

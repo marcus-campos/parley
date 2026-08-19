@@ -1,6 +1,7 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
 import { drain, history, say } from "./conversation";
 import { listResults, recordResult } from "./results";
+import { acknowledge, askFront, listQuestions, questionStatus, replyToQuestion } from "./questions";
 import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
@@ -77,12 +78,17 @@ export function apply(
     case "ask": return ask(state, actorId, frame, ctx);
     case "grant": return grant(state, actorId, frame, ctx);
     case "deny": return deny(state, actorId, frame, ctx);
-    case "requests": return listRequests(state, frame, ctx);
+    case "requests": return listRequests(state, frame, ctx, actorId);
     case "note": return note(state, actorId, frame, ctx);
     case "notes": return listNotes(state, frame);
     case "reverse": return reverse(state, actorId, frame, ctx);
     case "result": return recordResult(state, actorId, frame, ctx);
     case "results": return listResults(state, frame);
+    case "question": return askFront(state, actorId, frame, ctx);
+    case "reply": return replyToQuestion(state, actorId, frame, ctx);
+    case "questions": return listQuestions(state, actorId, frame, ctx);
+    case "ack": return acknowledge(state, actorId, frame, ctx);
+    case "question_status": return questionStatus(state, frame, ctx);
     case "mode": return setMode(state, frame, ctx);
     case "status": return status(state, ctx);
     default:

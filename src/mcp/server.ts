@@ -198,6 +198,73 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "parley_question",
+    description:
+      "Ask another front something and actually get an answer. Different from a message: someone owes you a reply, and their session is interrupted before it can go idle. Use this instead of guessing what another agent is doing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "The front's name, from parley_who." },
+        text: { type: "string", description: "What you need to know." },
+      },
+      required: ["to", "text"],
+    },
+    frame: (a) => ({ op: "question", to: str(a.to), text: str(a.text) }),
+    render: (r) => {
+      const d = r as unknown as { question: string; to: string };
+      return `Asked ${d.to} (${d.question}). They will be interrupted before going idle. Check parley_questions for the answer.`;
+    },
+  },
+  {
+    name: "parley_reply",
+    description:
+      "Answer a question another front put to you. They are blocked on this — answer promptly, and if you cannot answer, say so, which unblocks them just as well.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, text: { type: "string" } },
+      required: ["id", "text"],
+    },
+    frame: (a) => ({ op: "reply", id: str(a.id), text: str(a.text) }),
+    render: () => "Answered.",
+  },
+  {
+    name: "parley_questions",
+    description:
+      "What you owe an answer to, what you are waiting on, and answers that arrived. Check it before you finish your turn.",
+    inputSchema: { type: "object", properties: {} },
+    frame: () => ({ op: "questions" }),
+    render: (r) => {
+      const d = r as unknown as {
+        owed: { id: string; from: string; text: string; seconds_left: number }[];
+        waiting: { id: string; to: string; text: string }[];
+        answered: { id: string; from: string; text: string; answer: string }[];
+      };
+      const parts: string[] = [];
+      if (d.owed?.length) {
+        parts.push(`You owe an answer:\n${d.owed.map((q) => `- ${q.id}: ${q.from} asks "${q.text}" (${q.seconds_left}s left)`).join("\n")}`);
+      }
+      if (d.answered?.length) {
+        parts.push(`Answers that arrived — acknowledge them with parley_ack:\n${d.answered.map((q) => `- ${q.id}: ${q.from} answered "${q.answer}"`).join("\n")}`);
+      }
+      if (d.waiting?.length) {
+        parts.push(`Still waiting on:\n${d.waiting.map((q) => `- ${q.id}: you asked ${q.to} "${q.text}"`).join("\n")}`);
+      }
+      return parts.join("\n\n") || "No open questions.";
+    },
+  },
+  {
+    name: "parley_ack",
+    description:
+      "Tell the front that answered you that the answer landed and what you are doing with it. Closes the loop — without it they have no idea whether it arrived.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string" }, text: { type: "string" } },
+      required: ["id"],
+    },
+    frame: (a) => ({ op: "ack", id: str(a.id), text: str(a.text) }),
+    render: () => "Acknowledged.",
+  },
+  {
     name: "parley_note",
     description:
       "Write down something the code does not say about itself — a hidden coupling, a trap, why the obvious change is wrong. Anchor it with `paths` and it will be handed automatically to whoever edits those files next. Write one whenever you learn something the hard way.",

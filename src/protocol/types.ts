@@ -10,7 +10,7 @@ export type RequestState = "pending" | "granted" | "denied" | "granted_by_timeou
 
 export const OPS = [
   "join", "rename", "leave", "who",
-  "say", "drain", "history",
+  "say", "drain", "history", "question", "reply", "questions", "question_status", "ack",
   "claim", "release",
   "ask", "grant", "deny", "requests",
   "note", "notes", "reverse", "result", "results",

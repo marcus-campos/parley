@@ -234,6 +234,7 @@ For Claude Code it installs four hooks in `.claude/settings.json` and a skill in
 | `SessionStart` | Joins under a name derived from the worktree or branch, then tells the agent to rename itself, declare a mission, **and say that name to you in its first reply** — you are watching several windows and the panel shows names, not windows. |
 | `UserPromptSubmit` | Drains the inbox and injects it as context. |
 | `PreToolUse` | One hook, one call: drains the inbox and, when the tool is `Edit`/`Write`/`NotebookEdit`, settles territory in the same answer. It also matches `Bash` — the tool the agent runs `parley` through — so the record of which session owns this worktree is refreshed microseconds before a CLI call reads it. That is what lets two sessions in the *same* worktree be told apart. |
+| `Stop` | **Refuses to let the session go idle while another front is blocked on it** — an unanswered question, a permission decision it owes, or an answer it asked for and has not read. Each of those interrupts exactly once, so two agents cannot push each other round in a loop. |
 | `SessionEnd` | Leaves and hands territory back. |
 
 The skill is the other half: hooks handle what should be automatic (territory,
@@ -459,6 +460,28 @@ The owner answers in one of three ways:
 An idle agent is the most expensive waste in the system, so the deadline
 concedes. Naming who stayed silent in a broadcast is what stops the timeout from
 quietly becoming the normal path.
+
+### Asking another front, and getting an answer
+
+A message lands in an inbox that an idle session will not read until its person
+prompts it again — so a direct question to a window that is just sitting there
+goes unanswered for as long as it sits.
+
+```bash
+parley question --to BUSSOLA "are you holding finance/services.py?" --wait 60
+parley questions            # what you owe, what you are waiting on
+parley reply q_0003 "not touching it, go ahead"
+parley ack q_0003 "got it, doing the edit now"
+```
+
+A question is not a message: **someone owes an answer**, and the recipient's
+session is interrupted before it can go idle. The asker is interrupted too, if
+an answer arrived and it has not read it. Same for a permission decision you owe
+somebody.
+
+Each of those interrupts **exactly once**. That is the whole loop guard: a
+question gets one hard nudge and then becomes an ordinary inbox item, so two
+agents cannot block each other's turn forever.
 
 ### Conversation vs. notes
 

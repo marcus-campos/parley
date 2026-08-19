@@ -38,6 +38,8 @@ export function ask(state: State, actorId: string | null, frame: Record<string, 
     expiresAtMs: ctx.nowMs + ttlMs,
     scope: null,
     denyReason: null,
+    ownerNudgedAtMs: null,
+    requesterNudgedAtMs: null,
   };
   state.requests[request.id] = request;
 
@@ -183,7 +185,7 @@ export function expirePermissions(state: State, ctx: Ctx) {
  * observer — the panel, or a human joining mid-flight — has no way to learn
  * about one from the event stream alone. This is that way.
  */
-export function listRequests(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+export function listRequests(state: State, frame: Record<string, unknown>, ctx: Ctx, actorId?: string | null): Outcome {
   const all = frame.all === true;
   const requests = Object.values(state.requests)
     .filter((r) => all || r.state === "pending")
@@ -198,5 +200,45 @@ export function listRequests(state: State, frame: Record<string, unknown>, ctx: 
       expires_at: new Date(r.expiresAtMs).toISOString(),
       seconds_left: Math.max(0, Math.round((r.expiresAtMs - ctx.nowMs) / 1000)),
     }));
-  return { state, response: ok({ requests }), broadcast: [] };
+  // What this particular front still has to do about permission. Both sides
+  // are nudged exactly once, which is what makes it safe for a harness to
+  // refuse to go idle on the strength of it.
+  const me = actorId ? state.participants[actorId] : undefined;
+  const owed = me
+    ? Object.values(state.requests).filter(
+        (r) => r.state === "pending" && r.ownerId === me.id && r.ownerNudgedAtMs === null,
+      )
+    : [];
+  const settled = me
+    ? Object.values(state.requests).filter(
+        (r) => r.state !== "pending" && r.requesterId === me.id && r.requesterNudgedAtMs === null,
+      )
+    : [];
+  const waiting = me
+    ? Object.values(state.requests).filter((r) => r.state === "pending" && r.requesterId === me.id)
+    : [];
+
+  if (frame.deliver === true) {
+    for (const r of owed) r.ownerNudgedAtMs = ctx.nowMs;
+    for (const r of settled) r.requesterNudgedAtMs = ctx.nowMs;
+  }
+
+  const brief = (r: (typeof owed)[number]) => ({
+    id: r.id, path: r.path, reason: r.reason, state: r.state,
+    requester: state.participants[r.requesterId]?.name ?? "(gone)",
+    owner: state.participants[r.ownerId]?.name ?? "(gone)",
+    seconds_left: Math.max(0, Math.round((r.expiresAtMs - ctx.nowMs) / 1000)),
+    deny_reason: r.denyReason,
+  });
+
+  return {
+    state,
+    response: ok({
+      requests,
+      needs_my_decision: owed.map(brief),
+      settled_for_me: settled.map(brief),
+      i_am_waiting_on: waiting.map(brief),
+    }),
+    broadcast: [],
+  };
 }
