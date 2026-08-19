@@ -17,6 +17,7 @@ import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config"
 
 interface Front {
   name: string; mission: string; harness: string; kind: string;
+  branch: string; worktree: string; tag: string;
   connected: boolean; idle_s: number; claims: string[];
 }
 
@@ -194,10 +195,15 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       const claims = f.claims.length
         ? dim(`${f.claims.length} claim${f.claims.length === 1 ? "" : "s"}`)
         : dim("no claims");
-      const mission = f.mission ? truncate(f.mission, 30) : dim("no mission");
+      const mission = f.mission ? truncate(f.mission, 34) : dim("no mission");
       lines.push(
-        `  ${presence} ${padVis(bold(f.name), 14)} ${padVis(mission, 30)} ${padVis(dim(f.harness), 12)} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`,
+        `  ${presence} ${padVis(bold(f.name), 22)} ${dim(f.tag)}  ${padVis(mission, 34)} ${dim(`${f.idle_s}s`.padStart(5))}  ${claims}`,
       );
+      // On a shared branch the name is not enough to tell two fronts apart;
+      // where they are working is what a person actually recognises.
+      const place = [f.branch && `on ${f.branch}`, f.worktree && `in ${f.worktree}`, f.harness]
+        .filter(Boolean).join(" ${G.dot} ");
+      lines.push(dim(`      ${truncate(place.replace(/\$\{G\.dot\}/g, G.dot), w - 8)}`));
       if (f.claims.length) lines.push(dim(`      ${truncate(f.claims.join(", "), w - 8)}`));
     }
 

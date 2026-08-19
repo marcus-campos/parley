@@ -10,6 +10,7 @@ import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { flagString, parseArgs, type Parsed } from "./args";
+import { sessionFor } from "./session";
 import { resolveIdentity } from "./identity";
 
 const COMPILED_CLI = import.meta.url.includes("$bunfs");
@@ -20,7 +21,11 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              replace this binary with the latest release
   parley mcp                 run as an MCP server over stdio (for Codex, Kimi,
                              Antigravity and anything else that speaks MCP)
-  parley init [--yes]        install hooks and skill for detected harnesses
+  parley init [--yes] [--global]
+                             install hooks and skill for detected harnesses.
+                             --global installs the Claude Code hooks once for
+                             every project — the only way every worktree is
+                             covered, since .claude/ is usually gitignored.
   parley uninit              remove what init wrote
   parley doctor              diagnose transport, repo identity and the WSL boundary
   parley status              is a daemon up, and what does it hold
@@ -107,7 +112,8 @@ async function withSession(
     harness: identity.harness,
     cwd: repo.root,
     kind: parsed.flags.human ? "human" : "agent",
-    session: process.env.PARLEY_SESSION ?? "",
+    branch: identity.branch,
+    session: sessionFor(repo.gitCommonDir, repo.root),
   });
 
   // A derived name that collides takes the suggestion rather than failing: the
@@ -120,7 +126,8 @@ async function withSession(
       harness: identity.harness,
       cwd: repo.root,
       kind: "agent",
-      session: process.env.PARLEY_SESSION ?? "",
+      branch: identity.branch,
+      session: sessionFor(repo.gitCommonDir, repo.root),
     });
   }
   if (!response.ok) {
@@ -225,11 +232,15 @@ async function main(): Promise<void> {
   switch (parsed.command) {
     case "init": {
       const { runInit } = await import("../adapters/install");
-      return runInit(repo, { assumeYes: parsed.flags.yes === true, json: parsed.flags.json === true });
+      return runInit(repo, {
+        assumeYes: parsed.flags.yes === true,
+        json: parsed.flags.json === true,
+        global: parsed.flags.global === true,
+      });
     }
     case "uninit": {
       const { runUninit } = await import("../adapters/install");
-      return runUninit(repo, { json: parsed.flags.json === true });
+      return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
     }
 
     case "doctor": {
@@ -371,9 +382,14 @@ async function main(): Promise<void> {
         if (!r.ok) fail(p, describeError(r));
         const data = r as unknown as { mode: string; participants: Record<string, unknown>[] };
         if (data.participants.length === 0) return out(p, `parley (${data.mode}): nobody on the bus`, r);
-        const rows = data.participants.map((x) => {
+        const rows = data.participants.flatMap((x) => {
           const claims = (x.claims as string[]) ?? [];
-          return `  ${String(x.name).padEnd(16)} ${String(x.mission || "-").padEnd(28)} ${String(x.harness).padEnd(12)} ${String(x.idle_s)}s idle  ${claims.length} claim(s)`;
+          const place = [x.branch && `on ${x.branch}`, x.worktree && `in ${x.worktree}`, x.harness]
+            .filter(Boolean).join(" · ");
+          return [
+            `  ${String(x.name).padEnd(24)} ${String(x.tag)}  ${String(x.mission || "-").padEnd(30)} ${String(x.idle_s)}s idle  ${claims.length} claim(s)`,
+            `    ${place}`,
+          ];
         });
         return out(p, `parley (${data.mode})\n${rows.join("\n")}`, r);
       }

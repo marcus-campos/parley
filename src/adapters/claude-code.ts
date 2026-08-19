@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { RepoInfo } from "../repo/locate";
 
@@ -10,6 +11,64 @@ import type { RepoInfo } from "../repo/locate";
  */
 
 const MARKER = "parley hook ";
+
+/**
+ * The per-repository opt-in, kept in the git common dir so **every worktree
+ * shares it**.
+ *
+ * `.claude/settings.json` lives in the working tree, and `.claude/` is usually
+ * gitignored — so hooks installed in the main checkout simply do not exist in
+ * the other worktrees, and sessions opened there never join. Installing the
+ * hooks globally fixes that, but then they would fire in every repository on
+ * the machine. This marker is what makes global hooks safe: they run
+ * everywhere, and do nothing where parley was never set up.
+ */
+export function enabledMarkerPath(gitCommonDir: string): string {
+  return join(gitCommonDir, "parley", "enabled");
+}
+
+export function isEnabledForRepo(gitCommonDir: string): boolean {
+  return existsSync(enabledMarkerPath(gitCommonDir));
+}
+
+export function enableForRepo(gitCommonDir: string): void {
+  const path = enabledMarkerPath(gitCommonDir);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `enabled ${new Date().toISOString()}\n`, "utf8");
+}
+
+export function disableForRepo(gitCommonDir: string): void {
+  try { rmSync(enabledMarkerPath(gitCommonDir), { force: true }); } catch { /* nothing there */ }
+}
+
+/** Hooks in ~/.claude/settings.json apply to every project you open. */
+export function globalSettingsPath(): string {
+  return join(homedir(), ".claude", "settings.json");
+}
+
+export function installGlobalHooks(): { path: string; before: string; after: string } {
+  const path = globalSettingsPath();
+  const settings = readSettings(path);
+  const before = JSON.stringify(settings, null, 2);
+  const { merged } = mergeHooks((settings.hooks as HookMap) ?? {});
+  return { path, before, after: `${JSON.stringify({ ...settings, hooks: merged }, null, 2)}\n` };
+}
+
+export function writeGlobalHooks(): void {
+  const plan = installGlobalHooks();
+  mkdirSync(dirname(plan.path), { recursive: true });
+  writeFileSync(plan.path, plan.after, "utf8");
+}
+
+export function removeGlobalHooks(): boolean {
+  const path = globalSettingsPath();
+  if (!existsSync(path)) return false;
+  const settings = readSettings(path);
+  const { merged, removed } = stripHooks((settings.hooks as HookMap) ?? {});
+  if (removed.length === 0) return false;
+  writeFileSync(path, `${JSON.stringify({ ...settings, hooks: merged }, null, 2)}\n`, "utf8");
+  return true;
+}
 
 interface HookCommand { type: "command"; command: string; timeout?: number }
 interface HookMatcher { matcher?: string; hooks: HookCommand[] }
@@ -289,7 +348,7 @@ export function adapterStatus(repoRoot: string): AdapterStatus {
 /** Rewrite the skill and hooks to what this version ships. */
 export async function refreshAdapter(
   repoRoot: string,
-  opts: { assumeYes: boolean; json: boolean },
+  opts: { assumeYes: boolean; json: boolean; gitCommonDir?: string },
 ): Promise<boolean> {
   const status = adapterStatus(repoRoot);
   if (!status.installed) return false;
@@ -323,6 +382,7 @@ export async function refreshAdapter(
   mkdirSync(join(claudeDir, "skills", "parley"), { recursive: true });
   writeFileSync(status.settingsPath, `${JSON.stringify({ ...settings, hooks: merged }, null, 2)}\n`, "utf8");
   writeFileSync(status.skillPath, SKILL, "utf8");
+  if (opts.gitCommonDir) enableForRepo(opts.gitCommonDir);
 
   hookOutput(opts.json, "parley: adapter refreshed.", { ok: true, refreshed: true });
   return true;
@@ -375,6 +435,7 @@ export async function installClaudeCode(repo: RepoInfo, opts: InitOptions): Prom
   mkdirSync(join(claudeDir, "skills", "parley"), { recursive: true });
   writeFileSync(settingsPath, `${after}\n`, "utf8");
   writeFileSync(skillPath, SKILL, "utf8");
+  enableForRepo(repo.gitCommonDir);
 
   hookOutput(opts.json, `parley: installed. Hooks in ${settingsPath}, skill in ${skillPath}.`, {
     ok: true, changed: true, settings: settingsPath, skill: skillPath, events: added,

@@ -3,6 +3,8 @@ import { DEFAULTS } from "../protocol/types";
 import { locateRepo } from "../repo/locate";
 import { resolveIdentity } from "../cli/identity";
 import { relative, isAbsolute } from "node:path";
+import { rememberSession } from "../cli/session";
+import { isEnabledForRepo } from "./claude-code";
 
 /**
  * One executable, JSON in, JSON out. Never a shell one-liner: on Windows a hook
@@ -63,6 +65,10 @@ export async function runHook(event: string): Promise<void> {
   let repo;
   try { repo = locateRepo(input.cwd ?? process.cwd()); } catch { clearTimeout(budget); return emit({}); }
 
+  // Hooks installed globally fire in every repository you open. Doing nothing
+  // where parley was never set up is what makes that safe.
+  if (!isEnabledForRepo(repo.gitCommonDir)) { clearTimeout(budget); return emit({}); }
+
   let client: ParleyClient;
   try {
     client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir, timeoutMs: 2_000 });
@@ -81,15 +87,27 @@ export async function runHook(event: string): Promise<void> {
   const session = input.session_id ?? process.env.PARLEY_SESSION ?? "";
   let joined = await client.request({
     op: "join", name: identity.name, mission: identity.mission,
-    harness: "claude-code", cwd: repo.root, kind: "agent", session,
+    harness: "claude-code", cwd: repo.root, kind: "agent",
+    branch: identity.branch, session,
   });
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
     joined = await client.request({
       op: "join", name: String(joined.error.suggestion), mission: identity.mission,
-      harness: "claude-code", cwd: repo.root, kind: "agent", session,
+      harness: "claude-code", cwd: repo.root, kind: "agent",
+      branch: identity.branch, session,
     });
   }
   if (!joined.ok) { clearTimeout(budget); client.close(); return emit({}); }
+
+  // Write down which harness session owns this worktree, so the CLI calls the
+  // agent makes through its shell can claim the same identity.
+  if (session) {
+    rememberSession(repo.gitCommonDir, repo.root, {
+      session,
+      name: (joined as unknown as { name: string }).name,
+      at: new Date().toISOString(),
+    });
+  }
 
   const me = joined as unknown as {
     id: string; name: string; mode: string; reattached?: boolean;

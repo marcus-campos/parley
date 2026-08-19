@@ -9,6 +9,8 @@ export interface Participant {
   harness: string;
   kind: ParticipantKind;
   cwd: string;
+  /** Branch and worktree, because on a shared branch the name is not enough. */
+  branch: string;
   joinedAt: string;
   /** Renewed by every call. Presence for the ephemeral-hook path. */
   lastSeenMs: number;
@@ -183,6 +185,11 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
     mission: p.mission,
     harness: p.harness,
     kind: p.kind,
+    branch: p.branch,
+    // The last segment of the path is what a person recognises a worktree by.
+    worktree: p.cwd ? p.cwd.split("/").filter(Boolean).slice(-1)[0] ?? "" : "",
+    // Enough of the id to tell two fronts apart at a glance, and stable.
+    tag: p.id.replace(/^p_/, ""),
     connected: p.connected,
     since: p.joinedAt,
     idle_s: Math.max(0, Math.round((ctx.nowMs - p.lastSeenMs) / 1000)),

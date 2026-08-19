@@ -44,6 +44,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     if (known) {
       known.gone = false;
       known.lastSeenMs = ctx.nowMs;
+      if (typeof frame.branch === "string" && frame.branch) known.branch = frame.branch;
       if (frame.connected === true) known.connected = true;
       // Coming back renews the territory. A front that paused — thinking, or
       // waiting on the person — must not lose files it is still holding just
@@ -78,8 +79,15 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
   if (taken) {
     // Fallback for callers with no session id (a plain shell, another tool):
     // same name from the same worktree is the same front coming back.
+    //
+    // But never hand over an identity that already belongs to a known session.
+    // Every session on a branch derives the same name from that branch, so
+    // without this a second session walks straight into the first one's
+    // participant and starts speaking as it — claims and all.
     const sameWorktree =
-      !session && typeof frame.cwd === "string" && frame.cwd !== "" && frame.cwd === taken.cwd;
+      !session &&
+      taken.session === null &&
+      typeof frame.cwd === "string" && frame.cwd !== "" && frame.cwd === taken.cwd;
     if (sameWorktree) {
       taken.lastSeenMs = ctx.nowMs;
       if (frame.connected === true) taken.connected = true;
@@ -124,6 +132,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     harness: str(frame.harness, "unknown"),
     kind: (str(frame.kind, "agent") === "human" ? "human" : "agent") as ParticipantKind,
     cwd: str(frame.cwd),
+    branch: str(frame.branch),
     session: session || null,
     joinedAt: ctx.now,
     lastSeenMs: ctx.nowMs,

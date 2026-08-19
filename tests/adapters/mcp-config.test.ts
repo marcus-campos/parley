@@ -115,3 +115,34 @@ describe("AGENTS.md", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+import { enabledMarkerPath, enableForRepo, disableForRepo, isEnabledForRepo } from "../../src/adapters/claude-code";
+import { mkdirSync } from "node:fs";
+
+describe("the per-repository opt-in", () => {
+  test("lives in the git common dir, which every worktree shares", () => {
+    const dir = temp();
+    try {
+      const gitCommonDir = join(dir, ".git");
+      mkdirSync(gitCommonDir, { recursive: true });
+      expect(isEnabledForRepo(gitCommonDir)).toBe(false);
+
+      enableForRepo(gitCommonDir);
+      expect(isEnabledForRepo(gitCommonDir)).toBe(true);
+      // Not under .claude/, which is per-worktree and usually gitignored.
+      expect(enabledMarkerPath(gitCommonDir)).toContain(".git");
+      expect(enabledMarkerPath(gitCommonDir)).not.toContain(".claude");
+
+      disableForRepo(gitCommonDir);
+      expect(isEnabledForRepo(gitCommonDir)).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("disabling a repository that was never enabled is harmless", () => {
+    const dir = temp();
+    try {
+      disableForRepo(join(dir, ".git"));
+      expect(isEnabledForRepo(join(dir, ".git"))).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

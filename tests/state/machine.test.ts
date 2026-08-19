@@ -381,3 +381,45 @@ describe("a front is never told about its own actions", () => {
     expect(mine.events).toHaveLength(0);
   });
 });
+
+describe("a session never walks into another session's identity", () => {
+  test("a shell call with no session cannot take over a front that has one", () => {
+    // Every session on a branch derives the same name from that branch, so
+    // without this guard a second session re-attached to the first one's
+    // participant and started speaking as it, claims and all.
+    const first = apply(state, null, {
+      v: 1, op: "join", name: "DEVOLUCAO-TRAJETO-REAL", cwd: "/repo", session: "sess-a",
+    }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+
+    const bare = apply(state, null, {
+      v: 1, op: "join", name: "DEVOLUCAO-TRAJETO-REAL", cwd: "/repo",
+    }, at(10));
+    expect(bare.response).toMatchObject({ error: { code: "NAME_TAKEN" } });
+    expect(Object.keys(state.participants)).toHaveLength(1);
+    expect(state.participants[id]!.session).toBe("sess-a");
+  });
+
+  test("a shell-only front still re-attaches to its own shell-only identity", () => {
+    const first = apply(state, null, { v: 1, op: "join", name: "SHELL", cwd: "/repo" }, at(0));
+    const id = (first.response as unknown as { id: string }).id;
+    const again = apply(state, null, { v: 1, op: "join", name: "SHELL", cwd: "/repo" }, at(10));
+    expect(again.response).toMatchObject({ ok: true, id, reattached: true });
+  });
+
+  test("who reports where each front is, because the name is not enough", () => {
+    apply(state, null, {
+      v: 1, op: "join", name: "DEVOLUCAO-TRAJETO-REAL", cwd: "/repo/.worktrees/icons-leme",
+      branch: "chore/mock-vector-icons", session: "sess-a",
+    }, at(0));
+
+    const out = apply(state, null, { v: 1, op: "who" }, at(10)).response as unknown as {
+      participants: { name: string; branch: string; worktree: string; tag: string }[];
+    };
+    expect(out.participants[0]).toMatchObject({
+      branch: "chore/mock-vector-icons",
+      worktree: "icons-leme",
+    });
+    expect(out.participants[0]!.tag).toMatch(/^[0-9a-z]+$/);
+  });
+});

@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { RepoInfo } from "../repo/locate";
-import { installClaudeCode, uninstallClaudeCode } from "./claude-code";
+import {
+  disableForRepo, enableForRepo, installClaudeCode, installGlobalHooks,
+  isEnabledForRepo, removeGlobalHooks, uninstallClaudeCode, writeGlobalHooks,
+} from "./claude-code";
 import {
   agentsFilePlan, codexPlan, detectMcpTargets, manualSnippet,
   projectMcpPlan, removeCodex, removeProjectMcp,
@@ -17,7 +20,7 @@ import {
  * silently, and the user has no idea why.
  */
 
-export interface InstallOptions { assumeYes: boolean; json: boolean }
+export interface InstallOptions { assumeYes: boolean; json: boolean; global?: boolean }
 
 function diff(before: string, after: string): string {
   const a = before.split("\n");
@@ -40,7 +43,34 @@ async function confirm(question: string): Promise<boolean> {
 }
 
 export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<void> {
+  if (opts.global) {
+    const plan = installGlobalHooks();
+    if (plan.before === plan.after) {
+      if (!opts.json) process.stdout.write("parley: global hooks are already installed.\n");
+    } else {
+      if (!opts.json) {
+        process.stdout.write(`\nparley: Claude Code hooks, GLOBAL — every project you open\n`);
+        process.stdout.write(`        ${plan.path}\n${diff(plan.before, plan.after)}\n\n`);
+        process.stdout.write("        They do nothing in a repository that was never set up with\n");
+        process.stdout.write("        `parley init`, so this is safe to leave on.\n");
+        process.stdout.write("        This is what makes every worktree work: .claude/ lives in the\n");
+        process.stdout.write("        working tree and is usually gitignored, so per-project hooks\n");
+        process.stdout.write("        simply do not exist in your other worktrees.\n");
+      }
+      if (opts.assumeYes || (await confirm(`Write ${plan.path}? This applies to every project.`))) {
+        writeGlobalHooks();
+        if (!opts.json) process.stdout.write("parley: global hooks installed.\n");
+      }
+    }
+  }
+
   await installClaudeCode(repo, opts);
+  // Every worktree of this repository shares the marker, so enabling it here
+  // enables it for all of them.
+  enableForRepo(repo.gitCommonDir);
+  if (!opts.json && !opts.global) {
+    process.stdout.write(`\nparley: enabled for this repository and all ${""}of its worktrees.\n`);
+  }
 
   const targets = detectMcpTargets(repo.root);
   const written: string[] = [];
@@ -102,7 +132,14 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
   }
 }
 
-export async function runUninit(repo: RepoInfo, opts: { json: boolean }): Promise<void> {
+export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: boolean }): Promise<void> {
+  if (opts.global) {
+    const removed = removeGlobalHooks();
+    if (!opts.json) {
+      process.stdout.write(removed ? "parley: removed the global hooks.\n" : "parley: no global hooks to remove.\n");
+    }
+  }
+  disableForRepo(repo.gitCommonDir);
   await uninstallClaudeCode(repo, opts);
 
   const removed: string[] = [];

@@ -3,6 +3,7 @@ import { basename } from "node:path";
 
 export interface Identity {
   name: string;
+  branch: string;
   /** True when derived rather than chosen: the CLI may accept a suggested name. */
   provisional: boolean;
   mission: string;
@@ -14,16 +15,22 @@ export interface Identity {
  * being a ghost editing files. The name comes from the worktree or branch and
  * the agent is told to rename itself.
  */
-export function deriveName(root: string, cwd: string): string {
-  let base = basename(root);
+export function currentBranch(cwd: string): string {
   try {
     const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
       cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
     }).trim();
-    if (branch && branch !== "HEAD" && branch !== "main" && branch !== "master") base = branch;
+    return branch && branch !== "HEAD" ? branch : "";
   } catch {
-    /* detached head or no git: the directory name is enough */
+    return "";
   }
+}
+
+export function deriveName(root: string, cwd: string): string {
+  let base = basename(root);
+  const branch = currentBranch(cwd);
+  if (branch && branch !== "main" && branch !== "master") base = branch;
+
   const cleaned = base
     .replace(/^worktrees?[-_/]/i, "")
     .replace(/^(feature|feat|fix|chore)[-_/]/i, "")
@@ -38,6 +45,7 @@ export function resolveIdentity(root: string, cwd: string, explicitName?: string
   const chosen = explicitName?.trim() || fromEnv || "";
   return {
     name: chosen || deriveName(root, cwd),
+    branch: currentBranch(cwd),
     provisional: !chosen,
     mission: process.env.PARLEY_MISSION?.trim() ?? "",
     harness: process.env.PARLEY_HARNESS?.trim() ?? detectHarness(),

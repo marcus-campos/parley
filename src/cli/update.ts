@@ -126,7 +126,10 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     // the binary by hand still has the old skill sitting in the repository.
     if (!opts.checkOnly && opts.repoRoot) {
       const { refreshAdapter } = await import("../adapters/claude-code");
-      await refreshAdapter(opts.repoRoot, { assumeYes: opts.assumeYes, json: opts.json });
+      await refreshAdapter(opts.repoRoot, {
+        assumeYes: opts.assumeYes, json: opts.json,
+        gitCommonDir: opts.gitCommonDir ?? undefined,
+      });
     }
     return;
   }
@@ -229,7 +232,10 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // reads — the stalest part of the install should not be the instructions.
   if (opts.repoRoot) {
     const { refreshAdapter } = await import("../adapters/claude-code");
-    await refreshAdapter(opts.repoRoot, { assumeYes: opts.assumeYes, json: opts.json });
+    await refreshAdapter(opts.repoRoot, {
+      assumeYes: opts.assumeYes, json: opts.json,
+      gitCommonDir: opts.gitCommonDir ?? undefined,
+    });
   }
 }
 

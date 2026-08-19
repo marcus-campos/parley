@@ -195,6 +195,7 @@ sessions need nothing from you:
 | | |
 |---|---|
 | A new agent session joins the bus | automatic (`SessionStart` hook) |
+| Sessions in **other worktrees** join too | automatic, but only with `parley init --global` |
 | Messages arrive in its context | automatic (`UserPromptSubmit`, `PreToolUse`) |
 | Territory is claimed on first edit | automatic (`PreToolUse`) |
 | It leaves and hands territory back | automatic (`SessionEnd`) |
@@ -207,9 +208,19 @@ browser whenever you want to see what is going on.
 ## Set it up in a repository
 
 ```bash
-cd your-repo
-parley init
+parley init --global    # once per machine
+cd your-repo && parley init
 ```
+
+**Do the `--global` one.** `.claude/settings.json` lives in the working tree and
+`.claude/` is usually gitignored, so hooks installed in your main checkout
+**simply do not exist in your other worktrees** — sessions opened there never
+join the bus, and you get exactly the silence you were trying to avoid. Global
+hooks are the only arrangement that covers every worktree.
+
+They are safe to leave on: they do nothing in a repository that was never set
+up. `parley init` writes a marker in the git common dir, which every worktree of
+that repository shares, and the hooks check it before doing anything.
 
 `init` detects the harnesses you have installed, **shows you the diff of what it
 would write**, asks for confirmation, and only then writes. It never edits your
