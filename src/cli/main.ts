@@ -305,10 +305,12 @@ async function main(): Promise<void> {
     const { runUpdate } = await import("./update");
     let gitCommonDir: string | null = null;
     let repoRoot: string | null = null;
+    let discoveryDir: string | null = null;
     try {
       const found = locateRepo();
       gitCommonDir = found.gitCommonDir;
       repoRoot = found.root;
+      discoveryDir = found.discoveryDir;
     } catch { /* updating from anywhere is fine */ }
     return runUpdate({
       checkOnly: parsed.flags.check === true,
@@ -316,6 +318,7 @@ async function main(): Promise<void> {
       json: parsed.flags.json === true,
       gitCommonDir,
       repoRoot,
+      discoveryDir,
     });
   }
 

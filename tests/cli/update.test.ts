@@ -205,3 +205,25 @@ describe("what the skill tells the agent about channels", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("stopping the daemon after an update", () => {
+  test("the endpoint is looked up where it actually lives, not at the bus key", async () => {
+    // In a workspace the bus key is the directory but endpoint.json is under
+    // <root>/.parley. Looking at the key found nothing, so the update replaced
+    // the binary and left the old daemon serving — the exact half-state this
+    // step exists to prevent, and it showed up as fields reported `undefined`.
+    const { readEndpoint, writeEndpoint } = await import("../../src/daemon/endpoint");
+    const root = mkdtempSync(join(tmpdir(), "parley-endpoint-"));
+    try {
+      const discoveryDir = join(root, ".parley");
+      writeEndpoint(discoveryDir, {
+        protocol: 1, pid: process.pid, transport: "unix",
+        address: join(root, "p.sock"), os: process.platform,
+        token: null, started_at: new Date().toISOString(),
+      });
+      expect(readEndpoint(discoveryDir)?.pid).toBe(process.pid);
+      // The bus key on its own finds nothing, which is what used to happen.
+      expect(readEndpoint(root)).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});

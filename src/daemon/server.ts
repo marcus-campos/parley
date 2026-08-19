@@ -296,6 +296,8 @@ export class ParleyDaemon {
     this.conns.clear();
     // Only clean up the endpoint if it is still ours. A daemon that lost the
     // race must not delete the live one's discovery file on its way out.
+    // `gitCommonDir` here is already the discovery directory the spawner
+    // resolved, repository or workspace.
     const published = readEndpoint(this.opts.gitCommonDir);
     if (!published || published.pid === process.pid) removeEndpoint(this.opts.gitCommonDir);
     await new Promise<void>((resolve) => {

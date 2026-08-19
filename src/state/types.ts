@@ -227,7 +227,10 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
     harness: p.harness,
     kind: p.kind,
     branch: p.branch,
-    delivery: p.delivery,
+    // A participant restored from a journal written by an older daemon has no
+    // delivery recorded. Reporting `undefined` for the field the skill tells
+    // the agent to decide on is worse than assuming the common case.
+    delivery: p.delivery ?? (p.connected ? "live" : "hooks"),
     /**
      * Plain-language version of the same thing. "live" holds an open
      * connection and is pushed to immediately; "hooks" is an ephemeral CLI
@@ -235,9 +238,9 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
      * working, and not until its person prompts it again once it has stopped.
      */
     reach:
-      p.delivery === "live"
+      (p.delivery ?? (p.connected ? "live" : "hooks")) === "live"
         ? "immediately — holds an open connection"
-        : p.delivery === "hooks"
+        : (p.delivery ?? "hooks") === "hooks"
           ? idleSeconds(p, ctx) > 120
             ? "on its next tool call; it has been idle a while, so possibly not soon"
             : "on its next tool call, usually within seconds"

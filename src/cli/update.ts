@@ -24,6 +24,14 @@ export interface UpdateOptions {
   gitCommonDir: string | null;
   /** Worktree root, when the command was run inside a repository. */
   repoRoot: string | null;
+  /**
+   * Where endpoint.json actually lives. For a repository that is under the git
+   * dir; for a workspace it is `<root>/.parley`. Using the bus key here meant
+   * the daemon was never found in a workspace — so the update replaced the
+   * binary and left the old daemon serving, which is the confusing half-state
+   * this whole step exists to prevent.
+   */
+  discoveryDir: string | null;
 }
 
 interface Target { asset: string; label: string }
@@ -220,7 +228,7 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // a fresh one automatically.
   let stopped = false;
   if (opts.gitCommonDir) {
-    const endpoint = readEndpoint(opts.gitCommonDir);
+    const endpoint = readEndpoint(opts.discoveryDir ?? opts.gitCommonDir);
     if (endpoint) {
       try { process.kill(endpoint.pid, "SIGTERM"); stopped = true; } catch { /* already gone */ }
     }

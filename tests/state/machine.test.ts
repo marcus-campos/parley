@@ -423,3 +423,42 @@ describe("a session never walks into another session's identity", () => {
     expect(out.participants[0]!.tag).toMatch(/^[0-9a-z]+$/);
   });
 });
+
+describe("how a front reports being reached", () => {
+  test("a front with an open connection is live; an ephemeral one is hooks", () => {
+    const live = apply(state, null, {
+      v: 1, op: "join", name: "MCP", cwd: "/wt/a", session: "a", connected: true,
+    }, at(0));
+    expect((live.response as unknown as { id: string }).id).toBeDefined();
+
+    apply(state, null, { v: 1, op: "join", name: "HOOKED", cwd: "/wt/b", session: "b" }, at(10));
+
+    const seen = apply(state, null, { v: 1, op: "who" }, at(20)).response as unknown as {
+      participants: { name: string; delivery: string; reach: string }[];
+    };
+    const byName = Object.fromEntries(seen.participants.map((p) => [p.name, p]));
+    expect(byName.MCP!.delivery).toBe("live");
+    expect(byName.MCP!.reach).toContain("immediately");
+    expect(byName.HOOKED!.delivery).toBe("hooks");
+    expect(byName.HOOKED!.reach).toContain("next tool call");
+  });
+
+  test("a front idle for a while says so, because that changes whether you wait", () => {
+    joined(state, "QUIET", { cwd: "/wt/q" });
+    const seen = apply(state, null, { v: 1, op: "who" }, at(10 * 60_000)).response as unknown as {
+      participants: { name: string; reach: string }[];
+    };
+    expect(seen.participants.find((p) => p.name === "QUIET")!.reach).toContain("idle a while");
+  });
+
+  test("nothing ever reports undefined, however the participant was restored", () => {
+    const id = joined(state, "OLD", { cwd: "/wt/o" });
+    // Simulate a participant rebuilt by a daemon that predates the field.
+    delete (state.participants[id] as { delivery?: unknown }).delivery;
+    const seen = apply(state, null, { v: 1, op: "who" }, at(100)).response as unknown as {
+      participants: { delivery: string; reach: string }[];
+    };
+    expect(seen.participants[0]!.delivery).toBe("hooks");
+    expect(seen.participants[0]!.reach).not.toContain("undefined");
+  });
+});
