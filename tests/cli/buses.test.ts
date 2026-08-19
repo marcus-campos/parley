@@ -1,0 +1,77 @@
+import { describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { summariseBuses } from "../../src/cli/buses";
+import { forgetRepo, readRegistry, registerRepo } from "../../src/adapters/registry";
+import { markAsWorkspace } from "../../src/repo/workspace";
+import { execFileSync } from "node:child_process";
+
+function gitRepo(dir: string): void {
+  mkdirSync(dir, { recursive: true });
+  execFileSync("git", ["init", "-q", "."], { cwd: dir });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "x"], {
+    cwd: dir,
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+  });
+}
+
+describe("finding where the conversation is", () => {
+  test("members of a workspace collapse onto one bus, not one row each", () => {
+    // Otherwise you get four rows for one bus and open the wrong panel.
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-buses-")));
+    const registered: string[] = [];
+    try {
+      for (const name of ["alpha", "beta"]) gitRepo(join(root, name));
+      markAsWorkspace(root, {
+        file: null, members: [join(root, "alpha"), join(root, "beta")], at: "",
+      });
+
+      for (const name of ["alpha", "beta"]) {
+        const dir = join(root, name);
+        registerRepo(join(dir, ".git"), dir, join(root, ".parley"));
+        registered.push(join(dir, ".git"));
+      }
+
+      const mine = summariseBuses().filter((b) => b.root.startsWith(root));
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.scope).toBe("workspace");
+      expect(mine[0]!.root).toBe(root);
+    } finally {
+      for (const key of registered) forgetRepo(key);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a repository outside the workspace stays its own bus", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-buses-")));
+    const registered: string[] = [];
+    try {
+      for (const name of ["member", "outsider"]) gitRepo(join(root, name));
+      markAsWorkspace(root, { file: null, members: [join(root, "member")], at: "" });
+
+      for (const name of ["member", "outsider"]) {
+        const dir = join(root, name);
+        registerRepo(join(dir, ".git"), dir, join(dir, ".git", "parley"));
+        registered.push(join(dir, ".git"));
+      }
+
+      const mine = summariseBuses().filter((b) => b.root.startsWith(root));
+      // One for the workspace, one for the outsider — which is the distinction
+      // that explains "they are talking and my panel is empty".
+      expect(mine).toHaveLength(2);
+      expect(mine.map((b) => b.scope).sort()).toEqual(["repository", "workspace"]);
+    } finally {
+      for (const key of registered) forgetRepo(key);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a registered path that no longer exists is dropped, not reported", () => {
+    const before = summariseBuses().length;
+    registerRepo("/nowhere/.git", "/nowhere", "/nowhere/.git/parley");
+    expect(summariseBuses().length).toBe(before);
+    forgetRepo("/nowhere/.git");
+    expect(readRegistry().some((r) => r.root === "/nowhere")).toBe(false);
+  });
+});

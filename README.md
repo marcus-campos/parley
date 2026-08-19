@@ -258,6 +258,30 @@ at `git pull && bun run build` instead of doing something surprising.
 > Installs of **0.1.0 predate this command** and need one manual reinstall — the
 > one-liner at the top — to get it. From 0.2.0 onward, `parley update` is enough.
 
+### Which bus is the conversation on?
+
+With one repository this question does not exist. With a workspace, a dozen
+projects and a handful of worktrees it becomes the first question you have: the
+agents are clearly talking, and the panel you happen to have open is quiet —
+because it is a different bus.
+
+```bash
+parley buses
+```
+
+```
+  * /Users/you/personal_projects/subscription_project
+      repository · up · 42 message(s) · last activity 17:10
+    /Users/you/personal_projects
+      workspace · up · 0 message(s) · last activity 17:10
+
+  The conversation is in subscription_project, and it has no panel open.
+  cd /Users/you/personal_projects/subscription_project && parley watch --web --detach
+```
+
+Busiest first, with the panel URL where one is already running. Members of a
+workspace collapse onto the one bus they share, rather than appearing once each.
+
 ### Did the skill actually update?
 
 ```bash
@@ -436,6 +460,7 @@ Claude Code. See the compatibility matrix below.
 
 ```
 parley init | uninit | doctor | status | stop | update
+parley buses | adapters
 
 parley whoami
 parley join --as NAME [--mission "..."]

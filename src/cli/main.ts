@@ -20,6 +20,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley update [--check] [--yes]
                              replace this binary with the latest release
+  parley buses               every bus on this machine, which one is busy, and
+                             where its panel is
   parley adapters            every project set up, and whether its skill is
                              current with this binary
   parley mcp                 run as an MCP server over stdio (for Codex, Kimi,
@@ -339,6 +341,31 @@ async function main(): Promise<void> {
     case "uninit": {
       const { runUninit } = await import("../adapters/install");
       return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
+    }
+
+    case "buses": {
+      const { summariseBuses } = await import("./buses");
+      const buses = summariseBuses();
+      if (buses.length === 0) {
+        return out(parsed, "parley: no project has been set up yet (run: parley init)", { ok: true, buses: [] });
+      }
+      const rows = buses.map((b) => {
+        const when = b.lastActivity ? b.lastActivity.slice(11, 16) : "never";
+        const state = b.live ? "up" : "idle";
+        return `  ${b.says > 0 ? "*" : " "} ${b.root}\n` +
+          `      ${b.scope} · ${state} · ${b.says} message(s) · last activity ${when}` +
+          (b.panel ? `\n      panel: ${b.panel}` : "");
+      });
+      const busiest = buses.find((b) => b.says > 0 && !b.panel);
+      return out(
+        parsed,
+        rows.join("\n") +
+          (busiest
+            ? `\n\n  The conversation is in ${busiest.root.split("/").pop()}, and it has no panel open.\n` +
+              `  cd ${busiest.root} && parley watch --web --detach`
+            : ""),
+        { ok: true, buses },
+      );
     }
 
     case "adapters": {
