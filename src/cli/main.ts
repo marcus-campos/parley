@@ -9,6 +9,7 @@ import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
+import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
 import { resolveIdentity } from "./identity";
@@ -23,6 +24,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              current with this binary
   parley mcp                 run as an MCP server over stdio (for Codex, Kimi,
                              Antigravity and anything else that speaks MCP)
+  parley init --workspace     make this directory one bus for every repository
+                             inside it (VS Code multi-root workspaces)
   parley init [--yes] [--global]
                              install hooks and skill for detected harnesses.
                              --global installs the Claude Code hooks once for
@@ -102,7 +105,7 @@ async function withSession(
 ): Promise<void> {
   let client: ParleyClient;
   try {
-    client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir });
+    client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir });
   } catch (e) {
     // parley broken must never stop the work: say so, exit clean for hooks.
     if (e instanceof ParleyUnreachable) {
@@ -195,7 +198,9 @@ async function main(): Promise<void> {
     const id = repoId(canonical);
     const env = detectAddrEnv(canonical);
     const daemon = new ParleyDaemon({
-      gitCommonDir,
+      // For a repository this is <git-common-dir>/parley; for a workspace it is
+      // <workspace>/.parley. The spawner passes the resolved directory.
+      gitCommonDir: argv[2] ?? join(gitCommonDir, "parley"),
       address: resolveAddress(id, env),
       journalPath: journalPathFor(stateDir(id, env)),
     });
@@ -224,6 +229,31 @@ async function main(): Promise<void> {
   if (["version", "--version", "-v"].includes(parsed.command) || parsed.flags.version) {
     process.stdout.write(`parley ${VERSION} (protocol v${PROTOCOL_VERSION})\n`);
     return;
+  }
+
+  // Marking a workspace happens before repository lookup, because the whole
+  // point is that the directory is not itself a repository.
+  if (parsed.command === "init" && parsed.flags.workspace) {
+    const { markAsWorkspace, membersOf, findWorkspaceRoot } = await import("../repo/workspace");
+    const here = process.cwd();
+    const already = findWorkspaceRoot(here);
+    if (already && already !== here) {
+      return fail(parsed, `${already} is already a parley workspace, and this is inside it.`);
+    }
+    const members = membersOf(here);
+    if (members.length === 0) {
+      return fail(parsed, `no git repositories directly inside ${here} — nothing to put on one bus.`);
+    }
+    markAsWorkspace(here);
+    return out(
+      parsed,
+      `parley: ${here} is now one bus, covering ${members.length} repositories:\n` +
+        members.map((m) => `        ${m}`).join("\n") +
+        `\n\n        Territory here reads like ${members[0]}/src/app.ts, and every session\n` +
+        `        opened anywhere inside this directory joins the same bus.\n` +
+        `        Run \`parley init\` in it too, so the hooks are enabled.`,
+      { ok: true, workspace: here, members },
+    );
   }
 
   // Updating does not need a repository — you may well be fixing an install
@@ -296,9 +326,10 @@ async function main(): Promise<void> {
 
     case "doctor": {
       const address = resolveAddress(repo.repoId, env);
-      const endpoint = readEndpoint(repo.gitCommonDir);
+      const endpoint = readEndpoint(repo.discoveryDir);
       const report = {
         version: VERSION,
+        scope: repo.scope === "workspace" ? `workspace (${repo.root})` : "repository",
         repo_root: repo.root,
         git_common_dir: repo.gitCommonDir,
         canonical: repo.canonical,
@@ -333,9 +364,9 @@ async function main(): Promise<void> {
     }
 
     case "status": {
-      const endpoint = readEndpoint(repo.gitCommonDir);
+      const endpoint = readEndpoint(repo.discoveryDir);
       if (!endpoint) return out(parsed, "parley: no daemon running for this repository", { ok: true, running: false });
-      const client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir, autoSpawn: false }).catch(() => null);
+      const client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir, autoSpawn: false }).catch(() => null);
       if (!client) return out(parsed, "parley: endpoint present but no daemon answering (stale)", { ok: true, running: false, stale: true });
       const response = await client.request({ op: "status" });
       client.close();
@@ -351,7 +382,7 @@ async function main(): Promise<void> {
     }
 
     case "stop": {
-      const endpoint = readEndpoint(repo.gitCommonDir);
+      const endpoint = readEndpoint(repo.discoveryDir);
       if (!endpoint) return out(parsed, "parley: nothing to stop", { ok: true, stopped: false });
       try { process.kill(endpoint.pid, "SIGTERM"); } catch { /* already gone */ }
       return out(parsed, `parley: signalled daemon ${endpoint.pid}`, { ok: true, stopped: true, pid: endpoint.pid });

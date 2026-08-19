@@ -16,23 +16,25 @@ export interface Endpoint {
 }
 
 /**
- * The rendezvous point is the repository itself. Every worktree of a repo shares
- * one git-common-dir, and `C:\dev\proj\.git` and `/mnt/c/dev/proj/.git` are the
- * same bytes on the same disk — so one discovery mechanism covers every case,
- * including both sides of the WSL boundary.
+ * The rendezvous point is the scope itself. For a repository that is
+ * `<git-common-dir>/parley/` — every worktree shares one git-common-dir, and
+ * `C:\dev\proj\.git` and `/mnt/c/dev/proj/.git` are the same bytes on the same
+ * disk, so one mechanism covers every case including both sides of the WSL
+ * boundary. For a multi-root workspace it is `<workspace>/.parley/`, which every
+ * session opened anywhere inside that workspace can reach.
  */
-export function endpointPath(gitCommonDir: string): string {
-  return join(gitCommonDir, "parley", "endpoint.json");
+export function endpointPath(discoveryDir: string): string {
+  return join(discoveryDir, "endpoint.json");
 }
 
-export function writeEndpoint(gitCommonDir: string, endpoint: Endpoint): void {
-  const path = endpointPath(gitCommonDir);
+export function writeEndpoint(discoveryDir: string, endpoint: Endpoint): void {
+  const path = endpointPath(discoveryDir);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(endpoint, null, 2)}\n`, "utf8");
 }
 
-export function readEndpoint(gitCommonDir: string): Endpoint | null {
-  const path = endpointPath(gitCommonDir);
+export function readEndpoint(discoveryDir: string): Endpoint | null {
+  const path = endpointPath(discoveryDir);
   if (!existsSync(path)) return null;
   try {
     const parsed = JSON.parse(readFileSync(path, "utf8")) as Endpoint;
@@ -44,9 +46,9 @@ export function readEndpoint(gitCommonDir: string): Endpoint | null {
   }
 }
 
-export function removeEndpoint(gitCommonDir: string): void {
+export function removeEndpoint(discoveryDir: string): void {
   try {
-    rmSync(endpointPath(gitCommonDir), { force: true });
+    rmSync(endpointPath(discoveryDir), { force: true });
   } catch {
     /* nothing to clean up */
   }

@@ -14,6 +14,8 @@ import { dirname, join } from "node:path";
 export interface RegisteredRepo {
   gitCommonDir: string;
   root: string;
+  /** Where this scope's parley files live. Older entries do not have it. */
+  discoveryDir?: string;
   at: string;
 }
 
@@ -50,9 +52,9 @@ function write(repos: RegisteredRepo[]): void {
   }
 }
 
-export function registerRepo(gitCommonDir: string, root: string): void {
+export function registerRepo(gitCommonDir: string, root: string, discoveryDir?: string): void {
   const repos = readRegistry().filter((r) => r.gitCommonDir !== gitCommonDir);
-  repos.push({ gitCommonDir, root, at: new Date().toISOString() });
+  repos.push({ gitCommonDir, root, discoveryDir, at: new Date().toISOString() });
   write(repos);
 }
 

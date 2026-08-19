@@ -67,7 +67,7 @@ export async function runHook(event: string): Promise<void> {
 
   // Hooks installed globally fire in every repository you open. Doing nothing
   // where parley was never set up is what makes that safe.
-  if (!isEnabledForRepo(repo.gitCommonDir)) { clearTimeout(budget); return emit({}); }
+  if (!isEnabledForRepo(repo.discoveryDir)) { clearTimeout(budget); return emit({}); }
 
   // Repositories set up before the registry existed have the marker but are not
   // listed, so `parley update` would skip them. Registering here costs one file
@@ -76,14 +76,14 @@ export async function runHook(event: string): Promise<void> {
     try {
       const { readRegistry, registerRepo } = await import("./registry");
       if (!readRegistry().some((r) => r.gitCommonDir === repo.gitCommonDir)) {
-        registerRepo(repo.gitCommonDir, repo.root);
+        registerRepo(repo.gitCommonDir, repo.root, repo.discoveryDir);
       }
     } catch { /* the registry is a convenience, never a blocker */ }
   }
 
   let client: ParleyClient;
   try {
-    client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir, timeoutMs: 2_000 });
+    client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir, timeoutMs: 2_000 });
   } catch (e) {
     clearTimeout(budget);
     // enforced degrades to advisory when the daemon is unreachable. A

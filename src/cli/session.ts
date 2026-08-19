@@ -50,9 +50,24 @@ export function recallSession(gitCommonDir: string, cwd: string): SessionMarker 
   }
 }
 
-/** Explicit env wins, then what the hook wrote down for this worktree. */
+/**
+ * Who is calling, best source first.
+ *
+ * The harness puts its session id in the environment of every command it runs,
+ * which is exactly right: a `parley say` inherits it from the session that
+ * spawned the shell, so two sessions in the *same* worktree are told apart with
+ * no guessing at all. The marker the hook writes is the fallback for harnesses
+ * that expose nothing, where per-worktree is the best that can be known.
+ */
 export function sessionFor(gitCommonDir: string, cwd: string): string {
-  const fromEnv = process.env.PARLEY_SESSION?.trim();
-  if (fromEnv) return fromEnv;
+  const explicit = process.env.PARLEY_SESSION?.trim();
+  if (explicit) return explicit;
+
+  const fromHarness =
+    process.env.CLAUDE_CODE_SESSION_ID?.trim() ||
+    process.env.CODEX_SESSION_ID?.trim() ||
+    process.env.CURSOR_TRACE_ID?.trim();
+  if (fromHarness) return fromHarness;
+
   return recallSession(gitCommonDir, cwd)?.session ?? "";
 }

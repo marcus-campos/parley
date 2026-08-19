@@ -107,7 +107,7 @@ type View = "bus" | "notes" | "reader";
 type Composer = "none" | "say" | "name";
 
 export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
-  const client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir });
+  const client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir });
 
   const joined = await client.request({
     op: "join", name, mission: "watching", harness: "panel",

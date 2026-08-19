@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import type { RepoInfo } from "../repo/locate";
 import { forgetRepo, registerRepo } from "./registry";
@@ -69,8 +70,8 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
   // Every worktree of this repository shares the marker, so enabling it here
   // enables it for all of them. The registry is what lets one `parley update`
   // reach every project instead of only the one you are standing in.
-  enableForRepo(repo.gitCommonDir);
-  registerRepo(repo.gitCommonDir, repo.root);
+  enableForRepo(repo.discoveryDir);
+  registerRepo(repo.gitCommonDir, repo.root, repo.discoveryDir);
   if (!opts.json && !opts.global) {
     process.stdout.write(`\nparley: enabled for this repository and all ${""}of its worktrees.\n`);
   }
@@ -142,7 +143,7 @@ export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: 
       process.stdout.write(removed ? "parley: removed the global hooks.\n" : "parley: no global hooks to remove.\n");
     }
   }
-  disableForRepo(repo.gitCommonDir);
+  disableForRepo(repo.discoveryDir);
   forgetRepo(repo.gitCommonDir);
   await uninstallClaudeCode(repo, opts);
 
@@ -231,7 +232,7 @@ export async function refreshAllAdapters(
   const refreshed: string[] = [];
   for (const r of toRefresh) {
     const done = await refreshAdapter(r.root, {
-      assumeYes: true, json: true, silent: true, gitCommonDir: r.gitCommonDir,
+      assumeYes: true, json: true, silent: true, discoveryDir: r.discoveryDir ?? join(r.gitCommonDir, "parley"),
     });
     if (done) refreshed.push(r.root);
   }

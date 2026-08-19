@@ -5,7 +5,10 @@ import { PROTOCOL_VERSION, type Response } from "../protocol/types";
 import { readEndpoint, type Endpoint } from "../daemon/endpoint";
 
 export interface ClientOptions {
+  /** Where endpoint.json lives for this scope. */
   gitCommonDir: string;
+  /** What the bus id is derived from. Defaults to the discovery directory. */
+  busKey?: string;
   /** Spawn a daemon when none answers. Off for `parley status`. */
   autoSpawn?: boolean;
   timeoutMs?: number;
@@ -61,9 +64,10 @@ export class ParleyClient {
   }
 
   private static spawnDaemon(opts: ClientOptions): void {
-    const args = COMPILED
-      ? ["__daemon", opts.gitCommonDir, ...(opts.daemonArgs ?? [])]
-      : [process.argv[1] ?? "", "__daemon", opts.gitCommonDir, ...(opts.daemonArgs ?? [])];
+    // The second argument is the discovery directory, which differs between a
+    // repository and a workspace; the first stays the key the id derives from.
+    const base = ["__daemon", opts.busKey ?? opts.gitCommonDir, opts.gitCommonDir, ...(opts.daemonArgs ?? [])];
+    const args = COMPILED ? base : [process.argv[1] ?? "", ...base];
     const child = spawn(process.execPath, args, {
       detached: true,
       stdio: "ignore",

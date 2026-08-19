@@ -366,7 +366,7 @@ export async function runMcpServer(): Promise<void> {
     if (!repo) return null;
     if (client) return client;
     try {
-      client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir });
+      client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir });
     } catch (e) {
       if (e instanceof ParleyUnreachable) return null;
       throw e;

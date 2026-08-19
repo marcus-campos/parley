@@ -24,8 +24,8 @@ const MARKER = "parley hook ";
  * the machine. This marker is what makes global hooks safe: they run
  * everywhere, and do nothing where parley was never set up.
  */
-export function enabledMarkerPath(gitCommonDir: string): string {
-  return join(gitCommonDir, "parley", "enabled");
+export function enabledMarkerPath(discoveryDir: string): string {
+  return join(discoveryDir, "enabled");
 }
 
 export function isEnabledForRepo(gitCommonDir: string): boolean {
@@ -415,7 +415,7 @@ export function adapterStatus(repoRoot: string): AdapterStatus {
 /** Rewrite the skill and hooks to what this version ships. */
 export async function refreshAdapter(
   repoRoot: string,
-  opts: { assumeYes: boolean; json: boolean; gitCommonDir?: string; silent?: boolean },
+  opts: { assumeYes: boolean; json: boolean; discoveryDir?: string; silent?: boolean },
 ): Promise<boolean> {
   const status = adapterStatus(repoRoot);
   if (!status.installed) return false;
@@ -449,7 +449,7 @@ export async function refreshAdapter(
   mkdirSync(join(claudeDir, "skills", "parley"), { recursive: true });
   writeFileSync(status.settingsPath, `${JSON.stringify({ ...settings, hooks: merged }, null, 2)}\n`, "utf8");
   writeFileSync(status.skillPath, SKILL, "utf8");
-  if (opts.gitCommonDir) enableForRepo(opts.gitCommonDir);
+  if (opts.discoveryDir) enableForRepo(opts.discoveryDir);
 
   if (!opts.silent) hookOutput(opts.json, "parley: adapter refreshed.", { ok: true, refreshed: true });
   return true;
@@ -502,7 +502,7 @@ export async function installClaudeCode(repo: RepoInfo, opts: InitOptions): Prom
   mkdirSync(join(claudeDir, "skills", "parley"), { recursive: true });
   writeFileSync(settingsPath, `${after}\n`, "utf8");
   writeFileSync(skillPath, SKILL, "utf8");
-  enableForRepo(repo.gitCommonDir);
+  enableForRepo(repo.discoveryDir);
 
   hookOutput(opts.json, `parley: installed. Hooks in ${settingsPath}, skill in ${skillPath}.`, {
     ok: true, changed: true, settings: settingsPath, skill: skillPath, events: added,

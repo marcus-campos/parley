@@ -235,6 +235,39 @@ What you run on purpose is the panel, because it is a thing you look at:
 `parley watch`, or `parley watch --web --detach` once, and then just open the
 browser whenever you want to see what is going on.
 
+## VS Code multi-root workspaces
+
+One repository is one bus, keyed on the git common dir — which is what every
+worktree of that repository shares. That is right until you open a multi-root
+workspace: a session then edits several repositories, joins whichever bus its
+working directory happens to sit in, and two sessions working across the same
+set of projects never see each other.
+
+Make the directory that holds them the bus instead:
+
+```bash
+cd ~/personal_projects        # the folder your workspace points at
+parley init --workspace
+parley init                   # and enable the hooks here
+```
+
+```
+parley: /Users/you/personal_projects is now one bus, covering 3 repositories:
+        backend
+        frontend
+        mobile
+```
+
+Territory then reads `backend/src/app.ts` — unambiguous, and how a person would
+say it. The hooks prefix it for you: editing `frontend/src/plans.tsx` from a
+session opened in `frontend/` claims exactly that. Every session opened anywhere
+inside the directory is on the same bus, whichever repository it is working in.
+
+**It is opt-in and never inferred.** Guessing would put the same session on a
+different bus depending on where it was started from, and territory that
+silently splits in two is worse than no territory at all. `parley doctor` shows
+which scope you are in.
+
 ## Set it up in a repository
 
 ```bash
