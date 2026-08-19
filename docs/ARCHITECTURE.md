@@ -56,9 +56,12 @@ committed.
 | `src/repo/canonical.ts` | Canonicalise a repository path, hash it into `repo-id`. Where the WSL boundary bug lives. | injected |
 | `src/repo/paths.ts` | Normalise territory paths; decide glob overlap. | none |
 | `src/repo/locate.ts` | `git rev-parse` — the only place that shells out to git. | yes |
+| `src/repo/workspace.ts` | Multi-root workspaces: membership from the `.code-workspace` file, and path comparison that survives symlinks. | yes |
 | `src/protocol/types.ts` | Wire constants, ops, error codes, defaults. | none |
 | `src/protocol/codec.ts` | NDJSON encode and incremental decode. | none |
-| `src/state/*.ts` | The state machine: participants, conversation, territory, permissions, notes. | **none** |
+| `src/state/*.ts` | The state machine: participants, conversation, territory, permissions, notes, questions, results. | **none** |
+| `src/mcp/server.ts` | The bus as MCP tools over stdio, for harnesses with no pre-tool gate. | yes |
+| `src/adapters/registry.ts` | Every project set up, so one `update` reaches all of them. | yes |
 | `src/state/machine.ts` | `apply` (dispatch) and `tick` (every time-driven rule). | **none** |
 | `src/journal/journal.ts` | Append-only log; tolerant replay. | yes |
 | `src/transport/address.ts` | Address per OS; state directory per OS. | none |
@@ -229,6 +232,28 @@ sloppiness: a torn final line is exactly what `kill -9` leaves behind, and
 refusing to boot because of it would trade one lost event for a dead bus.
 
 ---
+
+## 7.1 What one bus covers
+
+By default: one repository, keyed on `git rev-parse --git-common-dir`, which is
+what every worktree of that repository shares.
+
+A VS Code multi-root workspace breaks that assumption — a session edits several
+repositories and would join whichever bus its working directory happened to sit
+in. Marking the directory makes it the bus instead, and membership comes from
+the `.code-workspace` file rather than from what is on disk: the folder holding
+seven projects usually holds twenty others that have nothing to do with them.
+
+Two details that only show up in use:
+
+- **Paths are compared after resolving symlinks.** `/tmp` is a symlink to
+  `/private/tmp` on macOS, home directories are symlinked on plenty of setups,
+  and a harness may hand over either spelling. Comparing them as text made a
+  session inside a workspace fall back to its own repository bus, silently.
+- **The adapter is installed per folder.** Claude Code reads its skill from the
+  folder a session was opened in, which in a workspace is a member and never the
+  root. Installing only at the root produces a setup that looks complete and
+  does nothing.
 
 ## 8. The WSL boundary
 

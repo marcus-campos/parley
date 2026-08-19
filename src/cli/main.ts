@@ -285,8 +285,14 @@ async function main(): Promise<void> {
         shown.map((m) => `        ${m}`).join("\n") +
         `\n\n        Territory here reads like ${shown[0]}/src/app.ts, and a session opened\n` +
         `        in any of these joins this bus. Anything else under ${root.split("/").pop()}\n` +
-        `        keeps its own.\n` +
-        `        Run \`parley init\` here too, so the hooks are enabled.`,
+        `        keeps its own.\n\n` +
+        `        Next, two commands:\n` +
+        `          parley init --global   the hooks, once for every project. In a workspace\n` +
+        `                                 this is the reliable way: .claude/ lives inside each\n` +
+        `                                 folder and is usually gitignored, so per-folder hooks\n` +
+        `                                 go missing exactly where you did not look.\n` +
+        `          parley init            the skill in each of these folders, and the marker\n` +
+        `                                 that lets the global hooks act here.`,
       { ok: true, workspace: root, file, members },
     );
   }

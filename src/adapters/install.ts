@@ -45,6 +45,15 @@ async function confirm(question: string): Promise<boolean> {
 }
 
 export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<void> {
+  // In a workspace the bus is the directory, but Claude Code reads its skill
+  // from the folder a session was opened in — which is one of the members, not
+  // the root. Installing only at the root leaves every actual session without
+  // the skill, which is what "it did nothing" looks like from the outside.
+  const { readWorkspaceMarker } = await import("../repo/workspace");
+  const marker = repo.scope === "workspace" ? readWorkspaceMarker(repo.root) : null;
+  const folders = marker
+    ? [repo.root, ...marker.members]
+    : [repo.root];
   if (opts.global) {
     const plan = installGlobalHooks();
     if (plan.before === plan.after) {
@@ -66,17 +75,34 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
     }
   }
 
-  await installClaudeCode(repo, opts);
+  for (const folder of folders) {
+    await installClaudeCode(
+      { ...repo, root: folder },
+      // A workspace member is somewhere a session will be opened, so create the
+      // directory rather than skipping it.
+      { ...opts, create: marker !== null && folder !== repo.root },
+    );
+  }
+
   // Every worktree of this repository shares the marker, so enabling it here
   // enables it for all of them. The registry is what lets one `parley update`
   // reach every project instead of only the one you are standing in.
   enableForRepo(repo.discoveryDir);
   registerRepo(repo.gitCommonDir, repo.root, repo.discoveryDir);
   if (!opts.json && !opts.global) {
-    process.stdout.write(`\nparley: enabled for this repository and all ${""}of its worktrees.\n`);
+    process.stdout.write(
+      marker
+        ? `\nparley: enabled for this workspace and its ${marker.members.length} folder(s).\n`
+        : `\nparley: enabled for this repository and all of its worktrees.\n`,
+    );
   }
 
-  const targets = detectMcpTargets(repo.root);
+  // Same reasoning for MCP: a client reads .mcp.json from the folder it was
+  // opened in, so a workspace needs one per member, not one at the root.
+  const targets = folders.flatMap((folder) =>
+    detectMcpTargets(folder, folder === repo.root ? undefined : folder.split("/").pop())
+      .filter((t) => folder === repo.root || t.id === "project-mcp"),
+  );
   const written: string[] = [];
   const manual: string[] = [];
 
@@ -109,6 +135,14 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
   }
 
   // AGENTS.md is how an agent with no MCP config at all still learns the rules.
+  for (const folder of folders.slice(1)) {
+    const plan = agentsFilePlan(folder);
+    if (plan.already) continue;
+    if (opts.assumeYes || (await confirm(`Write ${plan.path}?`))) {
+      writeAgentsFile(folder);
+      written.push(`${folder.split("/").pop()}/AGENTS.md`);
+    }
+  }
   const agents = agentsFilePlan(repo.root);
   if (!agents.already) {
     if (!opts.json) {
@@ -191,7 +225,15 @@ export async function refreshAllAdapters(
       registerRepo(opts.here.gitCommonDir, opts.here.root);
     }
   }
-  const stale = repos.filter((r) => {
+  // A workspace entry stands for its members, which is where the skills live.
+  const { readWorkspaceMarker } = await import("../repo/workspace");
+  const expanded = repos.flatMap((r) => {
+    const marker = readWorkspaceMarker(r.root);
+    if (!marker) return [r];
+    return [r, ...marker.members.map((m) => ({ ...r, root: m }))];
+  });
+
+  const stale = expanded.filter((r) => {
     const status = adapterStatus(r.root);
     return status.installed && (!status.skillCurrent || !status.hooksCurrent);
   });

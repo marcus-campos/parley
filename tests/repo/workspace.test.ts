@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findWorkspaceRoot, findWorkspaceScope, markAsWorkspace, membersOf } from "../../src/repo/workspace";
 
 function workspace(repos: string[]): string {
-  const root = mkdtempSync(join(tmpdir(), "parley-ws-"));
+  // Real path throughout: on macOS the temp dir is reached through a symlink,
+  // and parley resolves paths before comparing them.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-ws-")));
   for (const r of repos) {
     mkdirSync(join(root, r, ".git"), { recursive: true });
     writeFileSync(join(root, r, ".git", "HEAD"), "ref: refs/heads/main\n", "utf8");
@@ -123,6 +125,40 @@ describe("reading a .code-workspace", () => {
       const file = join(root, "empty.code-workspace");
       writeFileSync(file, JSON.stringify({ folders: [] }), "utf8");
       expect(readWorkspaceFile(file)).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+import { symlinkSync } from "node:fs";
+import { realPath } from "../../src/repo/workspace";
+
+describe("symlinked paths", () => {
+  test("two spellings of the same directory are the same member", () => {
+    // /tmp is a symlink to /private/tmp on macOS, home directories are
+    // symlinked on plenty of setups, and a harness may hand us either form.
+    // Comparing them as text made a session inside a workspace fall back to
+    // its own repository bus — silently, which is the worst kind.
+    const root = workspace(["alpha", "beta"]);
+    try {
+      const real = root;
+      markAsWorkspace(real, {
+        file: null, members: [join(real, "alpha"), join(real, "beta")], at: "",
+      });
+      // Ask using the un-resolved spelling.
+      const scope = scopeOf(join(root, "alpha", "src"));
+      expect(scope).not.toBeNull();
+      expect(realPath(scope!.root)).toBe(real);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("a member reached through a symlink still belongs", () => {
+    const root = workspace(["real"]);
+    try {
+      const resolved = root;
+      const link = join(resolved, "link");
+      symlinkSync(join(resolved, "real"), link);
+      markAsWorkspace(resolved, { file: null, members: [join(resolved, "real")], at: "" });
+      expect(scopeOf(link)).not.toBeNull();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

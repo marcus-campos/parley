@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { canonicalizeRepoPath, detectEnv, repoId } from "./canonical";
 import type { RepoInfo } from "./locate";
@@ -82,6 +82,23 @@ export function workspaceFilesIn(dir: string): string[] {
   }
 }
 
+/**
+ * Resolve symlinks before comparing paths.
+ *
+ * `/tmp` is a symlink to `/private/tmp` on macOS, home directories are
+ * symlinked on plenty of setups, and a harness may hand us either form. Two
+ * spellings of the same directory failing to match meant a session inside a
+ * workspace silently fell back to its own repository bus — the silent failure
+ * class again.
+ */
+export function realPath(path: string): string {
+  try {
+    return realpathSync(resolve(path));
+  } catch {
+    return resolve(path);
+  }
+}
+
 /** Deepest directory containing all of them. */
 export function commonAncestor(paths: string[]): string {
   if (paths.length === 0) return "";
@@ -101,8 +118,8 @@ export function readWorkspaceFile(file: string): { root: string; members: string
   if (!existsSync(file)) return null;
   const folders = parseWorkspaceFile(readFileSync(file, "utf8"));
   if (folders.length === 0) return null;
-  const base = dirname(resolve(file));
-  const members = folders.map((f) => resolve(base, f));
+  const base = realPath(dirname(resolve(file)));
+  const members = folders.map((f) => realPath(resolve(base, f)));
   // A workspace whose folders live above the file still needs one root that
   // every territory path can be relative to.
   const root = members.every((m) => m.startsWith(`${base}/`) || m === base)
@@ -125,7 +142,7 @@ export function membersOf(root: string): string[] {
 
 /** Nearest marked workspace at or above `from`. */
 export function findWorkspaceRoot(from: string): string | null {
-  let dir = resolve(from);
+  let dir = realPath(from);
   for (;;) {
     if (existsSync(workspaceMarkerPath(dir))) return dir;
     const up = dirname(dir);
@@ -135,7 +152,7 @@ export function findWorkspaceRoot(from: string): string | null {
 }
 
 export function findWorkspaceScope(cwd: string): RepoInfo | null {
-  const here = resolve(cwd);
+  const here = realPath(cwd);
   let root = findWorkspaceRoot(here);
 
   // Being *under* a marked directory is not enough: a workspace names its
@@ -148,7 +165,10 @@ export function findWorkspaceScope(cwd: string): RepoInfo | null {
       !marker ||
       marker.members.length === 0 ||
       here === root ||
-      marker.members.some((m) => here === m || here.startsWith(`${m}/`));
+      marker.members.some((m) => {
+        const member = realPath(m);
+        return here === member || here.startsWith(`${member}/`);
+      });
     if (belongs) break;
     const up = dirname(root);
     root = up === root ? null : findWorkspaceRoot(up);

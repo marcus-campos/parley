@@ -35,7 +35,7 @@ export const MCP_SERVER_ENTRY = {
   args: ["mcp"],
 } as const;
 
-export function detectMcpTargets(repoRoot: string): McpTarget[] {
+export function detectMcpTargets(repoRoot: string, label?: string): McpTarget[] {
   const home = homedir();
   const codex = join(home, ".codex", "config.toml");
   const projectMcp = join(repoRoot, ".mcp.json");
@@ -43,7 +43,7 @@ export function detectMcpTargets(repoRoot: string): McpTarget[] {
   return [
     {
       id: "project-mcp",
-      label: "Project MCP config (.mcp.json)",
+      label: `Project MCP config${label ? ` — ${label}` : ""} (.mcp.json)`,
       scope: "repository",
       path: projectMcp,
       // Always offered: it is the portable, per-repository way in, and the one

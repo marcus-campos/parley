@@ -296,6 +296,52 @@ a fresh session flooded with an hour of backlog it cannot act on. A panel is the
 opposite case — you open it precisely to see what has been going on. So backlog
 is a separate request rather than a different kind of join.
 
+### 6.2.1 Questions, when a message is not enough
+
+```json
+→ {"v":1,"op":"question","to":"BUSSOLA","text":"are you holding finance/services.py?","ttl_s":600}
+← {"ok":true,"question":"q_0003","to":"BUSSOLA","expires_at":"…"}
+```
+
+A `say` lands in an inbox that an idle session will not read until its person
+prompts it again — so a direct question to a stopped agent goes unanswered for
+as long as its window sits there. A question carries state: **somebody owes an
+answer.** That is what lets a harness refuse to let the recipient go idle, and
+what lets the asker wait instead of guessing.
+
+```json
+→ {"v":1,"op":"reply","id":"q_0003","text":"not touching it, go ahead"}
+→ {"v":1,"op":"ack","id":"q_0003","text":"got it, doing the edit now"}
+```
+
+- Only the addressee may `reply`, and only once. Only the asker may `ack`, and
+  only after an answer exists.
+- `ack` closes the loop. Without it the front that answered has no idea whether
+  the answer arrived, and the asker has no natural place to say what it is doing
+  with it.
+- `question_status` (with `id`) lets the asker poll: `answered`, `answer`,
+  `expired`, `seconds_left`.
+- Questions expire (default 10 minutes), so nobody waits forever on a session
+  that died.
+
+```json
+→ {"v":1,"op":"questions","deliver":true}
+← {"ok":true,
+   "owed":[…],            // you have not answered these
+   "undelivered":[…],     // …and have not been interrupted about them yet
+   "waiting":[…],         // you asked, still open
+   "answered":[…],        // answers that arrived
+   "unseen_answers":[…]}  // …that you have not been shown yet
+```
+
+**`deliver: true` stamps what it returns as delivered**, and an already-stamped
+item never appears in `undelivered` or `unseen_answers` again. That single bit
+is the whole loop guard: each question interrupts its recipient exactly once and
+each answer interrupts its asker exactly once, after which they are ordinary
+inbox items. Two agents cannot push each other round in a circle.
+
+A client that only wants to look, and not to consume the nudge, omits `deliver`.
+
 ### 6.3 Territory
 
 #### `claim`
@@ -402,6 +448,23 @@ Default TTL 5 minutes, configurable per request via `ttl_s`. The reasoning: an
 idle agent is the most expensive waste in the system, so the deadline concedes —
 and the visibility is what stops it from becoming a habit.
 
+### 6.4.1 Nudging permission, symmetrically
+
+`requests` accepts the same `deliver` bit, and answers with what *this*
+participant still has to do about permission:
+
+```json
+→ {"v":1,"op":"requests","deliver":true}
+← {"ok":true,"requests":[…],
+   "needs_my_decision":[…],   // you own the path, someone is blocked
+   "settled_for_me":[…],      // you asked, it was granted or denied
+   "i_am_waiting_on":[…]}
+```
+
+Each side is stamped once, for the same reason as questions: a harness can
+refuse to go idle on the strength of it without the two fronts trapping each
+other.
+
 ### 6.5 Durable memory
 
 #### `note`
@@ -413,12 +476,62 @@ and the visibility is what stops it from becoming a habit.
 ← {"ok":true,"id":"n_0007"}
 ```
 
+#### Anchoring a note to the files it is about
+
+```json
+→ {"v":1,"op":"note","title":"this serializer is used by the mobile app too",
+   "body":"renaming fields here breaks the collection screen",
+   "paths":["src/backend/app/accounts/schemas.py"],"tags":["mobile"]}
+```
+
+`paths` is what makes a note find its reader. **A note anchored to a path comes
+back from `claim` when anybody takes that path** — inside the answer to a call
+the pre-tool hook was already making, with no extra round trip. It inverts who
+does the remembering: the agent does not have to think to ask. And it fires only
+on the file in question, which is what keeps unsolicited context rare and
+precise instead of a running commentary.
+
+#### Decisions, and reversing them
+
+```json
+→ {"v":1,"op":"note","kind":"decision","title":"no Pydantic v2 yet",
+   "body":"the mobile serializers depend on v1 coercion"}
+→ {"v":1,"op":"reverse","id":"n_0007","reason":"v2 shipped the compat layer"}
+```
+
+A `decision` is broadcast at high priority and **binds until reversed**. It
+exists so the next front does not relitigate a settled question. `reverse` keeps
+it on the record and stops it binding — the difference between reversing and
+deleting, and the reason a reversed decision stays readable.
+
 #### `notes`
 
 ```json
-→ {"v":1,"op":"notes","tag":"ci"}
+→ {"v":1,"op":"notes","path":"src/app.ts","tag":"ci","kind":"decision","active":true}
 ← {"ok":true,"notes":[…]}
 ```
+
+All four filters are optional and combine.
+
+#### `result` and `results`
+
+```json
+→ {"v":1,"op":"result","key":"bun test","status":"pass",
+   "summary":"200 pass, 0 fail","paths":["src/**","tests/**"]}
+→ {"v":1,"op":"results","fresh":true}
+← {"ok":true,"results":[{"key":"bun test","status":"pass",
+    "staleBecause":"TESTE-CAMPO touched src/state/machine.ts after this ran"}]}
+```
+
+One front runs the suite — minutes of wall clock plus the tokens to read the
+output — and another runs the same suite on the same tree ten minutes later,
+paying both again.
+
+**Staleness is computed on read**, against the touch log: a result goes stale the
+moment anything it depends on is edited, and nothing has to go around
+invalidating anything. A result that declares no `paths` is invalidated by *any*
+edit — the safe default, because it is better to re-run than to trust a stale
+green.
 
 `.parley/notes.md` is **written by the daemon on every accepted `note`**, so the
 versioned file is always current without anyone remembering an export step.

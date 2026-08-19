@@ -455,14 +455,15 @@ export async function refreshAdapter(
   return true;
 }
 
-export interface InitOptions { assumeYes: boolean; json: boolean }
+export interface InitOptions { assumeYes: boolean; json: boolean; create?: boolean }
 
 export async function installClaudeCode(repo: RepoInfo, opts: InitOptions): Promise<void> {
   const claudeDir = join(repo.root, ".claude");
   const detected = existsSync(claudeDir);
-  if (!detected) {
-    // No Claude Code here, but there may well be another harness. Skip this
-    // adapter rather than the whole of init.
+  // `create` is set when the caller knows a session will be opened here even
+  // though there is no .claude/ yet — every folder of a workspace, for
+  // instance, since Claude Code reads the skill from the folder it is opened in.
+  if (!detected && !opts.create) {
     if (!opts.json) process.stdout.write(`parley: no .claude/ in ${repo.root}, skipping the Claude Code adapter.\n`);
     return;
   }

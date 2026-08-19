@@ -31,6 +31,90 @@ Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 
 ---
 
+## Where this fits, and where it does not
+
+The most common reaction to parley is that the problem is already solved — by
+worktrees, by subagents, by an orchestrator. Each of those is good, each of them
+is something to keep using, and none of them covers the case parley was built
+for. The difference is worth being precise about.
+
+### Orchestration assumes a hierarchy. This starts where there is none.
+
+A subagent model — OpenAI's, Anthropic's, anyone's — has a main agent that
+dispatches work to specialised agents, gets results back, and synthesises them.
+There is a parent, and it has a view of the whole: it knows what it asked for,
+who it asked, and what came back.
+
+The problem parley exists for begins exactly where that hierarchy is absent.
+
+Five Claude Code sessions, opened at different times, for different reasons: one
+building a feature, one chasing a bug, one reviewing a PR, one in infra. Usually
+one worktree each. **They are not children of one another, and there is no main
+agent with a global view.** Who is the parent here? There isn't one — and parley
+does not try to invent one.
+
+### It is not a lock protocol
+
+Territory is one part. The rest is presence, conversation, permission, shared
+memory, notes anchored to the files they are about, a record of who touched what,
+and shared command results so one session does not spend minutes and tokens
+rediscovering what another already established.
+
+### Worktrees: keep using them. parley assumes them.
+
+A worktree isolates the working *directory*. It does nothing about two sessions
+creating incompatible migrations, taking conflicting decisions, or one spending
+fifteen minutes discovering something another already knows. Isolation defers a
+conflict to merge time, when it is larger — and isolation is, by definition, the
+opposite of sharing what you learned.
+
+parley was designed **assuming** worktrees: the bus is keyed on the
+`git-common-dir`, which is precisely the point every worktree of a repository
+has in common.
+
+### Subagents: keep using them, and you will need less of this
+
+When you have one well-defined task and want it broken into smaller ones, a
+parent coordinating everything is the right shape — and you need much less of
+parley, because someone already has the view of the whole.
+
+### Orchestrators are not competitors
+
+[Orca](https://github.com/stablyai/orca), [Conductor](https://conductor.build),
+Maestro and the rest organise **who is going to do what**. parley tries to
+coordinate **whoever is already working in that repository**, however that
+session came to exist.
+
+That is not an orchestrator of orchestrators — it controls none of them. It is a
+**shared coordination layer for the repository**. The two compose: run a cockpit
+if you want one, and have parley underneath for the sessions the cockpit did not
+launch.
+
+### About token cost, honestly
+
+For a large task you can decompose top-down, master + subagents is probably
+cheaper: the parent understands the context once and hands each subagent only
+the slice it needs.
+
+That is not how every piece of work starts. When the fronts are independent,
+opened at different moments for different problems, creating a master purely to
+centralise them has its own cost — it has to hold an enormous context,
+understand every front, pass context on correctly, and avoid becoming either a
+bottleneck or a stale picture of the repository. And even under a master, a
+subagent still reads code, follows dependencies and checks its own assumptions.
+The parent reduces that. It does not remove it.
+
+Where parley helps with cost is **amortising discovery across sessions**. If one
+front already worked out a rule, ran an expensive test, or found the trap in a
+particular file, that is available to the next one without rebuilding the context
+from nothing.
+
+So: for one big decomposable task, master and subagents. For several independent,
+long-running fronts, the cost of keeping everything under a single master stops
+being obvious — and that is where this earns its place.
+
+---
+
 ## The one rule
 
 **A broken parley must never stop the work.**
@@ -249,7 +333,8 @@ parley reads it and takes **only the folders it names**:
 ```bash
 cd ~/personal_projects        # where yzilab.code-workspace lives
 parley init --workspace
-parley init                   # and enable the hooks here
+parley init --global          # the hooks, once for every project
+parley init                   # the skill in each member folder
 ```
 
 ```
@@ -266,6 +351,13 @@ parley: /Users/you/personal_projects is now one bus, covering 7 folder(s)
 
 That directory holds twenty other projects; none of them are on this bus. A
 session opened in one of *those* keeps its own repository bus, as it should.
+
+**`parley init` installs the skill into each member folder, not just the root** —
+Claude Code reads it from the folder a session was opened in, and in a workspace
+that is a member, never the root. The `--global` hooks matter more here than
+anywhere else, for the same reason: `.claude/` lives inside each folder and is
+usually gitignored, so per-folder hooks go missing exactly where you did not
+think to look.
 With several workspace files side by side, name the one you mean:
 `parley init --workspace yzilab.code-workspace`. With none at all, it falls back
 to every repository directly inside — say so on purpose, because that is rarely
