@@ -122,33 +122,30 @@ describe("refreshAdapter", () => {
 });
 
 describe("the generated hooks", () => {
-  test("PreToolUse also matches Bash, which is how CLI calls get attributed", () => {
+  test("PreToolUse also matches Bash, which is how CLI calls get attributed", async () => {
     // Not cosmetic: Bash is the tool the agent runs `parley` through. Firing
     // the hook just before it refreshes which session owns this worktree,
     // microseconds before the CLI call reads it. Dropping Bash from this
     // matcher silently reintroduces two sessions sharing one identity.
     const dir = repoWithAdapter("stale", {});
     try {
-      // refreshAdapter writes what this version ships.
-      return refreshAdapter(dir, { assumeYes: true, json: true }).then(() => {
-        const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
-        const pre = settings.hooks.PreToolUse[0];
-        expect(pre.matcher).toContain("Bash");
-        expect(pre.matcher).toContain("Edit");
-        expect(pre.matcher).toContain("Write");
-      });
+      await refreshAdapter(dir, { assumeYes: true, json: true });
+      const settings = JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8"));
+      const pre = settings.hooks.PreToolUse[0];
+      expect(pre.matcher).toContain("Bash");
+      expect(pre.matcher).toContain("Edit");
+      expect(pre.matcher).toContain("Write");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
-  test("the skill tells the agent to announce its name to the person", () => {
+  test("the skill tells the agent to announce its name to the person", async () => {
     const dir = repoWithAdapter("stale", {});
     try {
-      return refreshAdapter(dir, { assumeYes: true, json: true }).then(() => {
-        const skill = readFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), "utf8");
-        expect(skill).toContain("Say who you are, out loud");
-        expect(skill).toContain("parley whoami");
-        expect(skill).toContain("which of their windows you are");
-      });
+      await refreshAdapter(dir, { assumeYes: true, json: true });
+      const skill = readFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), "utf8");
+      expect(skill).toContain("Say who you are, out loud");
+      expect(skill).toContain("parley whoami");
+      expect(skill).toContain("which of their windows you are");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
