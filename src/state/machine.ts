@@ -1,7 +1,7 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
 import { drain, history, say } from "./conversation";
 import { listResults, recordResult } from "./results";
-import { acknowledge, askFront, listQuestions, questionStatus, replyToQuestion } from "./questions";
+import { acknowledge, askFront, listQuestions, markNudged, questionStatus, replyToQuestion } from "./questions";
 import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
@@ -88,6 +88,7 @@ export function apply(
     case "reply": return replyToQuestion(state, actorId, frame, ctx);
     case "questions": return listQuestions(state, actorId, frame, ctx);
     case "ack": return acknowledge(state, actorId, frame, ctx);
+    case "nudged": return markNudged(state, actorId, frame, ctx);
     case "question_status": return questionStatus(state, frame, ctx);
     case "mode": return setMode(state, frame, ctx);
     case "status": return status(state, ctx);

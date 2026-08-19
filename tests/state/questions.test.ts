@@ -252,3 +252,80 @@ describe("waking a front that has stopped", () => {
     expect(body<{ wake: unknown }>(asked.response).wake).toBeNull();
   });
 });
+
+describe("chasing the doorbell until it is rung", () => {
+  const sleeper = () =>
+    apply(state, null, {
+      v: 1, op: "join", name: "DORMINDO", cwd: "/wt/d", session: "d",
+      wake: "uds:/tmp/cc-socks/999.sock",
+    }, at(0));
+
+  test("an unanswered question to a sleeping front keeps asking the asker to wake it", () => {
+    sleeper();
+    apply(state, develop, { v: 1, op: "question", to: "DORMINDO", text: "posso mexer?" }, at(10 * 60_000));
+
+    const first = body<{ need_nudge: { to: string; wake: string }[] }>(
+      apply(state, develop, { v: 1, op: "questions", deliver: true }, at(11 * 60_000)).response,
+    );
+    expect(first.need_nudge).toHaveLength(1);
+    expect(first.need_nudge[0]!.wake).toBe("uds:/tmp/cc-socks/999.sock");
+
+    // It keeps asking — unlike the one-shot nudges, this one is not consumed by
+    // reading it, because nothing has actually happened yet.
+    const second = body<{ need_nudge: unknown[] }>(
+      apply(state, develop, { v: 1, op: "questions", deliver: true }, at(12 * 60_000)).response,
+    );
+    expect(second.need_nudge).toHaveLength(1);
+  });
+
+  test("recording the nudge stops it", () => {
+    sleeper();
+    const id = body<{ question: string }>(
+      apply(state, develop, { v: 1, op: "question", to: "DORMINDO", text: "?" }, at(10 * 60_000)).response,
+    ).question;
+
+    expect(apply(state, develop, { v: 1, op: "nudged", id }, at(11 * 60_000)).response)
+      .toMatchObject({ ok: true, nudged: true });
+
+    expect(body<{ need_nudge: unknown[] }>(
+      apply(state, develop, { v: 1, op: "questions" }, at(12 * 60_000)).response,
+    ).need_nudge).toHaveLength(0);
+  });
+
+  test("only the asker can record it", () => {
+    sleeper();
+    const id = body<{ question: string }>(
+      apply(state, develop, { v: 1, op: "question", to: "DORMINDO", text: "?" }, at(10 * 60_000)).response,
+    ).question;
+    expect(apply(state, taxas, { v: 1, op: "nudged", id }, at(11 * 60_000)).response)
+      .toMatchObject({ error: { code: "NOT_OWNER" } });
+  });
+
+  test("a front that is merely working is never chased about", () => {
+    sleeper();
+    apply(state, develop, { v: 1, op: "question", to: "DORMINDO", text: "?" }, at(0));
+    expect(body<{ need_nudge: unknown[] }>(
+      apply(state, develop, { v: 1, op: "questions" }, at(30_000)).response,
+    ).need_nudge).toHaveLength(0);
+  });
+
+  test("a front with no wake address is not chased, because there is nothing to do", () => {
+    apply(state, null, { v: 1, op: "join", name: "SEM-CANAL", cwd: "/wt/x", session: "x" }, at(0));
+    apply(state, develop, { v: 1, op: "question", to: "SEM-CANAL", text: "?" }, at(10 * 60_000));
+    expect(body<{ need_nudge: unknown[] }>(
+      apply(state, develop, { v: 1, op: "questions" }, at(11 * 60_000)).response,
+    ).need_nudge).toHaveLength(0);
+  });
+
+  test("once answered it stops being chased, nudged or not", () => {
+    sleeper();
+    const id = body<{ question: string }>(
+      apply(state, develop, { v: 1, op: "question", to: "DORMINDO", text: "?" }, at(10 * 60_000)).response,
+    ).question;
+    const target = Object.values(state.participants).find((p) => p.name === "DORMINDO")!;
+    apply(state, target.id, { v: 1, op: "reply", id, text: "pode" }, at(11 * 60_000));
+    expect(body<{ need_nudge: unknown[] }>(
+      apply(state, develop, { v: 1, op: "questions" }, at(12 * 60_000)).response,
+    ).need_nudge).toHaveLength(0);
+  });
+});

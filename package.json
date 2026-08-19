@@ -1,6 +1,6 @@
 {
   "name": "@marcus-campos/parley",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Coordination bus for concurrent agent sessions in one repository",
   "license": "MIT",
   "type": "module",

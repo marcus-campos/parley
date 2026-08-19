@@ -48,6 +48,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley question --to NAME "..." [--wait 60] [--ttl 600]
   parley reply <id> "answer"
   parley ack <id> ["got it, doing X"]
+  parley nudged <id>         record that you woke them, so parley stops asking
   parley questions
   parley drain
   parley history [--limit 200]
@@ -645,12 +646,21 @@ async function main(): Promise<void> {
         return out(p, "parley: answered", r);
       }
 
+      case "nudged": {
+        const id = p.positional[0];
+        if (!id) fail(p, "nudged needs a question id");
+        const r = await send({ op: "nudged", id });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: noted — it will stop reminding you about that one", r);
+      }
+
       case "questions": {
         const r = await send({ op: "questions" });
         if (!r.ok) fail(p, describeError(r));
         const d = r as unknown as {
           owed: { id: string; from: string; text: string; seconds_left: number }[];
           waiting: { id: string; to: string; text: string; seconds_left: number }[];
+          need_nudge: { id: string; to: string; wake: string | null; idle_s: number }[];
         };
         const lines: string[] = [];
         if (d.owed.length) {
@@ -660,6 +670,13 @@ async function main(): Promise<void> {
         if (d.waiting.length) {
           lines.push("  YOU ARE WAITING ON:");
           for (const q of d.waiting) lines.push(`    ${q.id}  you asked ${q.to}: ${q.text}  (${q.seconds_left}s left)`);
+        }
+        if (d.need_nudge?.length) {
+          lines.push("  THEY ARE ASLEEP — ring the doorbell, nothing else can:");
+          for (const q of d.need_nudge) {
+            lines.push(`    ${q.id}  ${q.to} idle ${Math.round(q.idle_s / 60)}m at ${q.wake}`);
+            lines.push(`          then: parley nudged ${q.id}`);
+          }
         }
         return out(p, lines.join("\n") || "parley: no open questions", r);
       }

@@ -186,12 +186,26 @@ export async function runHook(event: string): Promise<void> {
         const q = pending as unknown as {
           undelivered: { id: string; from: string; text: string; seconds_left: number }[];
           unseen_answers: { id: string; from: string; text: string; answer: string }[];
+          need_nudge: { id: string; to: string; text: string; wake: string | null; idle_s: number }[];
         };
         if (q.undelivered.length) {
           parts.push(
             `Another front is blocked waiting on you to answer:\n` +
               q.undelivered.map((x) => `- ${x.from} asks (${x.id}, ${x.seconds_left}s left): ${x.text}`).join("\n") +
               `\nAnswer now: \`parley reply <id> "your answer"\`. If you cannot answer, say so — that unblocks them too.`,
+          );
+        }
+        if (q.need_nudge?.length) {
+          parts.push(
+            `You asked a front that has since gone quiet, and it will not see your\n` +
+              `question until something wakes it. No external process can do that —\n` +
+              `only another session can:\n` +
+              q.need_nudge
+                .map((x) => `- ${x.id}: ${x.to} (idle ${Math.round(x.idle_s / 60)}m) at ${x.wake}\n  you asked: ${x.text}`)
+                .join("\n") +
+              `\nUse your session-message tool now, at that address, saying only that they\n` +
+              `have a parley question and should run \`parley questions\`. Keep the content\n` +
+              `on the bus. Then record it: \`parley nudged <id>\`, so this stops asking.`,
           );
         }
         if (q.unseen_answers.length) {

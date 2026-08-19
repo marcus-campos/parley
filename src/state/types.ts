@@ -140,6 +140,16 @@ export interface Question {
   acknowledgedAtMs: number | null;
   /** Set once it has been pushed hard at the recipient, so it only does so once. */
   deliveredAtMs: number | null;
+  /**
+   * Set when the asker says it rang the recipient's doorbell.
+   *
+   * No external process can wake a Claude Code session — there is no API,
+   * socket or pipe for it, only the harness's own session-to-session tool,
+   * which only another session can call. So parley cannot do the waking; what
+   * it can do is refuse to let the asker forget, and stop nagging once it has
+   * been done.
+   */
+  nudgedAtMs: number | null;
 }
 
 /** A command result worth not running again. */

@@ -192,19 +192,24 @@ exists only inside one conversation is lost to everyone else.
 
 ### Waking a front that has stopped
 
-If \`parley question\` answers with a \`wake\` address, the front you asked has
-been idle a while and will not see your question until it acts again. Do both,
-in this order:
+**No external process can wake a Claude Code session** — there is no API, socket
+or pipe for it. The only thing that can is another session, through your
+session-message tool. So parley carries the question and you ring the doorbell.
 
-1. The question is already on the bus — it stays open and they cannot end their
-   next turn without answering it.
-2. Nudge them with your harness's own session-message tool, at the address
-   parley gave you, saying only "you have a parley question, run
-   \`parley questions\`". Keep the content in parley; the nudge is a doorbell,
-   not the message.
+When \`parley question\` or \`parley questions\` gives you a \`wake\` address, the
+front you asked has gone quiet and will not see anything until something wakes
+it. Three steps, in order:
 
-That way the record lives on the bus, where everyone and every future session
-can see it, and the side channel does the one job parley cannot.
+1. The question is already on the bus, open, and they cannot end their next turn
+   without answering it. Nothing to do.
+2. **Send them a session message at that address**, saying only that they have a
+   parley question and should run \`parley questions\`. Keep the content on the
+   bus — the message is a doorbell, not the letter.
+3. \`parley nudged <id>\` so parley stops reminding you.
+
+Until step 3, every time you try to finish a turn parley will tell you again,
+naming the question and the address. That is deliberate: somebody is waiting on
+an answer that will never arrive unless you do this.
 
 ## Asking another front, and getting an answer
 

@@ -752,11 +752,20 @@ itself. The `Stop` hook keeps a front from *going* idle while it owes an answer,
 which covers the common case — but a session sitting there waiting for its person
 hears nothing until it acts again.
 
-parley will not write to another harness's private socket on a guess: the format
-belongs to the harness, and malformed bytes into somebody's live session is not a
-risk worth taking for a convenience. What it does instead is **hand you the
-doorbell**. A front registers the wake address its harness publishes, and when
-you question one that has gone quiet:
+This is not a shortcut parley is taking. **No external process can inject a
+message into a running Claude Code session** — [the documentation says so][xsm],
+and it is an open feature request ([#24947], [#27441], [#53049]). The per-session
+socket is the harness's own private inbox, reachable only by its own
+session-to-session tool, which only another session can call.
+
+So parley carries the question and the asking agent rings the doorbell — and
+parley **keeps asking until it has been rung**. A front registers the wake
+address its harness publishes, and when you question one that has gone quiet:
+
+[xsm]: https://code.claude.com/docs/en/cross-session-messaging
+[#24947]: https://github.com/anthropics/claude-code/issues/24947
+[#27441]: https://github.com/anthropics/claude-code/issues/27441
+[#53049]: https://github.com/anthropics/claude-code/issues/53049
 
 ```
 parley: asked BUSSOLA (q_0007).
@@ -767,8 +776,14 @@ parley: asked BUSSOLA (q_0007).
 ```
 
 The question stays on the bus, where everyone and every future session can see
-it. The nudge is a doorbell, not the message. A front that is merely working
-gets no such offer — it reads its inbox within seconds anyway.
+it. The message you send is a doorbell, not the letter. Then `parley nudged <id>`
+records that you rang it — and **until you do, every attempt to finish a turn
+tells you again**, naming the question and the address. Somebody is waiting on an
+answer that will not arrive otherwise.
+
+A front that is merely working gets none of this: it reads its inbox within
+seconds anyway. Nor does one with no wake address, because there would be
+nothing to do about it.
 
 For a harness with **no** such tool — Codex, Kimi, Antigravity — this is moot:
 the MCP server holds an open connection, so delivery is immediate and parley is

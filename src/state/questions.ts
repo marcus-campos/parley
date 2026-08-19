@@ -33,7 +33,7 @@ export function askFront(state: State, actorId: string | null, frame: Record<str
     text, at: ctx.now, atMs: ctx.nowMs,
     expiresAtMs: ctx.nowMs + ttlMs,
     answer: null, answeredAtMs: null, answerSeenAtMs: null,
-    acknowledgedAtMs: null, deliveredAtMs: null,
+    acknowledgedAtMs: null, deliveredAtMs: null, nudgedAtMs: null,
   };
   state.questions[question.id] = question;
   me.lastSeenMs = ctx.nowMs;
@@ -176,6 +176,16 @@ export function listQuestions(state: State, actorId: string | null, frame: Recor
   const unseenAnswers = answered.filter((q) => q.answerSeenAtMs === null);
   if (frame.deliver === true) for (const q of unseenAnswers) q.answerSeenAtMs = ctx.nowMs;
 
+  // Questions of yours that are sitting with a front that has gone quiet, and
+  // that you have not woken. parley cannot wake it — only another session can —
+  // so the useful thing it can do is keep saying so until you have.
+  const needNudge = waiting.filter((q) => {
+    if (q.nudgedAtMs !== null) return false;
+    const target = state.participants[q.toId];
+    if (!target || target.delivery === "live" || !target.wake) return false;
+    return ctx.nowMs - target.lastSeenMs > 120_000;
+  });
+
   // Snapshot before marking: the caller needs to know what was undelivered
   // when it asked, not what is left after we stamped it.
   const undelivered = owed.filter((q) => q.deliveredAtMs === null);
@@ -201,12 +211,40 @@ export function listQuestions(state: State, actorId: string | null, frame: Recor
         id: q.id, from: q.toName, text: q.text, answer: q.answer,
         seen: q.answerSeenAtMs !== null,
       })),
+      need_nudge: needNudge.map((q) => ({
+        id: q.id,
+        to: q.toName,
+        text: q.text,
+        wake: state.participants[q.toId]?.wake ?? null,
+        idle_s: Math.round((ctx.nowMs - (state.participants[q.toId]?.lastSeenMs ?? ctx.nowMs)) / 1000),
+      })),
       unseen_answers: unseenAnswers.map((q) => ({
         id: q.id, from: q.toName, text: q.text, answer: q.answer,
       })),
     }),
     broadcast: [],
   };
+}
+
+/**
+ * The asker reporting that it woke the other session.
+ *
+ * Recorded rather than assumed: until it happens, a question to a stopped
+ * session simply sits there, and the asker is the only one who can do anything
+ * about it. Marking it is what lets parley stop reminding.
+ */
+export function markNudged(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+
+  const question = state.questions[String(frame.id ?? "")];
+  if (!question) return { state, response: err("UNKNOWN_OP", "no question with that id"), broadcast: [] };
+  if (question.fromId !== me.id) {
+    return { state, response: err("NOT_OWNER", "you did not ask that question"), broadcast: [] };
+  }
+  question.nudgedAtMs = ctx.nowMs;
+  me.lastSeenMs = ctx.nowMs;
+  return { state, response: ok({ id: question.id, nudged: true }), broadcast: [] };
 }
 
 /** One question by id, so an asker can poll for its answer. */
