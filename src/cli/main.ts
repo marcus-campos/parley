@@ -31,6 +31,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley status              is a daemon up, and what does it hold
   parley stop                shut the daemon down
 
+  parley whoami              which front you are, and where
   parley join --as NAME [--mission "..."]
   parley rename --as NAME [--mission "..."]
   parley leave
@@ -358,7 +359,7 @@ async function main(): Promise<void> {
   }
 
   // Everything below needs a session on the bus.
-  await withSession(parsed, repo, async (client) => {
+  await withSession(parsed, repo, async (client, myId) => {
     const p = parsed;
     const send = (frame: Record<string, unknown>) => client.request(frame);
 
@@ -375,6 +376,25 @@ async function main(): Promise<void> {
       case "leave": {
         const r = await send({ op: "leave" });
         return out(p, "parley: left", r);
+      }
+
+      case "whoami": {
+        const r = await send({ op: "who" });
+        if (!r.ok) fail(p, describeError(r));
+        const me = (r as unknown as { participants: { id: string }[] }).participants
+          .find((x) => x.id === myId);
+        if (!me) return out(p, "parley: not on the bus", { ok: false });
+        const d = me as unknown as {
+          name: string; tag: string; mission: string; branch: string; worktree: string; claims: string[];
+        };
+        return out(
+          p,
+          `You are ${d.name} (${d.tag}) on the parley bus${d.mission ? `, on: ${d.mission}` : ""}.\n` +
+            `  ${[d.branch && `branch ${d.branch}`, d.worktree && `worktree ${d.worktree}`].filter(Boolean).join(" · ")}\n` +
+            `  holding ${d.claims.length} path(s)${d.claims.length ? `: ${d.claims.join(", ")}` : ""}\n` +
+            `Tell the person this name — it is how they know which window you are.`,
+          { ok: true, ...d },
+        );
       }
 
       case "who": {

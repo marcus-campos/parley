@@ -79,7 +79,13 @@ const PARLEY_HOOKS: HookMap = {
   UserPromptSubmit: [{ hooks: [{ type: "command", command: "parley hook UserPromptSubmit", timeout: 5 }] }],
   PreToolUse: [
     {
-      matcher: "Edit|Write|NotebookEdit|MultiEdit",
+      // Bash is in here for a reason that is not obvious: it is the tool the
+      // agent runs `parley` through. Firing the hook just before a Bash call
+      // refreshes the record of which harness session owns this worktree
+      // microseconds before the CLI call reads it — which is what lets two
+      // sessions in the *same* worktree be told apart at all. Territory is
+      // still only settled for the editing tools.
+      matcher: "Edit|Write|NotebookEdit|MultiEdit|Bash",
       hooks: [{ type: "command", command: "parley hook PreToolUse", timeout: 5 }],
     },
   ],
@@ -95,6 +101,23 @@ description: Use when other agent sessions may be working in this same repositor
 
 Other agent sessions can be running in this repository right now, in other
 worktrees. parley is the bus that keeps you from colliding with them.
+
+## Say who you are, out loud
+
+Two things, early, and they are not optional:
+
+\`\`\`
+parley rename --as SHORTNAME --mission "what you are here to do"
+parley whoami
+\`\`\`
+
+The name you joined with was derived from the branch, and **every session on
+that branch derives the same one** — so it tells nobody anything.
+
+Then **tell the person which name you are using**, in your own reply, in one
+line: *"I'm on parley as TAXAS."* They are watching several sessions at once and
+the panel shows names, not windows — without you saying it, they cannot tell
+which of their windows you are. Say it again if you rename.
 
 ## See who is here first
 

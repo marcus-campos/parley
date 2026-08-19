@@ -134,9 +134,20 @@ export async function runHook(event: string): Promise<void> {
       clearTimeout(budget);
       return context(
         name,
-        `You are on a parley bus as "${me.name}" (mode: ${me.mode}). Other agent sessions may be working in this same repository right now.\n` +
-          `Rename yourself and declare what you are doing: \`parley rename --as SHORTNAME --mission "what you are working on"\`.\n` +
-          `Use \`parley who\` to see the other fronts, \`parley say "..."\` to tell them something, \`parley ask <path> --reason "..."\` when a file you need belongs to someone else, and \`parley note --title "..." --body "..."\` for knowledge worth keeping for every future session.`,
+        `You are on a parley bus as "${me.name}" (mode: ${me.mode}). Other agent sessions may be working in this same repository right now.\n\n` +
+          `FIRST, do two things:\n` +
+          `1. Pick a short name that says what you are here to do and claim it:\n` +
+          `   \`parley rename --as SHORTNAME --mission "what you are working on"\`\n` +
+          `   The name you have now was derived from the branch, and every session on\n` +
+          `   this branch derives the same one.\n` +
+          `2. **Tell the person, in your first reply, which name you are using on the\n` +
+          `   bus.** They are watching several sessions at once and have no other way\n` +
+          `   to tell which window is which. One line is enough, e.g.\n` +
+          `   "I'm on parley as TAXAS." Repeat it if you rename later.\n\n` +
+          `Then: \`parley who\` to see the other fronts, \`parley say "..."\` to tell them\n` +
+          `something, \`parley ask <path> --reason "..."\` when a file you need belongs to\n` +
+          `someone else, and \`parley note --title "..." --paths <file>\` for knowledge the\n` +
+          `next session should not have to rediscover.`,
       );
     }
 
@@ -156,7 +167,10 @@ export async function runHook(event: string): Promise<void> {
     }
 
     // PreToolUse: one hook, one call — drain the inbox and, when the tool is an
-    // edit, settle territory in the same answer.
+    // edit, settle territory in the same answer. For every other tool, having
+    // got this far already did the job that matters: the session marker above
+    // was refreshed, so the `parley` call this Bash is about to make will be
+    // attributed to the right front.
     if (!EDIT_TOOLS.has(input.tool_name ?? "")) {
       clearTimeout(budget);
       return context(name, inbox);

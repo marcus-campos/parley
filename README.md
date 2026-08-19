@@ -231,9 +231,9 @@ For Claude Code it installs four hooks in `.claude/settings.json` and a skill in
 
 | Hook | What it does |
 |---|---|
-| `SessionStart` | Joins the bus under a name derived from the worktree or branch, then tells the agent to rename itself and declare a mission. An agent that forgets to introduce itself still shows up in `who` instead of being a ghost editing files. |
+| `SessionStart` | Joins under a name derived from the worktree or branch, then tells the agent to rename itself, declare a mission, **and say that name to you in its first reply** — you are watching several windows and the panel shows names, not windows. |
 | `UserPromptSubmit` | Drains the inbox and injects it as context. |
-| `PreToolUse` | One hook, one call: drains the inbox and, when the tool is `Edit`/`Write`/`NotebookEdit`, settles territory in the same answer. |
+| `PreToolUse` | One hook, one call: drains the inbox and, when the tool is `Edit`/`Write`/`NotebookEdit`, settles territory in the same answer. It also matches `Bash` — the tool the agent runs `parley` through — so the record of which session owns this worktree is refreshed microseconds before a CLI call reads it. That is what lets two sessions in the *same* worktree be told apart. |
 | `SessionEnd` | Leaves and hands territory back. |
 
 The skill is the other half: hooks handle what should be automatic (territory,
@@ -268,6 +268,7 @@ Claude Code. See the compatibility matrix below.
 ```
 parley init | uninit | doctor | status | stop | update
 
+parley whoami
 parley join --as NAME [--mission "..."]
 parley rename --as NAME [--mission "..."]
 parley leave
