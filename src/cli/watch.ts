@@ -111,7 +111,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
   const joined = await client.request({
     op: "join", name, mission: "watching", harness: "panel",
-    cwd: repo.root, kind: "human", connected: true,
+    cwd: repo.cwd, kind: "human", connected: true,
   });
   if (!joined.ok) {
     client.close();

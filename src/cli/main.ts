@@ -118,16 +118,16 @@ async function withSession(
     throw e;
   }
 
-  const identity = resolveIdentity(repo.root, process.cwd(), flagString(parsed.flags, "as"));
+  const identity = resolveIdentity(repo.cwd, repo.cwd, flagString(parsed.flags, "as"));
   let response = await client.request({
     op: "join",
     name: identity.name,
     mission: flagString(parsed.flags, "mission", identity.mission),
     harness: identity.harness,
-    cwd: repo.root,
+    cwd: repo.cwd,
     kind: parsed.flags.human ? "human" : "agent",
     branch: identity.branch,
-    session: sessionFor(repo.gitCommonDir, repo.root),
+    session: sessionFor(repo.discoveryDir, repo.cwd),
   });
 
   // A derived name that collides takes the suggestion rather than failing: the
@@ -138,10 +138,10 @@ async function withSession(
       name: String(response.error.suggestion),
       mission: flagString(parsed.flags, "mission", identity.mission),
       harness: identity.harness,
-      cwd: repo.root,
+      cwd: repo.cwd,
       kind: "agent",
       branch: identity.branch,
-      session: sessionFor(repo.gitCommonDir, repo.root),
+      session: sessionFor(repo.discoveryDir, repo.cwd),
     });
   }
   if (!response.ok) {
@@ -370,7 +370,18 @@ async function main(): Promise<void> {
 
     case "adapters": {
       const { pruneRegistry } = await import("../adapters/registry");
-      const repos = pruneRegistry();
+      const { readWorkspaceMarker } = await import("../repo/workspace");
+
+      // A workspace stands for its member folders, which is where the skills
+      // live — Claude Code reads them from the folder a session was opened in.
+      // Listing the root instead reports "not installed" for a setup that is
+      // perfectly fine, and lists it twice when it is registered twice.
+      const seen = new Set<string>();
+      const repos = pruneRegistry().flatMap((r) => {
+        const marker = readWorkspaceMarker(r.root);
+        const roots = marker ? marker.members : [r.root];
+        return roots.filter((root) => !seen.has(root) && seen.add(root)).map((root) => ({ ...r, root }));
+      });
       if (repos.length === 0) {
         return out(parsed, "parley: no project has been set up yet (run: parley init)", { ok: true, repos: [] });
       }

@@ -93,19 +93,19 @@ export async function runHook(event: string): Promise<void> {
     throw e;
   }
 
-  const identity = resolveIdentity(repo.root, input.cwd ?? process.cwd());
+  const identity = resolveIdentity(repo.cwd, repo.cwd);
   // The harness session id is what keeps this front the same front across
   // every tool call, and across the rename the agent is asked to do.
   const session = input.session_id ?? process.env.PARLEY_SESSION ?? "";
   let joined = await client.request({
     op: "join", name: identity.name, mission: identity.mission,
-    harness: "claude-code", cwd: repo.root, kind: "agent",
+    harness: "claude-code", cwd: repo.cwd, kind: "agent",
     branch: identity.branch, session,
   });
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
     joined = await client.request({
       op: "join", name: String(joined.error.suggestion), mission: identity.mission,
-      harness: "claude-code", cwd: repo.root, kind: "agent",
+      harness: "claude-code", cwd: repo.cwd, kind: "agent",
       branch: identity.branch, session,
     });
   }
@@ -114,7 +114,7 @@ export async function runHook(event: string): Promise<void> {
   // Write down which harness session owns this worktree, so the CLI calls the
   // agent makes through its shell can claim the same identity.
   if (session) {
-    rememberSession(repo.gitCommonDir, repo.root, {
+    rememberSession(repo.discoveryDir, repo.cwd, {
       session,
       name: (joined as unknown as { name: string }).name,
       at: new Date().toISOString(),

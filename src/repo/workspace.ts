@@ -183,5 +183,6 @@ export function findWorkspaceScope(cwd: string): RepoInfo | null {
     repoId: repoId(canonical),
     discoveryDir: join(root, ".parley"),
     scope: "workspace",
+    cwd: here,
   };
 }

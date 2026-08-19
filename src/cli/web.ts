@@ -103,7 +103,7 @@ export async function runWebPanel(
   const client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir });
   const joined = await client.request({
     op: "join", name, mission: "watching (web)", harness: "panel",
-    cwd: repo.root, kind: "human", connected: true,
+    cwd: repo.cwd, kind: "human", connected: true,
   });
   if (!joined.ok) {
     client.close();

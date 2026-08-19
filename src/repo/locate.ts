@@ -8,6 +8,14 @@ export interface RepoInfo {
   discoveryDir: string;
   /** "repository" or "workspace" — what one bus covers here. */
   scope: "repository" | "workspace";
+  /**
+   * Where this session actually is, which in a workspace is a member folder
+   * and not the root. Territory is relative to `root`; identity, the derived
+   * name and "which folder is this front in" all come from here. Sending the
+   * root for everybody made every front report the same place and collapse
+   * onto the same derived name.
+   */
+  cwd: string;
   /** Working-tree root of the current worktree. */
   root: string;
   /** Shared across every worktree of the repository — this is the bus identity. */
@@ -53,5 +61,6 @@ export function locateRepo(cwd: string = process.cwd()): RepoInfo {
     root, gitCommonDir, canonical, repoId: repoId(canonical),
     discoveryDir: resolve(gitCommonDir, "parley"),
     scope: "repository",
+    cwd: resolve(cwd),
   };
 }

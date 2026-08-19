@@ -372,16 +372,16 @@ export async function runMcpServer(): Promise<void> {
       throw e;
     }
     if (!joined) {
-      const identity = resolveIdentity(repo.root, repo.root);
+      const identity = resolveIdentity(repo.cwd, repo.cwd);
       let response = await client.request({
         op: "join", name: identity.name, mission: identity.mission,
-        harness: identity.harness, cwd: repo.root, kind: "agent", branch: identity.branch,
+        harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
         connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
       });
       if (!response.ok && response.error.code === "NAME_TAKEN" && "suggestion" in response.error) {
         response = await client.request({
           op: "join", name: String(response.error.suggestion), mission: identity.mission,
-          harness: identity.harness, cwd: repo.root, kind: "agent", branch: identity.branch,
+          harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
           connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
         });
       }
