@@ -390,7 +390,7 @@ export function adapterStatus(repoRoot: string): AdapterStatus {
 /** Rewrite the skill and hooks to what this version ships. */
 export async function refreshAdapter(
   repoRoot: string,
-  opts: { assumeYes: boolean; json: boolean; gitCommonDir?: string },
+  opts: { assumeYes: boolean; json: boolean; gitCommonDir?: string; silent?: boolean },
 ): Promise<boolean> {
   const status = adapterStatus(repoRoot);
   if (!status.installed) return false;
@@ -426,7 +426,7 @@ export async function refreshAdapter(
   writeFileSync(status.skillPath, SKILL, "utf8");
   if (opts.gitCommonDir) enableForRepo(opts.gitCommonDir);
 
-  hookOutput(opts.json, "parley: adapter refreshed.", { ok: true, refreshed: true });
+  if (!opts.silent) hookOutput(opts.json, "parley: adapter refreshed.", { ok: true, refreshed: true });
   return true;
 }
 

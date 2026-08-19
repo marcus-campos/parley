@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -124,12 +125,11 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     );
     // Up to date does not mean installed-and-up-to-date: someone who updated
     // the binary by hand still has the old skill sitting in the repository.
-    if (!opts.checkOnly && opts.repoRoot) {
-      const { refreshAdapter } = await import("../adapters/claude-code");
-      await refreshAdapter(opts.repoRoot, {
-        assumeYes: opts.assumeYes, json: opts.json,
-        gitCommonDir: opts.gitCommonDir ?? undefined,
-      });
+    // Already the latest binary, so this process *is* the current version and
+    // can write the adapters itself.
+    if (!opts.checkOnly) {
+      const { refreshAllAdapters } = await import("../adapters/install");
+      await refreshAllAdapters({ assumeYes: opts.assumeYes, json: opts.json });
     }
     return;
   }
@@ -227,16 +227,20 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     { ok: true, from: VERSION, to: latest, daemon_stopped: stopped },
   );
 
-  // The binary is only half the install. The hooks and the skill were written
-  // by whatever version ran `init`, and the skill is what the agent actually
-  // reads — the stalest part of the install should not be the instructions.
-  if (opts.repoRoot) {
-    const { refreshAdapter } = await import("../adapters/claude-code");
-    await refreshAdapter(opts.repoRoot, {
-      assumeYes: opts.assumeYes, json: opts.json,
-      gitCommonDir: opts.gitCommonDir ?? undefined,
+  // The binary is only half the install: the hooks and the skill were written
+  // by whatever version ran `init`, and the skill is what the agent reads.
+  //
+  // Handing this to a fresh process is not tidiness. This process still holds
+  // the *previous* version's skill text in memory — writing it from here put
+  // last version's instructions on disk, and only a second `parley update`
+  // fixed them. One run should be enough.
+  await new Promise<void>((resolve) => {
+    const child = spawn(binary, ["__refresh-adapters", ...(opts.assumeYes ? ["--yes"] : []), ...(opts.json ? ["--json"] : [])], {
+      stdio: "inherit",
     });
-  }
+    child.on("close", () => resolve());
+    child.on("error", () => resolve());
+  });
 }
 
 export function binaryMtime(): string | null {

@@ -69,6 +69,18 @@ export async function runHook(event: string): Promise<void> {
   // where parley was never set up is what makes that safe.
   if (!isEnabledForRepo(repo.gitCommonDir)) { clearTimeout(budget); return emit({}); }
 
+  // Repositories set up before the registry existed have the marker but are not
+  // listed, so `parley update` would skip them. Registering here costs one file
+  // write per session start and needs nobody to re-run `init`.
+  if (name === "SessionStart") {
+    try {
+      const { readRegistry, registerRepo } = await import("./registry");
+      if (!readRegistry().some((r) => r.gitCommonDir === repo.gitCommonDir)) {
+        registerRepo(repo.gitCommonDir, repo.root);
+      }
+    } catch { /* the registry is a convenience, never a blocker */ }
+  }
+
   let client: ParleyClient;
   try {
     client = await ParleyClient.connect({ gitCommonDir: repo.gitCommonDir, timeoutMs: 2_000 });

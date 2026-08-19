@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import type { RepoInfo } from "../repo/locate";
+import { forgetRepo, registerRepo } from "./registry";
 import {
   disableForRepo, enableForRepo, installClaudeCode, installGlobalHooks,
   isEnabledForRepo, removeGlobalHooks, uninstallClaudeCode, writeGlobalHooks,
@@ -66,8 +67,10 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
 
   await installClaudeCode(repo, opts);
   // Every worktree of this repository shares the marker, so enabling it here
-  // enables it for all of them.
+  // enables it for all of them. The registry is what lets one `parley update`
+  // reach every project instead of only the one you are standing in.
   enableForRepo(repo.gitCommonDir);
+  registerRepo(repo.gitCommonDir, repo.root);
   if (!opts.json && !opts.global) {
     process.stdout.write(`\nparley: enabled for this repository and all ${""}of its worktrees.\n`);
   }
@@ -140,6 +143,7 @@ export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: 
     }
   }
   disableForRepo(repo.gitCommonDir);
+  forgetRepo(repo.gitCommonDir);
   await uninstallClaudeCode(repo, opts);
 
   const removed: string[] = [];
@@ -157,4 +161,51 @@ export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: 
     process.stdout.write(`parley: removed the MCP entry from ${removed.join(", ")}.\n`);
     process.stdout.write("parley: the parley section in AGENTS.md was left in place — delete it by hand if you want it gone.\n");
   }
+}
+
+/**
+ * Bring every registered repository's hooks and skill up to this version.
+ *
+ * Run as a separate process by `parley update`, deliberately: the updater has
+ * already replaced the binary on disk, but its own memory still holds the
+ * previous version's skill text. Writing from there produced the odd situation
+ * where you had to run the update twice for the instructions to land.
+ */
+export async function refreshAllAdapters(opts: { assumeYes: boolean; json: boolean }): Promise<void> {
+  const { adapterStatus, refreshAdapter } = await import("./claude-code");
+  const { pruneRegistry } = await import("./registry");
+
+  const repos = pruneRegistry();
+  const stale = repos.filter((r) => {
+    const status = adapterStatus(r.root);
+    return status.installed && (!status.skillCurrent || !status.hooksCurrent);
+  });
+
+  if (stale.length === 0) {
+    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed: [] })}\n`);
+    else if (repos.length) process.stdout.write(`parley: all ${repos.length} project(s) are current.\n`);
+    return;
+  }
+
+  if (!opts.json) {
+    process.stdout.write(`\nparley: ${stale.length} project(s) have hooks or a skill from an older version:\n`);
+    for (const r of stale) process.stdout.write(`        ${r.root}\n`);
+    process.stdout.write("        The skill is what the agent reads, so this is the part that matters.\n");
+  }
+
+  if (!opts.assumeYes && !(await confirm("Refresh all of them?"))) {
+    if (!opts.json) process.stdout.write("parley: left them as they are.\n");
+    return;
+  }
+
+  const refreshed: string[] = [];
+  for (const r of stale) {
+    const done = await refreshAdapter(r.root, {
+      assumeYes: true, json: true, silent: true, gitCommonDir: r.gitCommonDir,
+    });
+    if (done) refreshed.push(r.root);
+  }
+
+  if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed })}\n`);
+  else process.stdout.write(`parley: refreshed ${refreshed.length} project(s).\n`);
 }

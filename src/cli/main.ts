@@ -150,6 +150,18 @@ async function withSession(
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
 
+  // Hidden: run by `parley update` after it has replaced the binary, so the
+  // adapters are written by the NEW code. The process doing the update still
+  // has the old skill text in memory — refreshing from there wrote last
+  // version's instructions, which is why an update used to need running twice.
+  if (argv[0] === "__refresh-adapters") {
+    const { refreshAllAdapters } = await import("../adapters/install");
+    return refreshAllAdapters({
+      assumeYes: argv.includes("--yes"),
+      json: argv.includes("--json"),
+    });
+  }
+
   // The MCP server: stdio JSON-RPC, for every harness without a pre-tool gate.
   if (argv[0] === "mcp") {
     const { runMcpServer } = await import("../mcp/server");
