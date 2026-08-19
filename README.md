@@ -733,6 +733,31 @@ reads it back onto the bus, which is how a fresh clone picks up what the team
 already knows. parley never commits for you — a human or an agent commits it,
 on purpose.
 
+### How fast a message actually lands
+
+`parley who` says this per front, because it is not the same for all of them and
+it is what you need before deciding to wait:
+
+| | |
+|---|---|
+| **live** | Holds an open connection — an MCP server, or a panel. Pushed to immediately. |
+| **hooks** | An ephemeral CLI front. Reads its inbox on its next tool call: seconds while it is working, and **not until its person prompts it again once it has stopped**. |
+| **manual** | A plain shell. Reads when somebody runs `parley` there. |
+
+`parley question` reports the same thing when you ask, so you wait on purpose
+rather than in the dark.
+
+**The one thing parley cannot do** is wake a session that has already stopped.
+The `Stop` hook keeps a front from *going* idle while it owes an answer, which
+covers the common case — but a session sitting there waiting for its person will
+not hear anything until it acts again. A harness with a direct session-to-session
+message tool can do that; parley will not pretend to, and will not write to
+another harness's private socket on a guess.
+
+For a harness with **no** such tool — Codex, Kimi, Antigravity — this is moot:
+the MCP server holds an open connection, so delivery is immediate and parley is
+the only channel there is.
+
 ### Presence, and what happens when a session dies
 
 Presence comes from two sources, because both exist in practice:

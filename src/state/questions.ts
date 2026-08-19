@@ -46,9 +46,26 @@ export function askFront(state: State, actorId: string | null, frame: Record<str
     text: `[question ${question.id}] ${text}`,
   });
 
+  // Telling the asker how this lands is the difference between waiting on
+  // purpose and waiting in the dark — which is what makes somebody reach for a
+  // side channel instead.
+  const idle = Math.round((ctx.nowMs - target.lastSeenMs) / 1000);
+  const reach =
+    target.delivery === "live"
+      ? "they hold an open connection, so it is already in front of them"
+      : idle > 120
+        ? `they read their inbox on their next tool call, and have been idle ${Math.round(idle / 60)}m — this may sit for a while`
+        : "they read their inbox on their next tool call, usually within seconds";
+
   return {
     state,
-    response: ok({ question: question.id, to: target.name, expires_at: new Date(question.expiresAtMs).toISOString() }),
+    response: ok({
+      question: question.id,
+      to: target.name,
+      delivery: target.delivery,
+      reach,
+      expires_at: new Date(question.expiresAtMs).toISOString(),
+    }),
     broadcast: [event],
   };
 }

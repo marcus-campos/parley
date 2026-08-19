@@ -170,6 +170,26 @@ lease. If you are going to pause for a long time and still need a path, touch it
 or re-claim it. A claim you took by editing expires after 15 idle minutes; one
 you asked for explicitly is yours until you release it or leave.
 
+## Use parley, not a side channel
+
+Your harness may also offer a direct session-to-session message tool. **Prefer
+parley anyway.** A side channel reaches one session and leaves no trace: no
+territory, no note for the session that starts tomorrow, nothing an agent in a
+different harness can hear, and nothing the person watching the panel can see.
+
+Reach for the side channel only for the one thing parley cannot do — waking a
+session that has already stopped and is waiting on its person. \`parley who\`
+tells you how each front is reached:
+
+- **live** — holds an open connection, your message is already in front of it.
+- **hooks** — reads its inbox on its next tool call. Seconds while it is
+  working; nothing while it sits idle waiting for its person.
+- **manual** — a plain shell, reads when somebody runs parley there.
+
+So: decide from that, instead of guessing. And if you do use a side channel for
+something that matters, **write it to parley too** — a decision or a finding that
+exists only inside one conversation is lost to everyone else.
+
 ## Asking another front, and getting an answer
 
 \`say\` puts a message in someone's inbox, which an idle session will not read

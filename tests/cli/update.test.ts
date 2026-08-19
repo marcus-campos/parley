@@ -186,3 +186,22 @@ describe("knowing whether the skill actually updated", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("what the skill tells the agent about channels", () => {
+  test("it says to prefer parley over a side channel, and why", async () => {
+    // Two sessions used the harness's own socket instead of parley and one of
+    // them said why: it did not know parley would reach. The skill has to
+    // answer that before it comes up.
+    const dir = repoWithAdapter("stale", {});
+    try {
+      await refreshAdapter(dir, { assumeYes: true, json: true, silent: true });
+      const skill = readFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), "utf8");
+      expect(skill).toContain("Use parley, not a side channel");
+      expect(skill).toContain("leaves no trace");
+      // And it must say how to tell whether a front is reachable now.
+      expect(skill).toContain("live");
+      expect(skill).toContain("hooks");
+      expect(skill).toContain("write it to parley too");
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

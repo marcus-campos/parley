@@ -138,6 +138,9 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     lastSeenMs: ctx.nowMs,
     connected: frame.connected === true,
     gone: false,
+    // A front that holds the connection open is pushed to; one that connects,
+    // speaks and exits reads its inbox on its next call.
+    delivery: frame.connected === true ? "live" : frame.harness === "shell" ? "manual" : "hooks",
   };
   state.participants[id] = participant;
 

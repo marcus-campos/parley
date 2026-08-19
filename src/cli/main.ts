@@ -574,6 +574,7 @@ async function main(): Promise<void> {
           return [
             `  ${String(x.name).padEnd(24)} ${String(x.tag)}  ${String(x.mission || "-").padEnd(30)} ${String(x.idle_s)}s idle  ${claims.length} claim(s)`,
             `    ${place}`,
+            `    reaches ${String(x.reach)}`,
           ];
         });
         return out(p, `parley (${data.mode})\n${rows.join("\n")}`, r);
@@ -589,8 +590,13 @@ async function main(): Promise<void> {
         if (!r.ok) fail(p, describeError(r));
         const id = (r as unknown as { question: string }).question;
 
+        const reach = (r as unknown as { reach?: string }).reach ?? "";
         if (wait <= 0) {
-          return out(p, `parley: asked ${to} (${id}). They will be interrupted before going idle.`, r);
+          return out(
+            p,
+            `parley: asked ${to} (${id}).\n  ${reach}\n  They cannot finish their turn without answering you.`,
+            r,
+          );
         }
 
         // Poll rather than hold the socket open: the daemon answers in

@@ -19,6 +19,12 @@ export interface Participant {
   /** Left explicitly, or the lease expired. Kept for name reuse on restart. */
   gone: boolean;
   /**
+   * How fast a message reaches this front, which is not the same for all of
+   * them and is the thing an agent actually needs to know before deciding
+   * whether to wait for an answer.
+   */
+  delivery: "live" | "hooks" | "manual";
+  /**
    * Opaque, stable for the lifetime of one agent session — the harness session
    * id where there is one. This, not the name, is what identity is keyed on.
    */
@@ -208,6 +214,11 @@ export function actorOf(state: State, id: string | null): Participant | undefine
   return p && !p.gone ? p : undefined;
 }
 
+/** Seconds since this front last did anything. */
+function idleSeconds(p: Participant, ctx: Ctx): number {
+  return Math.max(0, Math.round((ctx.nowMs - p.lastSeenMs) / 1000));
+}
+
 export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
   return {
     id: p.id,
@@ -216,6 +227,21 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
     harness: p.harness,
     kind: p.kind,
     branch: p.branch,
+    delivery: p.delivery,
+    /**
+     * Plain-language version of the same thing. "live" holds an open
+     * connection and is pushed to immediately; "hooks" is an ephemeral CLI
+     * front that reads its inbox on its next tool call — seconds while it is
+     * working, and not until its person prompts it again once it has stopped.
+     */
+    reach:
+      p.delivery === "live"
+        ? "immediately — holds an open connection"
+        : p.delivery === "hooks"
+          ? idleSeconds(p, ctx) > 120
+            ? "on its next tool call; it has been idle a while, so possibly not soon"
+            : "on its next tool call, usually within seconds"
+          : "only when someone runs parley there",
     // The last segment of the path is what a person recognises a worktree by.
     worktree: p.cwd ? p.cwd.split("/").filter(Boolean).slice(-1)[0] ?? "" : "",
     // Enough of the id to tell two fronts apart at a glance, and stable.
