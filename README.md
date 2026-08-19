@@ -243,20 +243,33 @@ workspace: a session then edits several repositories, joins whichever bus its
 working directory happens to sit in, and two sessions working across the same
 set of projects never see each other.
 
-Make the directory that holds them the bus instead:
+Make the workspace itself the bus. Run this beside the `.code-workspace` file —
+parley reads it and takes **only the folders it names**:
 
 ```bash
-cd ~/personal_projects        # the folder your workspace points at
+cd ~/personal_projects        # where yzilab.code-workspace lives
 parley init --workspace
 parley init                   # and enable the hooks here
 ```
 
 ```
-parley: /Users/you/personal_projects is now one bus, covering 3 repositories:
-        backend
-        frontend
-        mobile
+parley: /Users/you/personal_projects is now one bus, covering 7 folder(s)
+        from yzilab.code-workspace:
+        yzilab
+        yzilab-front
+        yzilab-logistic
+        yzilab-logistic-mobile
+        yzilab-interfacing
+        animalex-site
+        yzilab-extension
 ```
+
+That directory holds twenty other projects; none of them are on this bus. A
+session opened in one of *those* keeps its own repository bus, as it should.
+With several workspace files side by side, name the one you mean:
+`parley init --workspace yzilab.code-workspace`. With none at all, it falls back
+to every repository directly inside — say so on purpose, because that is rarely
+what you want.
 
 Territory then reads `backend/src/app.ts` — unambiguous, and how a person would
 say it. The hooks prefix it for you: editing `frontend/src/plans.tsx` from a

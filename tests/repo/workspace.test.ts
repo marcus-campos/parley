@@ -24,7 +24,7 @@ describe("a multi-root workspace as one bus", () => {
   test("a session anywhere inside lands on the same bus", () => {
     const root = workspace(["backend", "frontend"]);
     try {
-      markAsWorkspace(root);
+      markAsWorkspace(root, { file: null, members: membersOf(root).map((m) => join(root, m)), at: "" });
       const fromBackend = findWorkspaceScope(join(root, "backend"));
       const fromFrontend = findWorkspaceScope(join(root, "frontend", "src"));
       expect(fromBackend?.repoId).toBe(fromFrontend!.repoId);
@@ -48,8 +48,8 @@ describe("a multi-root workspace as one bus", () => {
     const outer = workspace(["a"]);
     try {
       const inner = join(outer, "a");
-      markAsWorkspace(outer);
-      markAsWorkspace(inner);
+      markAsWorkspace(outer, { file: null, members: [join(outer, "a")], at: "" });
+      markAsWorkspace(inner, { file: null, members: [inner], at: "" });
       expect(findWorkspaceRoot(join(inner, "src"))).toBe(inner);
     } finally { rmSync(outer, { recursive: true, force: true }); }
   });
@@ -57,8 +57,72 @@ describe("a multi-root workspace as one bus", () => {
   test("parley files live in .parley/ at the workspace root", () => {
     const root = workspace(["a"]);
     try {
-      markAsWorkspace(root);
+      markAsWorkspace(root, { file: null, members: membersOf(root).map((m) => join(root, m)), at: "" });
       expect(findWorkspaceScope(root)?.discoveryDir).toBe(join(root, ".parley"));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+import { parseWorkspaceFile, readWorkspaceFile, findWorkspaceScope as scopeOf } from "../../src/repo/workspace";
+
+describe("reading a .code-workspace", () => {
+  test("takes only the folders it names, not everything in the directory", () => {
+    // The real case: 7 folders in the workspace, 22 directories on disk.
+    const root = workspace(["yzilab", "yzilab-front", "animalex-site", "unrelated", "another"]);
+    try {
+      const file = join(root, "yzilab.code-workspace");
+      writeFileSync(file, JSON.stringify({
+        folders: [{ name: "yzilab", path: "yzilab" }, { path: "yzilab-front" }, { path: "animalex-site" }],
+      }), "utf8");
+
+      const read = readWorkspaceFile(file)!;
+      expect(read.root).toBe(root);
+      expect(read.members.map((m) => m.split("/").pop())).toEqual(["yzilab", "yzilab-front", "animalex-site"]);
+      expect(read.members.some((m) => m.endsWith("/unrelated"))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("a folder that is not a member keeps its own bus", () => {
+    const root = workspace(["member", "outsider"]);
+    try {
+      markAsWorkspace(root, { file: null, members: [join(root, "member")], at: "" });
+      expect(scopeOf(join(root, "member", "src"))?.root).toBe(root);
+      // The whole point: `outsider` lives under the marked directory and is
+      // still not part of this workspace.
+      expect(scopeOf(join(root, "outsider"))).toBeNull();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("comments and trailing commas do not defeat it", () => {
+    // VS Code accepts these, so refusing them would be refusing a valid file.
+    const text = `{
+      // the projects we work on together
+      "folders": [
+        { "path": "a" },
+        { "path": "b" }, /* and b */
+      ],
+    }`;
+    expect(parseWorkspaceFile(text)).toEqual(["a", "b"]);
+  });
+
+  test("a workspace whose folders sit above the file still gets one root", () => {
+    const root = workspace(["one", "two"]);
+    try {
+      const nested = join(root, "one");
+      const file = join(nested, "shared.code-workspace");
+      writeFileSync(file, JSON.stringify({ folders: [{ path: "." }, { path: "../two" }] }), "utf8");
+      const read = readWorkspaceFile(file)!;
+      expect(read.root).toBe(root);
+      expect(read.members.map((m) => m.split("/").pop()).sort()).toEqual(["one", "two"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("a file with no folders is refused rather than making an empty bus", () => {
+    const root = workspace(["a"]);
+    try {
+      const file = join(root, "empty.code-workspace");
+      writeFileSync(file, JSON.stringify({ folders: [] }), "utf8");
+      expect(readWorkspaceFile(file)).toBeNull();
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

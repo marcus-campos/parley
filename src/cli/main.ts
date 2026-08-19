@@ -234,25 +234,60 @@ async function main(): Promise<void> {
   // Marking a workspace happens before repository lookup, because the whole
   // point is that the directory is not itself a repository.
   if (parsed.command === "init" && parsed.flags.workspace) {
-    const { markAsWorkspace, membersOf, findWorkspaceRoot } = await import("../repo/workspace");
+    const {
+      findWorkspaceRoot, markAsWorkspace, membersOf, readWorkspaceFile, workspaceFilesIn,
+    } = await import("../repo/workspace");
     const here = process.cwd();
-    const already = findWorkspaceRoot(here);
-    if (already && already !== here) {
+
+    // A .code-workspace names its folders, and the directory holding them
+    // usually holds a dozen others that have nothing to do with it. Reading the
+    // file is the difference between "these seven projects" and "everything on
+    // this disk".
+    const given = flagString(parsed.flags, "workspace");
+    const candidates = given && given !== "true" ? [given] : workspaceFilesIn(here);
+
+    let root = here;
+    let members: string[] = [];
+    let file: string | null = null;
+
+    if (candidates.length > 1 && !given) {
+      return fail(
+        parsed,
+        `several workspace files here — say which:\n` +
+          candidates.map((c) => `  parley init --workspace ${c.split("/").pop()}`).join("\n"),
+      );
+    }
+    if (candidates.length === 1) {
+      const read = readWorkspaceFile(candidates[0]!);
+      if (!read) return fail(parsed, `could not read any folders from ${candidates[0]}`);
+      file = candidates[0]!;
+      root = read.root;
+      members = read.members;
+    } else {
+      // No workspace file: fall back to every repository directly inside.
+      members = membersOf(here).map((m) => `${here}/${m}`);
+      if (members.length === 0) {
+        return fail(parsed, `no .code-workspace file and no git repositories directly inside ${here}.`);
+      }
+    }
+
+    const already = findWorkspaceRoot(root);
+    if (already && already !== root) {
       return fail(parsed, `${already} is already a parley workspace, and this is inside it.`);
     }
-    const members = membersOf(here);
-    if (members.length === 0) {
-      return fail(parsed, `no git repositories directly inside ${here} — nothing to put on one bus.`);
-    }
-    markAsWorkspace(here);
+
+    markAsWorkspace(root, { file, members, at: new Date().toISOString() });
+    const shown = members.map((m) => m.replace(`${root}/`, ""));
     return out(
       parsed,
-      `parley: ${here} is now one bus, covering ${members.length} repositories:\n` +
-        members.map((m) => `        ${m}`).join("\n") +
-        `\n\n        Territory here reads like ${members[0]}/src/app.ts, and every session\n` +
-        `        opened anywhere inside this directory joins the same bus.\n` +
-        `        Run \`parley init\` in it too, so the hooks are enabled.`,
-      { ok: true, workspace: here, members },
+      `parley: ${root} is now one bus, covering ${members.length} folder(s)` +
+        `${file ? ` from ${file.split("/").pop()}` : ""}:\n` +
+        shown.map((m) => `        ${m}`).join("\n") +
+        `\n\n        Territory here reads like ${shown[0]}/src/app.ts, and a session opened\n` +
+        `        in any of these joins this bus. Anything else under ${root.split("/").pop()}\n` +
+        `        keeps its own.\n` +
+        `        Run \`parley init\` here too, so the hooks are enabled.`,
+      { ok: true, workspace: root, file, members },
     );
   }
 
