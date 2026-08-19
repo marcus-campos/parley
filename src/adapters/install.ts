@@ -171,19 +171,35 @@ export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: 
  * previous version's skill text. Writing from there produced the odd situation
  * where you had to run the update twice for the instructions to land.
  */
-export async function refreshAllAdapters(opts: { assumeYes: boolean; json: boolean }): Promise<void> {
+export async function refreshAllAdapters(
+  opts: { assumeYes: boolean; json: boolean; here?: { gitCommonDir: string; root: string } | null },
+): Promise<void> {
   const { adapterStatus, refreshAdapter } = await import("./claude-code");
-  const { pruneRegistry } = await import("./registry");
+  const { pruneRegistry, registerRepo } = await import("./registry");
 
-  const repos = pruneRegistry();
+  const registered = pruneRegistry();
+
+  // The repository you are standing in always counts, registered or not.
+  // Projects set up before the registry existed are not in it, and "update
+  // says everything is current while doctor says outdated" is exactly the
+  // contradiction that makes a tool untrustworthy.
+  const repos = [...registered];
+  if (opts.here && !repos.some((r) => r.gitCommonDir === opts.here!.gitCommonDir)) {
+    if (adapterStatus(opts.here.root).installed) {
+      repos.push({ ...opts.here, at: new Date().toISOString() });
+      registerRepo(opts.here.gitCommonDir, opts.here.root);
+    }
+  }
   const stale = repos.filter((r) => {
     const status = adapterStatus(r.root);
     return status.installed && (!status.skillCurrent || !status.hooksCurrent);
   });
 
   if (stale.length === 0) {
-    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed: [] })}\n`);
-    else if (repos.length) process.stdout.write(`parley: all ${repos.length} project(s) are current.\n`);
+    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed: [], checked: repos.length })}\n`);
+    else if (repos.length) process.stdout.write(`parley: hooks and skill are current in ${repos.length} project(s).\n`);
+    // Saying nothing at all reads as "it did not run".
+    else process.stdout.write("parley: no project has been set up yet (run: parley init).\n");
     return;
   }
 

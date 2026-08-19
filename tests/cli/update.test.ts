@@ -149,3 +149,40 @@ describe("the generated hooks", () => {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("knowing whether the skill actually updated", () => {
+  test("the skill carries the version that wrote it", async () => {
+    const dir = repoWithAdapter("stale", {});
+    try {
+      await refreshAdapter(dir, { assumeYes: true, json: true, silent: true });
+      const skill = readFileSync(join(dir, ".claude", "skills", "parley", "SKILL.md"), "utf8");
+      expect(skill).toMatch(/<!-- parley skill v\d+\.\d+\.\d+ -->/);
+
+      const status = adapterStatus(dir);
+      expect(status.skillVersion).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(status.skillCurrent).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("a skill from an older version reports that version, not just 'outdated'", () => {
+    const dir = repoWithAdapter(
+      "---\nname: parley\n---\n\nold text\n<!-- parley skill v0.2.0 -->\n",
+      { SessionStart: [{ hooks: [{ type: "command", command: "parley hook SessionStart" }] }] },
+    );
+    try {
+      const status = adapterStatus(dir);
+      expect(status.skillVersion).toBe("0.2.0");
+      expect(status.skillCurrent).toBe(false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test("a hand-written skill with no stamp is reported as unknown, not as current", () => {
+    const dir = repoWithAdapter("something someone wrote by hand\n", {});
+    try {
+      const status = adapterStatus(dir);
+      expect(status.skillVersion).toBeNull();
+      expect(status.skillCurrent).toBe(false);
+      expect(status.skillEdited).toBe(true);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

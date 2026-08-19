@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { RepoInfo } from "../repo/locate";
+import { VERSION } from "../version";
 
 /**
  * `parley init` touches the user's configuration files, so it never writes
@@ -94,7 +95,7 @@ const PARLEY_HOOKS: HookMap = {
   SessionEnd: [{ hooks: [{ type: "command", command: "parley hook SessionEnd", timeout: 5 }] }],
 };
 
-const SKILL = `---
+const SKILL_BODY = `---
 name: parley
 description: Use when other agent sessions may be working in this same repository - coordinating file territory, asking permission for a file someone else holds, broadcasting intent, or recording durable knowledge for future sessions. Triggers on merge conflicts with another agent, "who is working on", "is anyone editing", or before a broad refactor.
 ---
@@ -282,6 +283,25 @@ Every command spawns the daemon if needed. If it still fails, keep working —
 a broken parley must never stop the work. It degrades to advisory and says so.
 `;
 
+/**
+ * The skill carries the version that wrote it.
+ *
+ * Without a stamp, "is my skill up to date?" can only be answered by comparing
+ * file contents against the binary — which tells you *that* it differs and
+ * never *what you have*. The stamp lets a person open the file and see, and
+ * lets `doctor` say "skill 0.3.0, current 0.4.2" instead of just "outdated".
+ */
+export const SKILL_STAMP = /<!-- parley skill v([0-9][^ ]*) -->/;
+
+const SKILL = `${SKILL_BODY}\n<!-- parley skill v${VERSION} -->\n`;
+
+/** Which version wrote the skill on disk, if it says. */
+export function skillVersionAt(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const found = SKILL_STAMP.exec(readFileSync(path, "utf8"));
+  return found ? found[1]! : null;
+}
+
 function hookOutput(json: boolean, human: string, payload: unknown): void {
   if (json) process.stdout.write(`${JSON.stringify(payload)}\n`);
   else process.stdout.write(`${human}\n`);
@@ -354,6 +374,8 @@ export interface AdapterStatus {
   skillEdited: boolean;
   skillPath: string;
   settingsPath: string;
+  /** The version that wrote the skill on disk, when it says so. */
+  skillVersion: string | null;
 }
 
 /**
@@ -384,7 +406,10 @@ export function adapterStatus(repoRoot: string): AdapterStatus {
   // we cannot tell which version produced it, so we warn rather than assume.
   const skillEdited = onDisk !== "" && !skillCurrent;
 
-  return { installed, skillCurrent, hooksCurrent, skillEdited, skillPath, settingsPath };
+  return {
+    installed, skillCurrent, hooksCurrent, skillEdited, skillPath, settingsPath,
+    skillVersion: skillVersionAt(skillPath),
+  };
 }
 
 /** Rewrite the skill and hooks to what this version ships. */

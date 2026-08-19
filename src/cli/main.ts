@@ -19,6 +19,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley update [--check] [--yes]
                              replace this binary with the latest release
+  parley adapters            every project set up, and whether its skill is
+                             current with this binary
   parley mcp                 run as an MCP server over stdio (for Codex, Kimi,
                              Antigravity and anything else that speaks MCP)
   parley init [--yes] [--global]
@@ -156,9 +158,15 @@ async function main(): Promise<void> {
   // version's instructions, which is why an update used to need running twice.
   if (argv[0] === "__refresh-adapters") {
     const { refreshAllAdapters } = await import("../adapters/install");
+    let here: { gitCommonDir: string; root: string } | null = null;
+    try {
+      const found = locateRepo();
+      here = { gitCommonDir: found.gitCommonDir, root: found.root };
+    } catch { /* run from outside a repository is fine */ }
     return refreshAllAdapters({
       assumeYes: argv.includes("--yes"),
       json: argv.includes("--json"),
+      here,
     });
   }
 
@@ -260,6 +268,30 @@ async function main(): Promise<void> {
       return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
     }
 
+    case "adapters": {
+      const { pruneRegistry } = await import("../adapters/registry");
+      const repos = pruneRegistry();
+      if (repos.length === 0) {
+        return out(parsed, "parley: no project has been set up yet (run: parley init)", { ok: true, repos: [] });
+      }
+      const rows = repos.map((r) => {
+        const a = adapterStatus(r.root);
+        const state = !a.installed
+          ? "not installed"
+          : a.skillCurrent && a.hooksCurrent
+            ? `current (skill v${a.skillVersion ?? VERSION})`
+            : `OUTDATED (skill v${a.skillVersion ?? "?"}, binary v${VERSION})`;
+        return { root: r.root, state, current: a.installed && a.skillCurrent && a.hooksCurrent };
+      });
+      const stale = rows.filter((r) => !r.current).length;
+      return out(
+        parsed,
+        `${rows.map((r) => `  ${r.current ? " " : "!"} ${r.root}\n      ${r.state}`).join("\n")}` +
+          (stale ? `\n\n  ${stale} project(s) out of date — run: parley update` : "\n\n  all current"),
+        { ok: true, binary: VERSION, repos: rows },
+      );
+    }
+
     case "doctor": {
       const address = resolveAddress(repo.repoId, env);
       const endpoint = readEndpoint(repo.gitCommonDir);
@@ -281,8 +313,9 @@ async function main(): Promise<void> {
         adapter: (() => {
           const a = adapterStatus(repo.root);
           if (!a.installed) return "not installed (run: parley init)";
-          if (a.skillCurrent && a.hooksCurrent) return `current (${VERSION})`;
-          return "OUTDATED — run: parley update";
+          if (a.skillCurrent && a.hooksCurrent) return `current — skill v${a.skillVersion ?? VERSION}`;
+          const had = a.skillVersion ? `skill v${a.skillVersion}` : "skill from an unknown version";
+          return `OUTDATED — ${had}, this binary is v${VERSION}. Run: parley update`;
         })(),
       };
       const lines = Object.entries(report).map(([k, v]) => `  ${k.padEnd(18)} ${String(v)}`);

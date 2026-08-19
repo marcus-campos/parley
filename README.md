@@ -170,6 +170,32 @@ at `git pull && bun run build` instead of doing something surprising.
 > Installs of **0.1.0 predate this command** and need one manual reinstall — the
 > one-liner at the top — to get it. From 0.2.0 onward, `parley update` is enough.
 
+### Did the skill actually update?
+
+```bash
+parley adapters
+```
+
+```
+    /Users/you/subscription_project
+      current (skill v0.4.2)
+  ! /Users/you/other-project
+      OUTDATED (skill v0.2.0, binary v0.4.2)
+
+  1 project(s) out of date — run: parley update
+```
+
+The generated skill carries the version that wrote it, at the bottom of
+`.claude/skills/parley/SKILL.md`, so you can also just look:
+
+```bash
+tail -1 .claude/skills/parley/SKILL.md
+# <!-- parley skill v0.4.2 -->
+```
+
+`parley doctor` reports the same for the repository you are in, naming both
+versions rather than only saying "outdated".
+
 ### Verify
 
 ```bash

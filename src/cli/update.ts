@@ -129,7 +129,12 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
     // can write the adapters itself.
     if (!opts.checkOnly) {
       const { refreshAllAdapters } = await import("../adapters/install");
-      await refreshAllAdapters({ assumeYes: opts.assumeYes, json: opts.json });
+      await refreshAllAdapters({
+        assumeYes: opts.assumeYes, json: opts.json,
+        here: opts.repoRoot && opts.gitCommonDir
+          ? { root: opts.repoRoot, gitCommonDir: opts.gitCommonDir }
+          : null,
+      });
     }
     return;
   }
@@ -235,9 +240,13 @@ export async function runUpdate(opts: UpdateOptions): Promise<void> {
   // last version's instructions on disk, and only a second `parley update`
   // fixed them. One run should be enough.
   await new Promise<void>((resolve) => {
-    const child = spawn(binary, ["__refresh-adapters", ...(opts.assumeYes ? ["--yes"] : []), ...(opts.json ? ["--json"] : [])], {
-      stdio: "inherit",
-    });
+    const child = spawn(
+      binary,
+      ["__refresh-adapters", ...(opts.assumeYes ? ["--yes"] : []), ...(opts.json ? ["--json"] : [])],
+      // Run it from the repository we are in, so the new process picks the same
+      // one up as "here" even when it was never registered.
+      { stdio: "inherit", cwd: opts.repoRoot ?? process.cwd() },
+    );
     child.on("close", () => resolve());
     child.on("error", () => resolve());
   });
