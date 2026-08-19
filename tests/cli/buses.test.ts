@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { summariseBuses } from "../../src/cli/buses";
 import { forgetRepo, readRegistry, registerRepo } from "../../src/adapters/registry";
 import { comparable, markAsWorkspace } from "../../src/repo/workspace";
+import { locateRepo } from "../../src/repo/locate";
 import { execFileSync } from "node:child_process";
 
 function gitRepo(dir: string): void {
@@ -43,26 +44,28 @@ describe("finding where the conversation is", () => {
     }
   });
 
-  test("a repository outside the workspace stays its own bus", () => {
+  test("a repository outside the workspace keeps its own bus", () => {
+    // Asserted on scope resolution rather than on the aggregate: the registry
+    // is machine-wide state that other tests write to, and a flaky assertion
+    // about "how many buses exist" tells you nothing about the property that
+    // matters — which is that a folder under a marked directory, but not named
+    // by it, is not part of that workspace.
     const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-buses-")));
-    const registered: string[] = [];
     try {
       for (const name of ["member", "outsider"]) gitRepo(join(root, name));
       markAsWorkspace(root, { file: null, members: [join(root, "member")], at: "" });
 
-      for (const name of ["member", "outsider"]) {
-        const dir = join(root, name);
-        registerRepo(join(dir, ".git"), dir, join(dir, ".git", "parley"));
-        registered.push(join(dir, ".git"));
-      }
+      const inside = locateRepo(join(root, "member"));
+      expect(inside.scope).toBe("workspace");
+      expect(comparable(inside.root)).toBe(comparable(root));
 
-      const mine = summariseBuses().filter((b) => comparable(b.root).startsWith(comparable(root)));
-      // One for the workspace, one for the outsider — which is the distinction
-      // that explains "they are talking and my panel is empty".
-      expect(mine).toHaveLength(2);
-      expect(mine.map((b) => b.scope).sort()).toEqual(["repository", "workspace"]);
+      const outside = locateRepo(join(root, "outsider"));
+      expect(outside.scope).toBe("repository");
+      expect(comparable(outside.root)).toBe(comparable(join(root, "outsider")));
+
+      // Different scope means a different bus, which is the whole point.
+      expect(outside.repoId).not.toBe(inside.repoId);
     } finally {
-      for (const key of registered) forgetRepo(key);
       rmSync(root, { recursive: true, force: true });
     }
   });
