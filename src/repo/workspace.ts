@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { canonicalizeRepoPath, detectEnv, repoId } from "./canonical";
 import type { RepoInfo } from "./locate";
 
@@ -134,9 +134,12 @@ export function commonAncestor(paths: string[]): string {
     while (i < shared && i < parts.length && parts[i] === first[i]) i++;
     shared = i;
   }
+  // Rebuild with the platform's own separator: this value becomes the
+  // workspace root and is written down, so it must be a path the OS accepts,
+  // not the normalised form used for comparison.
   const depth = Math.max(1, shared);
-  const template = originals[0]!.replace(/\\/g, "/").split("/");
-  const joined = template.slice(0, depth).join("/");
+  const native = originals[0]!.split(/[\\/]/);
+  const joined = native.slice(0, depth).join(sep);
   return joined || originals[0]!;
 }
 

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { summariseBuses } from "../../src/cli/buses";
 import { forgetRepo, readRegistry, registerRepo } from "../../src/adapters/registry";
-import { markAsWorkspace } from "../../src/repo/workspace";
+import { comparable, markAsWorkspace } from "../../src/repo/workspace";
 import { execFileSync } from "node:child_process";
 
 function gitRepo(dir: string): void {
@@ -33,10 +33,10 @@ describe("finding where the conversation is", () => {
         registered.push(join(dir, ".git"));
       }
 
-      const mine = summariseBuses().filter((b) => b.root.startsWith(root));
+      const mine = summariseBuses().filter((b) => comparable(b.root).startsWith(comparable(root)));
       expect(mine).toHaveLength(1);
       expect(mine[0]!.scope).toBe("workspace");
-      expect(mine[0]!.root).toBe(root);
+      expect(comparable(mine[0]!.root)).toBe(comparable(root));
     } finally {
       for (const key of registered) forgetRepo(key);
       rmSync(root, { recursive: true, force: true });
@@ -56,7 +56,7 @@ describe("finding where the conversation is", () => {
         registered.push(join(dir, ".git"));
       }
 
-      const mine = summariseBuses().filter((b) => b.root.startsWith(root));
+      const mine = summariseBuses().filter((b) => comparable(b.root).startsWith(comparable(root)));
       // One for the workspace, one for the outsider — which is the distinction
       // that explains "they are talking and my panel is empty".
       expect(mine).toHaveLength(2);

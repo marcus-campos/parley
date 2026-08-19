@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findWorkspaceRoot, findWorkspaceScope, markAsWorkspace, membersOf } from "../../src/repo/workspace";
+import { comparable, findWorkspaceRoot, findWorkspaceScope, markAsWorkspace, membersOf } from "../../src/repo/workspace";
 
 function workspace(repos: string[]): string {
   // Real path throughout: on macOS the temp dir is reached through a symlink,
@@ -31,7 +31,7 @@ describe("a multi-root workspace as one bus", () => {
       const fromFrontend = findWorkspaceScope(join(root, "frontend", "src"));
       expect(fromBackend?.repoId).toBe(fromFrontend!.repoId);
       // Territory is relative to the workspace, so it names the repository.
-      expect(fromBackend?.root).toBe(root);
+      expect(comparable(fromBackend!.root)).toBe(comparable(root));
       expect(fromBackend?.scope).toBe("workspace");
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
@@ -52,7 +52,7 @@ describe("a multi-root workspace as one bus", () => {
       const inner = join(outer, "a");
       markAsWorkspace(outer, { file: null, members: [join(outer, "a")], at: "" });
       markAsWorkspace(inner, { file: null, members: [inner], at: "" });
-      expect(findWorkspaceRoot(join(inner, "src"))).toBe(inner);
+      expect(comparable(findWorkspaceRoot(join(inner, "src"))!)).toBe(comparable(inner));
     } finally { rmSync(outer, { recursive: true, force: true }); }
   });
 
@@ -60,7 +60,7 @@ describe("a multi-root workspace as one bus", () => {
     const root = workspace(["a"]);
     try {
       markAsWorkspace(root, { file: null, members: membersOf(root).map((m) => join(root, m)), at: "" });
-      expect(findWorkspaceScope(root)?.discoveryDir).toBe(join(root, ".parley"));
+      expect(comparable(findWorkspaceScope(root)!.discoveryDir)).toBe(comparable(join(root, ".parley")));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -78,9 +78,12 @@ describe("reading a .code-workspace", () => {
       }), "utf8");
 
       const read = readWorkspaceFile(file)!;
-      expect(read.root).toBe(root);
-      expect(read.members.map((m) => m.split("/").pop())).toEqual(["yzilab", "yzilab-front", "animalex-site"]);
-      expect(read.members.some((m) => m.endsWith("/unrelated"))).toBe(false);
+      // Compare path identity, not spelling: Windows hands back 8.3 short
+      // names and backslashes for the same directory.
+      expect(comparable(read.root)).toBe(comparable(root));
+      expect(read.members.map((m) => comparable(m).split("/").pop()))
+        .toEqual(["yzilab", "yzilab-front", "animalex-site"]);
+      expect(read.members.some((m) => comparable(m).endsWith("/unrelated"))).toBe(false);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -88,7 +91,7 @@ describe("reading a .code-workspace", () => {
     const root = workspace(["member", "outsider"]);
     try {
       markAsWorkspace(root, { file: null, members: [join(root, "member")], at: "" });
-      expect(scopeOf(join(root, "member", "src"))?.root).toBe(root);
+      expect(comparable(scopeOf(join(root, "member", "src"))!.root)).toBe(comparable(root));
       // The whole point: `outsider` lives under the marked directory and is
       // still not part of this workspace.
       expect(scopeOf(join(root, "outsider"))).toBeNull();
@@ -114,8 +117,8 @@ describe("reading a .code-workspace", () => {
       const file = join(nested, "shared.code-workspace");
       writeFileSync(file, JSON.stringify({ folders: [{ path: "." }, { path: "../two" }] }), "utf8");
       const read = readWorkspaceFile(file)!;
-      expect(read.root).toBe(root);
-      expect(read.members.map((m) => m.split("/").pop()).sort()).toEqual(["one", "two"]);
+      expect(comparable(read.root)).toBe(comparable(root));
+      expect(read.members.map((m) => comparable(m).split("/").pop()).sort()).toEqual(["one", "two"]);
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -147,7 +150,7 @@ describe("symlinked paths", () => {
       // Ask using the un-resolved spelling.
       const scope = scopeOf(join(root, "alpha", "src"));
       expect(scope).not.toBeNull();
-      expect(realPath(scope!.root)).toBe(real);
+      expect(comparable(scope!.root)).toBe(comparable(real));
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -163,7 +166,7 @@ describe("symlinked paths", () => {
   });
 });
 
-import { commonAncestor, comparable, isWithin } from "../../src/repo/workspace";
+import { commonAncestor, isWithin } from "../../src/repo/workspace";
 
 describe("comparing paths across operating systems", () => {
   test("a backslash path is not treated as one giant segment", () => {
