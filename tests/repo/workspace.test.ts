@@ -162,3 +162,41 @@ describe("symlinked paths", () => {
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });
+
+import { commonAncestor, comparable, isWithin } from "../../src/repo/workspace";
+
+describe("comparing paths across operating systems", () => {
+  test("a backslash path is not treated as one giant segment", () => {
+    // On Windows the separator is a backslash and the filesystem ignores case.
+    // Splitting on "/" made every membership check fail there and turned the
+    // common ancestor of a set of C:\... paths into "/".
+    expect(comparable("C:\\Users\\me\\proj").includes("/")).toBe(true);
+    expect(comparable("C:\\Users\\me\\proj")).not.toBe("/");
+  });
+
+  test("the common ancestor of sibling directories is their parent", () => {
+    const root = workspace(["one", "two"]);
+    try {
+      expect(comparable(commonAncestor([join(root, "one"), join(root, "two")])))
+        .toBe(comparable(root));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("a single path is its own ancestor, never the filesystem root", () => {
+    const root = workspace(["only"]);
+    try {
+      expect(comparable(commonAncestor([join(root, "only")]))).toBe(comparable(join(root, "only")));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  test("isWithin accepts the directory itself and what is under it, nothing else", () => {
+    const root = workspace(["a", "b"]);
+    try {
+      expect(isWithin(join(root, "a"), join(root, "a"))).toBe(true);
+      expect(isWithin(join(root, "a", "src"), join(root, "a"))).toBe(true);
+      expect(isWithin(join(root, "b"), join(root, "a"))).toBe(false);
+      // A sibling whose name merely starts the same must not match.
+      expect(isWithin(`${join(root, "a")}-other`, join(root, "a"))).toBe(false);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+});

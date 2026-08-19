@@ -99,10 +99,34 @@ export function realPath(path: string): string {
   }
 }
 
+/**
+ * One spelling of a path, for comparison only.
+ *
+ * Splitting and prefix-matching on "/" is wrong on Windows, where the
+ * separator is a backslash and the filesystem does not care about case — every
+ * membership check silently failed there, and the common ancestor of a set of
+ * `C:\...` paths came out as "/". Never store this form; it exists to be
+ * compared.
+ */
+export function comparable(path: string): string {
+  const unified = realPath(path).replace(/\\/g, "/");
+  return process.platform === "win32" ? unified.toLowerCase() : unified;
+}
+
+/** Is `child` the same directory as `parent`, or inside it? */
+export function isWithin(child: string, parent: string): boolean {
+  const c = comparable(child);
+  const p = comparable(parent);
+  return c === p || c.startsWith(`${p}/`);
+}
+
 /** Deepest directory containing all of them. */
 export function commonAncestor(paths: string[]): string {
   if (paths.length === 0) return "";
-  const split = paths.map((p) => resolve(p).split("/"));
+  // Compare on the normalised form, but return a real path — the answer
+  // becomes the workspace root, which everything else is relative to.
+  const originals = paths.map((p) => realPath(p));
+  const split = originals.map((p) => comparable(p).split("/"));
   const first = split[0]!;
   let shared = first.length;
   for (const parts of split.slice(1)) {
@@ -110,7 +134,10 @@ export function commonAncestor(paths: string[]): string {
     while (i < shared && i < parts.length && parts[i] === first[i]) i++;
     shared = i;
   }
-  return first.slice(0, shared).join("/") || "/";
+  const depth = Math.max(1, shared);
+  const template = originals[0]!.replace(/\\/g, "/").split("/");
+  const joined = template.slice(0, depth).join("/");
+  return joined || originals[0]!;
 }
 
 /** Resolve a .code-workspace into the bus root and its members. */
@@ -122,7 +149,7 @@ export function readWorkspaceFile(file: string): { root: string; members: string
   const members = folders.map((f) => realPath(resolve(base, f)));
   // A workspace whose folders live above the file still needs one root that
   // every territory path can be relative to.
-  const root = members.every((m) => m.startsWith(`${base}/`) || m === base)
+  const root = members.every((m) => isWithin(m, base))
     ? base
     : commonAncestor([...members, base]);
   return { root, members };
@@ -164,11 +191,11 @@ export function findWorkspaceScope(cwd: string): RepoInfo | null {
     const belongs =
       !marker ||
       marker.members.length === 0 ||
-      here === root ||
-      marker.members.some((m) => {
-        const member = realPath(m);
-        return here === member || here.startsWith(`${member}/`);
-      });
+      // The root itself counts, but *being under* it does not — that is the
+      // whole distinction: the directory holding seven projects usually holds
+      // twenty others that are not part of this workspace.
+      comparable(here) === comparable(root) ||
+      marker.members.some((m) => isWithin(here, m));
     if (belongs) break;
     const up = dirname(root);
     root = up === root ? null : findWorkspaceRoot(up);

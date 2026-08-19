@@ -246,7 +246,7 @@ export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
             : "on its next tool call, usually within seconds"
           : "only when someone runs parley there",
     // The last segment of the path is what a person recognises a worktree by.
-    worktree: p.cwd ? p.cwd.split("/").filter(Boolean).slice(-1)[0] ?? "" : "",
+    worktree: p.cwd ? p.cwd.replace(/\\/g, "/").split("/").filter(Boolean).slice(-1)[0] ?? "" : "",
     // Enough of the id to tell two fronts apart at a glance, and stable.
     tag: p.id.replace(/^p_/, ""),
     connected: p.connected,
