@@ -54,3 +54,56 @@ describe("the registry of set-up repositories", () => {
     expect(roots).toContain(b.root);
   });
 });
+
+import { refreshAllAdapters } from "../../src/adapters/install";
+import { adapterStatus } from "../../src/adapters/claude-code";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join as joinPath } from "node:path";
+
+function setUp(): { gitCommonDir: string; root: string } {
+  const r = repo();
+  mkdirSync(joinPath(r.root, ".claude", "skills", "parley"), { recursive: true });
+  writeFileSync(joinPath(r.root, ".claude", "settings.json"), "{}", "utf8");
+  return r;
+}
+
+describe("refreshing without ceremony", () => {
+  test("a skill parley wrote is brought up to date with no question asked", async () => {
+    const r = setUp();
+    // Pretend an older parley generated it: it carries our stamp.
+    writeFileSync(
+      joinPath(r.root, ".claude", "skills", "parley", "SKILL.md"),
+      "---\nname: parley\n---\n\nold\n<!-- parley skill v0.1.0 -->\n",
+      "utf8",
+    );
+    registerRepo(r.gitCommonDir, r.root);
+
+    // assumeYes false on purpose: a generated file must not need a prompt.
+    await refreshAllAdapters({ assumeYes: false, json: true });
+
+    const status = adapterStatus(r.root);
+    expect(status.skillCurrent).toBe(true);
+    expect(readFileSync(status.skillPath, "utf8")).toContain("Say who you are, out loud");
+  });
+
+  test("a hand-written skill is left alone when nobody confirms", async () => {
+    const r = setUp();
+    const mine = "this is my own skill, do not touch\n";
+    writeFileSync(joinPath(r.root, ".claude", "skills", "parley", "SKILL.md"), mine, "utf8");
+    registerRepo(r.gitCommonDir, r.root);
+
+    // No TTY under test, so `confirm` declines — the safe direction.
+    await refreshAllAdapters({ assumeYes: false, json: true });
+
+    expect(readFileSync(joinPath(r.root, ".claude", "skills", "parley", "SKILL.md"), "utf8")).toBe(mine);
+  });
+
+  test("with --yes even a hand-written one is replaced, because you said so", async () => {
+    const r = setUp();
+    writeFileSync(joinPath(r.root, ".claude", "skills", "parley", "SKILL.md"), "mine\n", "utf8");
+    registerRepo(r.gitCommonDir, r.root);
+
+    await refreshAllAdapters({ assumeYes: true, json: true });
+    expect(adapterStatus(r.root).skillCurrent).toBe(true);
+  });
+});

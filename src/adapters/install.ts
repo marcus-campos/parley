@@ -203,25 +203,43 @@ export async function refreshAllAdapters(
     return;
   }
 
-  if (!opts.json) {
-    process.stdout.write(`\nparley: ${stale.length} project(s) have hooks or a skill from an older version:\n`);
-    for (const r of stale) process.stdout.write(`        ${r.root}\n`);
-    process.stdout.write("        The skill is what the agent reads, so this is the part that matters.\n");
+  // A skill carrying our stamp is a file parley wrote, and rewriting our own
+  // generated file needs no ceremony — asking about it is pure friction on the
+  // one command whose whole job is to bring things up to date. A skill with no
+  // stamp, or one that has been changed, might be somebody's work: that one
+  // gets asked about, because refreshing would discard it.
+  const ours = stale.filter((r) => adapterStatus(r.root).skillVersion !== null);
+  const theirs = stale.filter((r) => adapterStatus(r.root).skillVersion === null);
+
+  let approvedEdited = false;
+  if (theirs.length > 0) {
+    if (!opts.json) {
+      process.stdout.write(`\nparley: ${theirs.length} project(s) have a skill that parley did not write,\n`);
+      process.stdout.write("        or that was changed by hand. Refreshing would discard those edits:\n");
+      for (const r of theirs) process.stdout.write(`        ${r.root}\n`);
+    }
+    approvedEdited = opts.assumeYes || (await confirm("Overwrite them?"));
   }
 
-  if (!opts.assumeYes && !(await confirm("Refresh all of them?"))) {
-    if (!opts.json) process.stdout.write("parley: left them as they are.\n");
+  const toRefresh = [...ours, ...(approvedEdited ? theirs : [])];
+  if (toRefresh.length === 0) {
+    if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed: [], skipped: theirs.length })}\n`);
+    else process.stdout.write("parley: left them as they are.\n");
     return;
   }
 
   const refreshed: string[] = [];
-  for (const r of stale) {
+  for (const r of toRefresh) {
     const done = await refreshAdapter(r.root, {
       assumeYes: true, json: true, silent: true, gitCommonDir: r.gitCommonDir,
     });
     if (done) refreshed.push(r.root);
   }
 
-  if (opts.json) process.stdout.write(`${JSON.stringify({ ok: true, refreshed })}\n`);
-  else process.stdout.write(`parley: refreshed ${refreshed.length} project(s).\n`);
+  if (opts.json) {
+    process.stdout.write(`${JSON.stringify({ ok: true, refreshed, skipped: theirs.length - (approvedEdited ? theirs.length : 0) })}\n`);
+  } else {
+    process.stdout.write(`parley: refreshed hooks and skill in ${refreshed.length} project(s):\n`);
+    for (const r of refreshed) process.stdout.write(`        ${r}\n`);
+  }
 }
