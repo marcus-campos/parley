@@ -22,6 +22,44 @@ beforeEach(() => {
   responsivo = joined(state, "RESPONSIVO", 20);
 });
 
+/**
+ * The winner must not depend on the order claims happen to sit in.
+ * Asserting one order only would stay green against a comparator that
+ * ignored every criterion and simply took the first or the last candidate —
+ * so this builds a fresh state and runs the given claims in the order given,
+ * letting each test call it twice with the pair reversed.
+ */
+function winnerFor(
+  descriptors: { owner: string; pattern: string; lastTouchMs: number }[],
+  path: string,
+): string | null {
+  const s = initialState("advisory");
+  apply(s, null, { v: 1, op: "shape", shape: "pool" }, at(0));
+  const publisherId = joined(s, "PUBLISHER", 0);
+
+  const ids = new Map<string, string>();
+  for (const d of descriptors) {
+    if (!ids.has(d.owner)) ids.set(d.owner, joined(s, d.owner, 0));
+  }
+  for (const d of descriptors) {
+    s.claims.push({
+      pattern: d.pattern,
+      ownerId: ids.get(d.owner)!,
+      intent: "",
+      since: new Date(d.lastTouchMs).toISOString(),
+      auto: false,
+      lastTouchMs: d.lastTouchMs,
+      orphanedAtMs: null,
+    });
+  }
+
+  apply(s, publisherId, { v: 1, op: "work", title: "x", paths: [path] }, at(0));
+  const winnerId = s.work[0]!.offeredToId;
+  if (winnerId === null) return null;
+  for (const [name, id] of ids) if (id === winnerId) return name;
+  return winnerId;
+}
+
 describe("slicing a work-list by ownership", () => {
   test("a path someone holds is offered to them; a path nobody holds stays open", () => {
     apply(state, responsivo, { v: 1, op: "claim", paths: ["templates/pages/**"] }, at(100));
@@ -47,33 +85,31 @@ describe("slicing a work-list by ownership", () => {
   });
 
   test("the more specific claim wins when two overlap", () => {
-    const auditor = joined(state, "AUDITOR", 110);
     // `claim` refuses overlap, so two live overlapping claims cannot arise
     // through the op. They can arrive from a replayed journal, and
     // ownerForPath has to be total over that.
-    state.claims.push(
-      { pattern: "templates/**", ownerId: responsivo, intent: "", since: new Date(T0 + 100).toISOString(), auto: false, lastTouchMs: T0 + 100, orphanedAtMs: null },
-      { pattern: "templates/pages/app/screen_builder.html", ownerId: auditor, intent: "", since: new Date(T0 + 120).toISOString(), auto: false, lastTouchMs: T0 + 120, orphanedAtMs: null },
-    );
+    //
+    // Asserted in both push orders: a comparator that just took the first or
+    // the last candidate — ignoring specificity entirely — would still win
+    // this test if the array happened to be built with the winner last.
+    const broad = { owner: "RESPONSIVO", pattern: "templates/**", lastTouchMs: T0 + 100 };
+    const specific = { owner: "AUDITOR", pattern: "templates/pages/app/screen_builder.html", lastTouchMs: T0 + 120 };
+    const path = "templates/pages/app/screen_builder.html";
 
-    apply(state, core, { v: 1, op: "work", title: "x", paths: ["templates/pages/app/screen_builder.html"] }, at(200));
-
-    expect(state.work[0]!.offeredToId).toBe(auditor);
+    expect(winnerFor([broad, specific], path)).toBe("AUDITOR");
+    expect(winnerFor([specific, broad], path)).toBe("AUDITOR");
   });
 
   test("on a tie in specificity, the older claim wins", () => {
-    const auditor = joined(state, "AUDITOR", 110);
     // Same shape, same specificity — only the age differs. Deterministic
     // routing means a total order even when nothing else distinguishes the
-    // two candidates.
-    state.claims.push(
-      { pattern: "templates/pages/**", ownerId: auditor, intent: "", since: new Date(T0 + 120).toISOString(), auto: false, lastTouchMs: T0 + 120, orphanedAtMs: null },
-      { pattern: "templates/pages/**", ownerId: responsivo, intent: "", since: new Date(T0 + 100).toISOString(), auto: false, lastTouchMs: T0 + 100, orphanedAtMs: null },
-    );
+    // two candidates, and — as above — both push orders must agree.
+    const older = { owner: "RESPONSIVO", pattern: "templates/pages/**", lastTouchMs: T0 + 100 };
+    const younger = { owner: "AUDITOR", pattern: "templates/pages/**", lastTouchMs: T0 + 120 };
+    const path = "templates/pages/a.html";
 
-    apply(state, core, { v: 1, op: "work", title: "x", paths: ["templates/pages/a.html"] }, at(200));
-
-    expect(state.work[0]!.offeredToId).toBe(responsivo);
+    expect(winnerFor([younger, older], path)).toBe("RESPONSIVO");
+    expect(winnerFor([older, younger], path)).toBe("RESPONSIVO");
   });
 
   test("an orphaned claim routes nothing: its owner is gone", () => {
