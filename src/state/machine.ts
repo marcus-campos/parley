@@ -91,6 +91,7 @@ export function apply(
     case "nudged": return markNudged(state, actorId, frame, ctx);
     case "question_status": return questionStatus(state, frame, ctx);
     case "mode": return setMode(state, frame, ctx);
+    case "shape": return setShape(state, frame, ctx);
     case "status": return status(state, ctx);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
@@ -115,6 +116,26 @@ function setMode(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcom
     text: `mode changed: ${before} -> ${wanted} (applies to every front on this bus)`,
   });
   return { state, response: ok({ mode: state.mode, previous: before }), broadcast: [event] };
+}
+
+function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const wanted = frame.shape;
+  if (wanted === undefined) return { state, response: ok({ shape: state.shape }), broadcast: [] };
+  if (wanted !== "bus" && wanted !== "pool" && wanted !== "plan") {
+    return { state, response: err("UNKNOWN_OP", "shape must be bus, pool or plan"), broadcast: [] };
+  }
+  const before = state.shape;
+  state.shape = wanted;
+  if (before === wanted) return { state, response: ok({ shape: state.shape }), broadcast: [] };
+
+  return {
+    state,
+    response: ok({ shape: state.shape }),
+    broadcast: [pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "high",
+      text: `shape is now ${wanted} (was ${before}) — it belongs to the repository, not to a session`,
+    })],
+  };
 }
 
 function status(state: State, ctx: Ctx): Outcome {

@@ -3,6 +3,8 @@
 export const PROTOCOL_VERSION = 1;
 
 export type Mode = "off" | "advisory" | "enforced";
+export type Shape = "bus" | "pool" | "plan";
+export const SHAPES = ["bus", "pool", "plan"] as const;
 export type ParticipantKind = "agent" | "human";
 export type Priority = "normal" | "high";
 export type GrantScope = "once" | "transfer";
@@ -14,7 +16,7 @@ export const OPS = [
   "claim", "release",
   "ask", "grant", "deny", "requests",
   "note", "notes", "reverse", "result", "results",
-  "mode", "status",
+  "mode", "shape", "status",
 ] as const;
 export type Op = (typeof OPS)[number];
 

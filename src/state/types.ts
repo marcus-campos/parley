@@ -1,5 +1,5 @@
 import type {
-  GrantScope, Mode, ParticipantKind, Priority, RequestState, Response,
+  GrantScope, Mode, ParticipantKind, Priority, RequestState, Response, Shape,
 } from "../protocol/types";
 
 export interface Participant {
@@ -168,6 +168,12 @@ export interface CommandResult {
 
 export interface State {
   mode: Mode;
+  /**
+   * Where work comes from. Orthogonal to `mode`, which is how strict territory
+   * is. Repo-scoped for the same reason: a front in `bus` inside a `plan`
+   * would ignore dispatch, and the plan would be theatre.
+   */
+  shape: Shape;
   seq: number;
   participants: Record<string, Participant>;
   claims: Claim[];
@@ -202,7 +208,7 @@ export interface Outcome {
 
 export function emptyState(mode: Mode = "advisory"): State {
   return {
-    mode, seq: 0, participants: {}, claims: [], requests: {},
+    mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
   };
 }
