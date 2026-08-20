@@ -17,12 +17,14 @@ export const OPS = [
   "ask", "grant", "deny", "requests",
   "note", "notes", "reverse", "result", "results",
   "mode", "shape", "status",
+  "work", "works", "take", "drop", "done",
 ] as const;
 export type Op = (typeof OPS)[number];
 
 export const ERROR_CODES = [
   "NAME_TAKEN", "CONFLICT", "NOT_OWNER", "NOT_JOINED",
   "UNKNOWN_OP", "PROTOCOL_MISMATCH", "AUTH_REQUIRED", "OBSERVER_ONLY",
+  "NOT_TAKEN", "NO_CAPACITY",
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 

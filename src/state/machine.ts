@@ -6,6 +6,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
+import { listWork, publishWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -93,6 +94,8 @@ export function apply(
     case "mode": return setMode(state, frame, ctx);
     case "shape": return setShape(state, frame, ctx);
     case "status": return status(state, ctx);
+    case "work": return publishWork(state, actorId, frame, ctx);
+    case "works": return listWork(state, actorId, frame);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }

@@ -152,6 +152,33 @@ export interface Question {
   nudgedAtMs: number | null;
 }
 
+export interface WorkItem {
+  id: string;
+  /** One concrete path or glob. One item per path — the unit of territory. */
+  paths: string[];
+  title: string;
+  /** Ids of Note and CommandResult. Reference, never a copy: this is the token saving. */
+  evidenceIds: string[];
+  publishedById: string;
+  publishedByName: string;
+  /** `work` is something to do. `review` is somebody else's work to check. */
+  kind: "work" | "review";
+  /**
+   * What decides whether it can be refused. A discovered item is an offer; a
+   * planned item is a dispatch.
+   */
+  origin: "discovered" | "planned";
+  state: "open" | "offered" | "taken" | "done";
+  offeredToId: string | null;
+  offeredAtMs: number | null;
+  takenById: string | null;
+  /** Set when the holder dies; returned to the pool after the grace period. */
+  orphanedAtMs: number | null;
+  /** For `kind: "review"`, the item whose work is being checked. */
+  reviewOf: string | null;
+  at: string;
+}
+
 /** A command result worth not running again. */
 export interface CommandResult {
   key: string;
@@ -186,6 +213,7 @@ export interface State {
   touches: Record<string, Touch>;
   results: Record<string, CommandResult>;
   questions: Record<string, Question>;
+  work: WorkItem[];
 }
 
 /**
@@ -210,6 +238,7 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
+    work: [],
   };
 }
 
