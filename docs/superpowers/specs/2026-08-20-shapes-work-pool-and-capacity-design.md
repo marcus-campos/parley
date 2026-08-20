@@ -90,7 +90,16 @@ export interface WorkItem {
 }
 ```
 
-Five new ops: `work` (publish), `works` (list), `take`, `drop`, `done`.
+Five new pool ops: `work` (publish), `works` (list), `take`, `drop`, `done`.
+Three more belong to the shapes around them: `shape` (§2), `summon` (§4.5) and
+`plan` (§5.3). Eight in total, against the twenty-six that exist today.
+
+`kind: "review"` is available in both shapes and means the same thing in each:
+somebody else's finished work, published as something to check. In `shape plan`
+the coordinator emits one after every task, because superpowers already requires
+the review. In `shape pool` a front publishes one voluntarily — which is the
+reviewing front people already run by agreement, finally holding a state the bus
+can see: who asked, who took it, and whether the verdict was ever applied.
 
 **Deliberately absent:** priority, dependencies between items, due dates, and
 assigning an item to a named front. Those are orchestrator features, and they
