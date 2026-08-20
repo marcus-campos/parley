@@ -216,6 +216,8 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); setSpeaking(true);
   } else if (!speaking && (e.key === "n" || e.key === "N") && !e.metaKey && !e.ctrlKey) {
     e.preventDefault(); openNote(0);
+  } else if (!speaking && (e.key === "w" || e.key === "W") && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault(); $("work").open = !$("work").open;
   } else if (e.key === "Escape") {
     setSpeaking(false);
   }

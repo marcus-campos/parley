@@ -272,7 +272,7 @@ export async function runHook(event: string): Promise<void> {
     }
 
     const rawPath = String(input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? "");
-    if (!rawPath) { clearTimeout(budget); return context(name, inbox); }
+    if (!rawPath) { clearTimeout(budget); return context(name, [inbox, pool].filter(Boolean).join("\n\n")); }
     const target = isAbsolute(rawPath) ? relative(repo.root, rawPath) : rawPath;
 
     const claimed = await client.request({ op: "claim", paths: [target], auto: true });

@@ -105,4 +105,16 @@ describe("the WORK section of the web panel", () => {
   test("the page groups by owner client-side rather than shipping one row per item", () => {
     expect(PAGE).toContain("workGroupsFrom");
   });
+
+  test("pressing w toggles WORK open, the same key the terminal panel answers to", () => {
+    // Scoped to the keydown handler itself, not just anywhere in the page —
+    // "w" and "workGroupsFrom" both contain the letter, and a looser
+    // assertion would pass whether or not a handler actually existed.
+    const start = PAGE.indexOf('document.addEventListener("keydown"');
+    const end = PAGE.indexOf("});", start);
+    expect(start).toBeGreaterThan(-1);
+    const handler = PAGE.slice(start, end);
+    expect(handler).toContain('!speaking && (e.key === "w" || e.key === "W")');
+    expect(handler).toContain('$("work").open = !$("work").open');
+  });
 });
