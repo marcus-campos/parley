@@ -1,5 +1,6 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, readPathList } from "../repo/paths";
+import { staleReason } from "./results";
 import { actorOf, liveParticipants, pushEvent, type Ctx, type Outcome, type State, type WorkItem } from "./types";
 
 /**
@@ -109,11 +110,21 @@ function findItem(state: State, frame: Record<string, unknown>) {
   return state.work.find((w) => w.id === String(frame.id ?? ""));
 }
 
-/** Notes and results named by an item, resolved once so the taker never rediscovers. */
+/**
+ * Notes and results named by an item, resolved once so the taker never
+ * rediscovers. A note carries its own truth (`reversedBy` travels with it
+ * verbatim), but a `CommandResult` does not: staleness is a read-time
+ * function of `(state, result)`, never stamped on the stored object, which
+ * always claims `staleBecause: null`. Handing the raw record over would let
+ * the taker trust a green result that an intervening touch already
+ * invalidated — so it is recomputed here, the same way `listResults` does.
+ */
 function evidenceFor(state: State, item: { evidenceIds: string[] }) {
   return {
     notes: state.notes.filter((n) => item.evidenceIds.includes(n.id)),
-    results: Object.values(state.results).filter((r) => item.evidenceIds.includes(r.key)),
+    results: Object.values(state.results)
+      .filter((r) => item.evidenceIds.includes(r.key))
+      .map((r) => ({ ...r, staleBecause: staleReason(state, r) })),
   };
 }
 

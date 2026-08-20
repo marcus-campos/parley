@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { apply, initialState, makeCtx } from "../../src/state/machine";
-import type { Ctx, Note, State } from "../../src/state/types";
+import type { CommandResult, Ctx, Note, State } from "../../src/state/types";
 
 const T0 = Date.UTC(2026, 7, 20, 12, 0, 0);
 let counter = { n: 0 };
@@ -57,6 +57,28 @@ describe("pulling from the pool", () => {
     const evidence = (out.response as unknown as { evidence: { notes: Note[] } }).evidence;
     expect(evidence.notes).toHaveLength(1);
     expect(evidence.notes[0]!.title).toBe("the select2 trap");
+  });
+
+  test("evidence carries live staleness, not the frozen-fresh stamp it was recorded with", () => {
+    apply(state, core, { v: 1, op: "result", key: "test1", status: "pass", summary: "green", paths: ["a.ts"] }, at(60));
+    apply(state, core, { v: 1, op: "result", key: "test2", status: "pass", summary: "still green", paths: ["b.ts"] }, at(60));
+
+    // RESPONSIVO edits a.ts after test1 ran: test1 is invalidated. b.ts is
+    // never touched, so test2 stays fresh — a control against an
+    // implementation that just hardcodes a stale reason for everything.
+    apply(state, responsivo, { v: 1, op: "claim", paths: ["a.ts"] }, at(80));
+
+    const out = apply(state, core, {
+      v: 1, op: "work", title: "x", paths: ["c.ts"], evidence: ["test1", "test2"],
+    }, at(100));
+    const id = (out.response as unknown as { items: { id: string }[] }).items[0]!.id;
+
+    const taken = apply(state, responsivo, { v: 1, op: "take", id }, at(200));
+    const results = (taken.response as unknown as { evidence: { results: CommandResult[] } }).evidence.results;
+    const stale = results.find((r) => r.key === "test1")!;
+    const fresh = results.find((r) => r.key === "test2")!;
+    expect(stale.staleBecause).toContain("RESPONSIVO touched a.ts");
+    expect(fresh.staleBecause).toBeNull();
   });
 
   test("an offer is a first refusal, not obedience: the owner can drop it", () => {
