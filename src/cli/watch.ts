@@ -16,9 +16,14 @@ import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config"
  */
 
 interface Front {
-  name: string; mission: string; harness: string; kind: string;
+  id: string; name: string; mission: string; harness: string; kind: string;
   branch: string; worktree: string; tag: string;
   connected: boolean; idle_s: number; claims: string[];
+}
+
+interface WorkRow {
+  id: string; paths: string[]; title: string; state: string;
+  offeredToId: string | null; takenById: string | null;
 }
 
 interface Note {
@@ -87,6 +92,57 @@ function countdown(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+interface WorkGroup { label: string; count: number; kind: string }
+
+/**
+ * One entry per owner-and-state, not one per item — the panel is a person
+ * glancing over, and thirteen individual rows is the corpus this whole
+ * feature exists to avoid dumping in front of them.
+ */
+function workGroups(work: WorkRow[], nameFor: (id: string) => string): WorkGroup[] {
+  const byOffered = new Map<string, number>();
+  const byTaken = new Map<string, number>();
+  let open = 0;
+  for (const w of work) {
+    if (w.state === "offered" && w.offeredToId) {
+      byOffered.set(w.offeredToId, (byOffered.get(w.offeredToId) ?? 0) + 1);
+    } else if (w.state === "taken" && w.takenById) {
+      byTaken.set(w.takenById, (byTaken.get(w.takenById) ?? 0) + 1);
+    } else if (w.state === "open") {
+      open++;
+    }
+  }
+  const groups: WorkGroup[] = [];
+  for (const [id, count] of byOffered) groups.push({ label: nameFor(id), count, kind: "offered" });
+  for (const [id, count] of byTaken) groups.push({ label: nameFor(id), count, kind: "taken" });
+  if (open > 0) groups.push({ label: "pool", count: open, kind: "open" });
+  return groups;
+}
+
+/**
+ * The header and the collapsed, grouped-by-owner line — the two lines worth
+ * showing before anyone presses `w`. Exported bare, with no ANSI colour codes,
+ * so a test can assert the text without stripping escape sequences first.
+ */
+export function workSummaryLines(work: WorkRow[], fronts: { id: string; name: string }[]): [string, string] {
+  const live = work.filter((w) => w.state !== "done");
+  const nameFor = (id: string) => fronts.find((f) => f.id === id)?.name ?? id;
+  const groups = workGroups(live, nameFor);
+  const summary = groups.map((g) => `${g.label}   ${g.count} ${g.kind}`).join("      ");
+  return [`  WORK (${live.length})  ${G.dot}  w to expand`, `  ${summary}`];
+}
+
+/** One line per item, only rendered once a person asks to see it. */
+export function workDetailLines(work: WorkRow[], fronts: { id: string; name: string }[]): string[] {
+  const nameFor = (id: string | null) => (id ? fronts.find((f) => f.id === id)?.name ?? id : "pool");
+  return work
+    .filter((w) => w.state !== "done")
+    .map((w) => {
+      const owner = w.state === "offered" ? nameFor(w.offeredToId) : w.state === "taken" ? nameFor(w.takenById) : "pool";
+      return `    ${owner}  ${w.state}  ${w.paths[0]} — ${w.title}`;
+    });
+}
+
 /** Wrap on word boundaries, preserving the blank lines that shape a note. */
 function wrap(text: string, w: number): string[] {
   const out: string[] = [];
@@ -123,6 +179,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let fronts: Front[] = [];
   let pending: PendingRequest[] = [];
   let notes: Note[] = [];
+  let work: WorkRow[] = [];
   let mode = me.mode;
   let myName = me.name;
   const feed: FeedEvent[] = [];
@@ -134,6 +191,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let selected = 0;
   let scroll = 0;
   let closing = false;
+  let workExpanded = false;
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
@@ -150,11 +208,12 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   }
 
   async function refresh(): Promise<void> {
-    const [whoR, reqR, notesR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
+      client.request({ op: "works" }),
     ]);
     if (whoR.ok) {
       const d = whoR as unknown as { mode: string; participants: Front[] };
@@ -167,6 +226,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       if (selected >= notes.length) selected = Math.max(0, notes.length - 1);
     }
     if (drainR.ok) pushFeed((drainR as unknown as { events: FeedEvent[] }).events);
+    if (worksR.ok) work = (worksR as unknown as { work: WorkRow[] }).work;
     render();
   }
 
@@ -218,6 +278,16 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       }
     }
 
+    if (work.some((w) => w.state !== "done")) {
+      lines.push("");
+      const [head, summary] = workSummaryLines(work, fronts);
+      lines.push(yellow(head));
+      lines.push(summary);
+      if (workExpanded) {
+        for (const line of workDetailLines(work, fronts)) lines.push(dim(line));
+      }
+    }
+
     if (notes.length) {
       lines.push("");
       lines.push(dim(`  NOTES (${notes.length}) ${G.dot} ${bold("n")}${dim(" to browse and read them")}`));
@@ -245,8 +315,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
     lines.push(dim(G.h.repeat(w)));
     if (composer === "none") {
+      const workHint = work.some((w) => w.state !== "done")
+        ? ` ${G.dot} ${bold("w")}${dim(workExpanded ? " collapse work" : " expand work")}`
+        : "";
       lines.push(
-        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
+        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")}${workHint} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
       );
     } else {
       const label = composer === "name" ? dim("your name: ") : "";
@@ -396,6 +469,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }
       if (ch === "m" || ch === "M") { composer = "name"; input = ""; status = ""; return true; }
       if (ch === "n" || ch === "N") { view = "notes"; selected = Math.max(0, notes.length - 1); return true; }
+      if (ch === "w" || ch === "W") { workExpanded = !workExpanded; return true; }
       if (ch === "q" || ch === "Q") { shutdown(); return false; }
       return false;
     }

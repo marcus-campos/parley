@@ -77,11 +77,22 @@ const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: {} },
     frame: () => ({ op: "drain" }),
     render: (r) => {
-      const events = (r as unknown as { events: { from: { name: string; kind: string } | null; text: string; priority: string }[] }).events;
-      if (!events?.length) return "Nothing new.";
-      return events
-        .map((e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`)
-        .join("\n");
+      const d = r as unknown as {
+        events: { from: { name: string; kind: string } | null; text: string; priority: string }[];
+        pool?: string;
+      };
+      const parts: string[] = [];
+      if (d.events?.length) {
+        parts.push(
+          d.events
+            .map((e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`)
+            .join("\n"),
+        );
+      }
+      // The pool footer rides on this same response (Task 7's `drain` change),
+      // so a direct drain call sees it too, not just the footer of other tools.
+      if (d.pool) parts.push(d.pool);
+      return parts.length ? parts.join("\n\n") : "Nothing new.";
     },
   },
   {
@@ -397,12 +408,22 @@ export async function runMcpServer(): Promise<void> {
   async function footer(connection: ParleyClient): Promise<string> {
     const drained = await connection.request({ op: "drain" });
     if (!drained.ok) return "";
-    const events = (drained as unknown as { events: { from: { name: string; kind: string } | null; text: string; priority: string }[] }).events;
-    if (!events.length) return "";
-    const lines = events.map(
-      (e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`,
-    );
-    return `\n\n---\nMessages from the other sessions working in this repository:\n${lines.join("\n")}`;
+    const d = drained as unknown as {
+      events: { from: { name: string; kind: string } | null; text: string; priority: string }[];
+      pool?: string;
+    };
+    const parts: string[] = [];
+    if (d.events.length) {
+      const lines = d.events.map(
+        (e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`,
+      );
+      parts.push(`Messages from the other sessions working in this repository:\n${lines.join("\n")}`);
+    }
+    // Same drain, same round trip — a second request just for the pool would
+    // cost more than the pool saves.
+    if (d.pool) parts.push(d.pool);
+    if (!parts.length) return "";
+    return `\n\n---\n${parts.join("\n\n")}`;
   }
 
   function send(message: unknown): void {

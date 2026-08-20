@@ -247,6 +247,36 @@ export function idleFronts(state: State): Participant[] {
   });
 }
 
+const MAX_NAMED_OFFERS = 3;
+
+/**
+ * What this front needs to know about the pool, in the fewest lines that can
+ * carry it.
+ *
+ * Named offers, then a count. Dumping the pool into every tool call would cost
+ * more tokens than the pool saves — the whole point of ranking anything is that
+ * the footer carries the top of it, never the corpus.
+ */
+export function poolFooterFor(state: State, participantId: string): string {
+  if (state.shape === "bus") return "";
+
+  const mine = state.work.filter((w) => w.state === "offered" && w.offeredToId === participantId);
+  const open = state.work.filter((w) => w.state === "open");
+  if (mine.length === 0 && open.length === 0) return "";
+
+  const lines: string[] = [];
+  for (const item of mine.slice(0, MAX_NAMED_OFFERS)) {
+    lines.push(`  ${item.paths[0]} — ${item.title} (parley take ${item.id}, or parley drop ${item.id})`);
+  }
+  if (mine.length > MAX_NAMED_OFFERS) {
+    lines.push(`  ${mine.length - MAX_NAMED_OFFERS} more offered to you — parley works --mine`);
+  }
+  if (open.length > 0) {
+    lines.push(`  ${open.length} open in the pool, owned by nobody — parley works --state open`);
+  }
+  return `parley pool:\n${lines.join("\n")}`;
+}
+
 export function finishWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };

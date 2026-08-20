@@ -64,6 +64,17 @@ export const PAGE = String.raw`<!doctype html>
   .req .why{color:var(--mute);font-size:12.5px;margin-bottom:8px}
   .req .settle{color:var(--mute);font-size:11.5px;border-top:1px dashed var(--line);padding-top:7px}
 
+  /* Collapsed by default: <details> is the one HTML element that gives us
+     that for free, no JS state to track across a page an EventSource keeps
+     re-rendering underneath the person's cursor. */
+  #work[open] summary{margin-bottom:8px}
+  #work summary{cursor:pointer;color:var(--mute);font-size:12.5px}
+  #work summary::marker{color:var(--mute)}
+  .witem{padding:7px 9px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--panel);margin-bottom:6px;font-size:12.5px}
+  .witem .owner{font-weight:600}
+  .witem .path{color:var(--human);word-break:break-all}
+
   .feed{flex:1;overflow:auto;padding:16px 20px;min-height:0;display:flex;
     flex-direction:column;gap:5px;justify-content:flex-end}
   .ev{display:flex;gap:10px;align-items:baseline;flex:none}
@@ -132,6 +143,10 @@ export const PAGE = String.raw`<!doctype html>
     <div id="fronts"><p class="empty">nobody on the bus yet</p></div>
     <h2 style="margin-top:22px">Pending permission</h2>
     <div id="requests"><p class="empty">nothing pending</p></div>
+    <details id="work" style="margin-top:22px;display:none">
+      <summary id="work-summary"></summary>
+      <div id="work-items"></div>
+    </details>
     <h2 style="margin-top:22px">Notes</h2>
     <div id="notes"><p class="empty">no notes yet</p></div>
     <p class="hint" style="padding:0">Durable knowledge the fronts left for every
@@ -249,6 +264,30 @@ $("feed").addEventListener("scroll", () => {
   atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 });
 
+// Grouped by owner, not by item — the page is something a person glances at,
+// and listing every one of thirteen offered items is the corpus this whole
+// feature exists to avoid putting in front of them. The itemised list only
+// shows once they open the <details> themselves.
+function workOwnerName(id, fronts) {
+  if (!id) return "pool";
+  const f = (fronts || []).find((x) => x.id === id);
+  return f ? f.name : id;
+}
+function workGroupsFrom(work, fronts) {
+  const byOffered = new Map(), byTaken = new Map();
+  let open = 0;
+  for (const w of work) {
+    if (w.state === "offered" && w.offeredToId) byOffered.set(w.offeredToId, (byOffered.get(w.offeredToId) || 0) + 1);
+    else if (w.state === "taken" && w.takenById) byTaken.set(w.takenById, (byTaken.get(w.takenById) || 0) + 1);
+    else if (w.state === "open") open++;
+  }
+  const groups = [];
+  for (const [id, count] of byOffered) groups.push({ label: workOwnerName(id, fronts), count, kind: "offered" });
+  for (const [id, count] of byTaken) groups.push({ label: workOwnerName(id, fronts), count, kind: "taken" });
+  if (open > 0) groups.push({ label: "pool", count: open, kind: "open" });
+  return groups;
+}
+
 function render(s) {
   $("mode").textContent = s.mode;
   $("mode").className = "mode " + s.mode;
@@ -283,6 +322,20 @@ function render(s) {
     + '<div class="settle">'+esc(r.owner)+' settles this. Unanswered, it is granted to '
     + esc(r.requester)+' and announced.</div></div>'
   ).join("") : '<p class="empty">nothing pending</p>';
+
+  const liveWork = (s.work || []).filter((w) => w.state !== "done");
+  $("work").style.display = liveWork.length ? "" : "none";
+  if (liveWork.length) {
+    const groups = workGroupsFrom(liveWork, s.fronts);
+    $("work-summary").textContent = "Work (" + liveWork.length + ")  ·  "
+      + groups.map((g) => g.label + " " + g.count + " " + g.kind).join("    ");
+    $("work-items").innerHTML = liveWork.map((w) => {
+      const owner = w.state === "offered" ? workOwnerName(w.offeredToId, s.fronts)
+        : w.state === "taken" ? workOwnerName(w.takenById, s.fronts) : "pool";
+      return '<div class="witem"><span class="owner">'+esc(owner)+'</span> &middot; '+esc(w.state)
+        + '<div class="path">'+esc(w.paths[0])+'</div><div class="meta">'+esc(w.title)+'</div></div>';
+    }).join("");
+  }
 
   $("feed").innerHTML = s.feed.map((e) => {
     const t = '<time>'+hhmm(e.at)+'</time>';

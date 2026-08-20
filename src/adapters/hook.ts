@@ -252,10 +252,13 @@ export async function runHook(event: string): Promise<void> {
     const drained = await client.request({ op: "drain" });
     const events = drained.ok ? (drained as unknown as { events: never[] }).events : [];
     const inbox = formatEvents(events);
+    // Rides on the same drain the inbox came from — a second request for the
+    // pool would double the round trips this hook pays against its 30ms budget.
+    const pool = drained.ok ? (drained as unknown as { pool?: string }).pool ?? "" : "";
 
     if (name !== "PreToolUse") {
       clearTimeout(budget);
-      return context(name, [inbox, territoryReminder()].filter(Boolean).join("\n\n"));
+      return context(name, [inbox, territoryReminder(), pool].filter(Boolean).join("\n\n"));
     }
 
     // PreToolUse: one hook, one call — drain the inbox and, when the tool is an
@@ -265,7 +268,7 @@ export async function runHook(event: string): Promise<void> {
     // attributed to the right front.
     if (!EDIT_TOOLS.has(input.tool_name ?? "")) {
       clearTimeout(budget);
-      return context(name, inbox);
+      return context(name, [inbox, pool].filter(Boolean).join("\n\n"));
     }
 
     const rawPath = String(input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? "");
@@ -299,7 +302,7 @@ export async function runHook(event: string): Promise<void> {
         ? `parley: recently edited by someone else — read it before assuming what is in it:\n${touches.join("\n")}`
         : "";
 
-      return context(name, [inbox, knowledge, changed, territoryReminder()].filter(Boolean).join("\n\n"));
+      return context(name, [inbox, knowledge, changed, territoryReminder(), pool].filter(Boolean).join("\n\n"));
     }
 
     const conflicts = (claimed as unknown as {
@@ -319,7 +322,8 @@ export async function runHook(event: string): Promise<void> {
         },
       });
     }
-    return context(name, `${inbox ? `${inbox}\n\n` : ""}parley warning: ${reason} Consider \`parley ask ${target} --reason "..."\` or coordinating with \`parley say\`.`);
+    const warning = `parley warning: ${reason} Consider \`parley ask ${target} --reason "..."\` or coordinating with \`parley say\`.`;
+    return context(name, [inbox, warning, pool].filter(Boolean).join("\n\n"));
   } finally {
     client.close();
   }

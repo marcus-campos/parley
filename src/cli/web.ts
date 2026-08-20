@@ -30,6 +30,7 @@ export interface Snapshot {
   fronts: unknown[];
   requests: unknown[];
   notes: unknown[];
+  work: unknown[];
   feed: unknown[];
 }
 
@@ -133,17 +134,18 @@ export async function runWebPanel(
         for (const e of (past as unknown as { events: unknown[] }).events) feed.push(e);
       }
     }
-    const [whoR, reqR, notesR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
+      client.request({ op: "works" }),
     ]);
     if (drainR.ok) {
       for (const e of (drainR as unknown as { events: unknown[] }).events) feed.push(e);
       while (feed.length > 500) feed.shift();
     }
-    const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { name: string }[] }) : null;
+    const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { id: string; name: string }[] }) : null;
     return {
       mode: who?.mode ?? me.mode,
       repo: repo.root,
@@ -151,6 +153,7 @@ export async function runWebPanel(
       fronts: (who?.participants ?? []).filter((p) => p.name !== myName),
       requests: reqR.ok ? (reqR as unknown as { requests: unknown[] }).requests : [],
       notes: notesR.ok ? (notesR as unknown as { notes: unknown[] }).notes : [],
+      work: worksR.ok ? (worksR as unknown as { work: unknown[] }).work : [],
       feed: feed.slice(-200),
     };
   }
