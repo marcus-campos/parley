@@ -1,16 +1,6 @@
 import { err, ok } from "../protocol/types";
-import { normalizeTerritoryPath } from "../repo/paths";
+import { readPathList } from "../repo/paths";
 import { actorOf, pushEvent, type Ctx, type Outcome, type State, type WorkItem } from "./types";
-
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const p of value) {
-    if (typeof p !== "string" || !p.trim()) continue;
-    try { out.push(normalizeTerritoryPath(p)); } catch { /* skip what cannot be a path */ }
-  }
-  return out;
-}
 
 /**
  * A front publishes what it found. One item per path, because the unit of
@@ -27,7 +17,7 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
   const title = typeof frame.title === "string" ? frame.title.trim() : "";
   if (!title) return { state, response: err("UNKNOWN_OP", "a work item needs a title"), broadcast: [] };
 
-  const paths = readPaths(frame.paths);
+  const paths = readPathList(frame.paths);
   if (paths.length === 0) return { state, response: err("UNKNOWN_OP", "a work item needs at least one path"), broadcast: [] };
 
   const evidenceIds = Array.isArray(frame.evidence)

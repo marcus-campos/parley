@@ -1,16 +1,6 @@
 import { err, ok } from "../protocol/types";
-import { matchesPath, normalizeTerritoryPath } from "../repo/paths";
+import { matchesPath, normalizeTerritoryPath, readPathList } from "../repo/paths";
 import { actorOf, pushEvent, type Ctx, type Note, type Outcome, type State } from "./types";
-
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const p of value) {
-    if (typeof p !== "string" || !p.trim()) continue;
-    try { out.push(normalizeTerritoryPath(p)); } catch { /* skip what cannot be a path */ }
-  }
-  return out;
-}
 
 /** Knowledge anchored to a concrete path, newest last. */
 export function notesForPath(state: State, path: string): Note[] {
@@ -42,7 +32,7 @@ export function note(state: State, actorId: string | null, frame: Record<string,
     title,
     body: typeof frame.body === "string" ? frame.body : "",
     tags: Array.isArray(frame.tags) ? frame.tags.filter((t): t is string => typeof t === "string") : [],
-    paths: readPaths(frame.paths),
+    paths: readPathList(frame.paths),
     kind: frame.kind === "decision" ? "decision" : "note",
     reversedBy: null,
     authorId: me.id,
