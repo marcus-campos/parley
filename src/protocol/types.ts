@@ -69,6 +69,8 @@ export const DEFAULTS = {
   PERMISSION_TTL_MS: 5 * 60_000,
   /** A dead front's claims are announced, then released after this grace. */
   ORPHAN_GRACE_MS: 60_000,
+  /** An offer nobody answered returns to the pool. Matches PERMISSION_TTL_MS on purpose. */
+  OFFER_TTL_MS: 5 * 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

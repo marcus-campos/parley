@@ -164,6 +164,7 @@ export interface TickOptions {
   autoClaimTtlMs?: number;
   leaseTtlMs?: number;
   orphanGraceMs?: number;
+  offerTtlMs?: number;
 }
 
 /**
@@ -228,6 +229,49 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
 
   // 4. Unanswered permission requests are granted, loudly.
   broadcast.push(...expirePermissions(state, ctx));
+
+  // 5. Rule 1 above already marks dead participants and stamps their claims;
+  //    this stamps their work the same way, so a front that is merely
+  //    restarting gets its item back instead of having to fight for it.
+  const offerTtl = opts.offerTtlMs ?? DEFAULTS.OFFER_TTL_MS;
+
+  for (const item of state.work) {
+    if (item.state === "done") continue;
+
+    if (item.state === "taken" && item.takenById) {
+      const holder = state.participants[item.takenById];
+      if (holder?.gone) {
+        if (item.orphanedAtMs === null) item.orphanedAtMs = ctx.nowMs;
+      } else {
+        item.orphanedAtMs = null;
+      }
+      if (item.orphanedAtMs !== null && ctx.nowMs - item.orphanedAtMs > grace) {
+        const name = holder?.name ?? "a front";
+        item.state = "open";
+        item.takenById = null;
+        item.orphanedAtMs = null;
+        broadcast.push(pushEvent(state, ctx, {
+          kind: "system", from: null, to: null, priority: "normal",
+          text: `${name} dropped holding ${item.paths[0]} — back in the pool`,
+        }));
+      }
+      continue;
+    }
+
+    // An offer is exclusive — only the offeree may take it — for exactly this
+    // long. Without an expiry, one unresponsive front could hold a file's
+    // worth of work away from everybody forever.
+    if (item.state === "offered" && item.offeredAtMs !== null && ctx.nowMs - item.offeredAtMs > offerTtl) {
+      const owner = state.participants[item.offeredToId ?? ""];
+      item.state = "open";
+      item.offeredToId = null;
+      item.offeredAtMs = null;
+      broadcast.push(pushEvent(state, ctx, {
+        kind: "system", from: null, to: null, priority: "normal",
+        text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,
+      }));
+    }
+  }
 
   return { state, broadcast };
 }
