@@ -1,6 +1,33 @@
 import { err, ok } from "../protocol/types";
-import { readPathList } from "../repo/paths";
-import { actorOf, pushEvent, type Ctx, type Outcome, type State, type WorkItem } from "./types";
+import { matchesPath, readPathList } from "../repo/paths";
+import { actorOf, liveParticipants, pushEvent, type Ctx, type Outcome, type State, type WorkItem } from "./types";
+
+/**
+ * Who already owns this path, if anyone.
+ *
+ * Possession is what routes discovered work — no plan, no parent. It buys the
+ * first refusal and nothing more: the item is an offer, and the owner may drop
+ * it. Otherwise the front that discovered the work would have acquired
+ * authority over the front that holds the file, which is the hierarchy this
+ * whole system exists to do without.
+ */
+export function ownerForPath(state: State, path: string, exceptId: string): string | null {
+  const live = new Set(liveParticipants(state).map((p) => p.id));
+  const candidates = state.claims.filter(
+    (c) => c.orphanedAtMs === null && c.ownerId !== exceptId && live.has(c.ownerId) && matchesPath(c.pattern, path),
+  );
+  if (candidates.length === 0) return null;
+  // Specific beats broad; on a tie the older claim wins. Deterministic, and the
+  // loser is never consulted — this is a routing hint, not a permission.
+  const best = candidates.reduce((a, b) => {
+    const bySegments = b.pattern.split("/").length - a.pattern.split("/").length;
+    if (bySegments !== 0) return bySegments > 0 ? b : a;
+    const byWildcard = (a.pattern.includes("*") ? 1 : 0) - (b.pattern.includes("*") ? 1 : 0);
+    if (byWildcard !== 0) return byWildcard > 0 ? b : a;
+    return a.lastTouchMs <= b.lastTouchMs ? a : b;
+  });
+  return best.ownerId;
+}
 
 /**
  * A front publishes what it found. One item per path, because the unit of
@@ -28,6 +55,7 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
 
   const created: WorkItem[] = [];
   for (const path of paths) {
+    const ownerId = ownerForPath(state, path, me.id);
     const item: WorkItem = {
       id: ctx.nextId("w"),
       paths: [path],
@@ -37,9 +65,9 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
       publishedByName: me.name,
       kind,
       origin,
-      state: "open",
-      offeredToId: null,
-      offeredAtMs: null,
+      state: ownerId ? "offered" : "open",
+      offeredToId: ownerId,
+      offeredAtMs: ownerId ? ctx.nowMs : null,
       takenById: null,
       orphanedAtMs: null,
       reviewOf: typeof frame.reviewOf === "string" ? frame.reviewOf : null,
@@ -59,7 +87,7 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
   return {
     state,
     response: ok({
-      items: created.map((i) => ({ id: i.id, path: i.paths[0]!, state: i.state, offeredTo: null })),
+      items: created.map((i) => ({ id: i.id, path: i.paths[0]!, state: i.state, offeredTo: i.offeredToId })),
     }),
     broadcast,
   };
