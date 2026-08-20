@@ -177,6 +177,12 @@ export interface WorkItem {
   /** For `kind: "review"`, the item whose work is being checked. */
   reviewOf: string | null;
   at: string;
+  /**
+   * Set once the pool has rung an idle front about this item, so nobody is
+   * pushed round in circles. Same discipline as the question and permission
+   * nudges.
+   */
+  nudgedAtMs: number | null;
 }
 
 /** A command result worth not running again. */

@@ -71,6 +71,8 @@ export const DEFAULTS = {
   ORPHAN_GRACE_MS: 60_000,
   /** An offer nobody answered returns to the pool. Matches PERMISSION_TTL_MS on purpose. */
   OFFER_TTL_MS: 5 * 60_000,
+  /** How long an open item sits before the pool rings an idle front about it. */
+  ORPHAN_POOL_MS: 10 * 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

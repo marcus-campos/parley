@@ -1,7 +1,9 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, readPathList } from "../repo/paths";
 import { staleReason } from "./results";
-import { actorOf, liveParticipants, pushEvent, type Ctx, type Outcome, type State, type WorkItem } from "./types";
+import {
+  actorOf, liveParticipants, pushEvent, type Ctx, type Outcome, type Participant, type State, type WorkItem,
+} from "./types";
 
 /**
  * Who already owns this path, if anyone.
@@ -73,6 +75,7 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
       orphanedAtMs: null,
       reviewOf: typeof frame.reviewOf === "string" ? frame.reviewOf : null,
       at: ctx.now,
+      nudgedAtMs: null,
     };
     state.work.push(item);
     created.push(item);
@@ -210,6 +213,27 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
       about: me.id,
     })],
   };
+}
+
+/**
+ * Alive fronts holding no explicit claim and no taken item — spare capacity
+ * the doorbell may address.
+ *
+ * A human watching the panel is filtered out: they are not a front to
+ * dispatch to, and counting them as idle capacity would ring the bell at
+ * someone who was never going to pick the item up.
+ *
+ * An auto-claim does not count as busy either: it is the footprint of an
+ * edit, not a declaration of what a front is doing — a session that swept
+ * the repository would otherwise look permanently occupied.
+ */
+export function idleFronts(state: State): Participant[] {
+  return liveParticipants(state).filter((p) => {
+    if (p.kind !== "agent") return false;
+    if (state.claims.some((c) => c.ownerId === p.id && !c.auto && c.orphanedAtMs === null)) return false;
+    if (state.work.some((w) => w.state === "taken" && w.takenById === p.id)) return false;
+    return true;
+  });
 }
 
 export function finishWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {

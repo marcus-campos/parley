@@ -6,7 +6,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
-import { dropWork, finishWork, listWork, publishWork, takeWork } from "./work";
+import { dropWork, finishWork, idleFronts, listWork, publishWork, takeWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -165,6 +165,7 @@ export interface TickOptions {
   leaseTtlMs?: number;
   orphanGraceMs?: number;
   offerTtlMs?: number;
+  orphanPoolMs?: number;
 }
 
 /**
@@ -269,6 +270,27 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
       broadcast.push(pushEvent(state, ctx, {
         kind: "system", from: null, to: null, priority: "normal",
         text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,
+      }));
+    }
+  }
+
+  // 6. A pool left open beside spare capacity is the failure this whole shape
+  //    exists to prevent: nobody blocked, nothing broken, and an idle front
+  //    that never learns there is something to pick up. Rung once per item —
+  //    same discipline as the question and permission nudges — so a front
+  //    that reads nothing is never pushed round in circles.
+  const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
+  const stale = state.work.filter(
+    (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
+  );
+  if (stale.length > 0) {
+    const idle = idleFronts(state);
+    if (idle.length > 0) {
+      const target = idle[0]!;
+      for (const w of stale) w.nudgedAtMs = ctx.nowMs;
+      broadcast.push(pushEvent(state, ctx, {
+        kind: "system", from: null, to: null, priority: "high",
+        text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
       }));
     }
   }
