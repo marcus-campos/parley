@@ -69,6 +69,48 @@ describe("pulling from the pool", () => {
     expect(state.work[0]!.offeredToId).toBeNull();
   });
 
+  test("during the offer window, only the offeree may take it — and it still can", () => {
+    apply(state, responsivo, { v: 1, op: "claim", paths: ["a.ts"] }, at(50));
+    const [id] = publish(state, core, ["a.ts"], 100);
+    expect(state.work[0]!.state).toBe("offered");
+
+    const auditor = joined(state, "AUDITOR", 110);
+    const outsider = apply(state, auditor, { v: 1, op: "take", id }, at(200));
+    expect(outsider.response).toMatchObject({
+      ok: false,
+      error: { code: "CONFLICT" },
+      offeredTo: { id: responsivo, name: "RESPONSIVO" },
+    });
+    expect(state.work[0]!.state).toBe("offered");
+    expect(state.work[0]!.takenById).toBeNull();
+
+    // The gate is on everyone else, not on the offer itself: the offeree can
+    // still take its own offered item, in the same instant.
+    const offeree = apply(state, responsivo, { v: 1, op: "take", id }, at(210));
+    expect(offeree.response.ok).toBe(true);
+    expect(state.work[0]!.state).toBe("taken");
+    expect(state.work[0]!.takenById).toBe(responsivo);
+  });
+
+  test("once the offer is gone, the item is open to whoever gets there first", () => {
+    apply(state, responsivo, { v: 1, op: "claim", paths: ["a.ts"] }, at(50));
+    const [id] = publish(state, core, ["a.ts"], 100);
+    expect(state.work[0]!.state).toBe("offered");
+
+    // Driving the lapse directly: expiring an unanswered offer back to `open`
+    // is Task 5's tick-based machinery, and this test must not depend on it —
+    // only on what take does once the item is `open` again. Object.assign,
+    // not three literal assignments, so TS does not narrow `.state` to
+    // `"open"` for the rest of the test.
+    Object.assign(state.work[0]!, { state: "open", offeredToId: null, offeredAtMs: null });
+
+    const auditor = joined(state, "AUDITOR", 110);
+    const out = apply(state, auditor, { v: 1, op: "take", id }, at(200));
+    expect(out.response.ok).toBe(true);
+    expect(state.work[0]!.state).toBe("taken");
+    expect(state.work[0]!.takenById).toBe(auditor);
+  });
+
   test("a planned item cannot be dropped — dispatch is not an offer", () => {
     const out = apply(state, core, {
       v: 1, op: "work", title: "task 5", paths: ["a.ts"], origin: "planned",

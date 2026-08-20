@@ -130,6 +130,21 @@ export function takeWork(state: State, actorId: string | null, frame: Record<str
   if (item.state === "taken" || item.state === "done") {
     return { state, response: err("CONFLICT", `already ${item.state}`), broadcast: [] };
   }
+  // A right of first refusal, not a notification: while the offer stands,
+  // only the offeree may take it. Letting anyone else grab it would hand them
+  // work whose file they may not even be able to edit under an enforced
+  // claim, and would leave Task 5's offer expiry with nothing to expire.
+  if (item.state === "offered" && item.offeredToId !== me.id) {
+    const holder = state.participants[item.offeredToId ?? ""];
+    return {
+      state,
+      response: {
+        ...err("CONFLICT", "offered elsewhere — it is not open yet"),
+        offeredTo: { id: item.offeredToId, name: holder?.name ?? "(gone)", mission: holder?.mission ?? "" },
+      },
+      broadcast: [],
+    };
+  }
 
   item.state = "taken";
   item.takenById = me.id;
