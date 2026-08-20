@@ -104,3 +104,108 @@ export function listWork(state: State, actorId: string | null, frame: Record<str
   }
   return { state, response: ok({ work }), broadcast: [] };
 }
+
+function findItem(state: State, frame: Record<string, unknown>) {
+  return state.work.find((w) => w.id === String(frame.id ?? ""));
+}
+
+/** Notes and results named by an item, resolved once so the taker never rediscovers. */
+function evidenceFor(state: State, item: { evidenceIds: string[] }) {
+  return {
+    notes: state.notes.filter((n) => item.evidenceIds.includes(n.id)),
+    results: Object.values(state.results).filter((r) => item.evidenceIds.includes(r.key)),
+  };
+}
+
+/**
+ * Resolving the evidence here, on take, is why the front that picks the item
+ * up does not repay the discovery. An item whose evidence does not travel is
+ * a chat message that moved house.
+ */
+export function takeWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  const item = findItem(state, frame);
+  if (!item) return { state, response: err("UNKNOWN_OP", "no work item with that id"), broadcast: [] };
+  if (item.state === "taken" || item.state === "done") {
+    return { state, response: err("CONFLICT", `already ${item.state}`), broadcast: [] };
+  }
+
+  item.state = "taken";
+  item.takenById = me.id;
+  item.offeredToId = null;
+  item.offeredAtMs = null;
+  item.orphanedAtMs = null;
+  me.lastSeenMs = ctx.nowMs;
+
+  return {
+    state,
+    response: ok({ id: item.id, title: item.title, paths: item.paths, evidence: evidenceFor(state, item) }),
+    broadcast: [pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "normal",
+      text: `${me.name} took ${item.paths[0]} — ${item.title}`,
+      about: me.id,
+    })],
+  };
+}
+
+/**
+ * Possession bought the owner the first refusal, not obedience. If the owner
+ * could not refuse, the front that discovered the work would have acquired
+ * authority over the front that holds the file — the exact hierarchy this
+ * system exists to do without.
+ */
+export function dropWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  const item = findItem(state, frame);
+  if (!item) return { state, response: err("UNKNOWN_OP", "no work item with that id"), broadcast: [] };
+  // Dispatch is not an offer. A planned item stays where the plan put it.
+  if (item.origin === "planned") {
+    return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+  }
+  if (item.offeredToId !== me.id && item.takenById !== me.id) {
+    return { state, response: err("NOT_TAKEN", "not offered to you and not taken by you"), broadcast: [] };
+  }
+
+  item.state = "open";
+  item.offeredToId = null;
+  item.offeredAtMs = null;
+  item.takenById = null;
+  me.lastSeenMs = ctx.nowMs;
+  const reason = typeof frame.reason === "string" ? frame.reason : "";
+
+  return {
+    state,
+    response: ok({ id: item.id, state: item.state }),
+    broadcast: [pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "normal",
+      text: `${me.name} passed on ${item.paths[0]}${reason ? ` — ${reason}` : ""}; it is in the pool`,
+      about: me.id,
+    })],
+  };
+}
+
+export function finishWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  const item = findItem(state, frame);
+  if (!item) return { state, response: err("UNKNOWN_OP", "no work item with that id"), broadcast: [] };
+  if (item.takenById !== me.id) {
+    return { state, response: err("NOT_TAKEN", "you are not holding this item"), broadcast: [] };
+  }
+
+  item.state = "done";
+  me.lastSeenMs = ctx.nowMs;
+  const summary = typeof frame.summary === "string" ? frame.summary : "";
+
+  return {
+    state,
+    response: ok({ id: item.id, state: item.state }),
+    broadcast: [pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "normal",
+      text: `${me.name} finished ${item.paths[0]}${summary ? ` — ${summary}` : ""}`,
+      about: me.id,
+    })],
+  };
+}

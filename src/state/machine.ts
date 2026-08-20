@@ -6,7 +6,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
-import { listWork, publishWork } from "./work";
+import { dropWork, finishWork, listWork, publishWork, takeWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -96,6 +96,9 @@ export function apply(
     case "status": return status(state, ctx);
     case "work": return publishWork(state, actorId, frame, ctx);
     case "works": return listWork(state, actorId, frame);
+    case "take": return takeWork(state, actorId, frame, ctx);
+    case "drop": return dropWork(state, actorId, frame, ctx);
+    case "done": return finishWork(state, actorId, frame, ctx);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
