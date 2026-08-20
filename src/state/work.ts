@@ -201,6 +201,10 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
   item.offeredToId = null;
   item.offeredAtMs = null;
   item.takenById = null;
+  // A front handing work back is a new stale episode, not a continuation of
+  // whichever one earned the last nudge — drop is supposed to be free, and it
+  // would quietly stop being free if the pool remembered past the hand-back.
+  item.nudgedAtMs = null;
   me.lastSeenMs = ctx.nowMs;
   const reason = typeof frame.reason === "string" ? frame.reason : "";
 
@@ -226,6 +230,13 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
  * An auto-claim does not count as busy either: it is the footprint of an
  * edit, not a declaration of what a front is doing — a session that swept
  * the repository would otherwise look permanently occupied.
+ *
+ * In practice this only ever names a front holding a live connection.
+ * `ORPHAN_POOL_MS` is longer than `LEASE_TTL_MS` on purpose: a front that has
+ * gone this long without renewing its lease is not idle capacity waiting to
+ * be pinged, it is a session waiting for a person to type — the same "on its
+ * next tool call, possibly not soon" front `tick`'s rule 1 already declares
+ * gone before the doorbell would get the chance to ring for it.
  */
 export function idleFronts(state: State): Participant[] {
   return liveParticipants(state).filter((p) => {

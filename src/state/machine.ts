@@ -251,6 +251,8 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
         item.state = "open";
         item.takenById = null;
         item.orphanedAtMs = null;
+        // Same reset as a voluntary drop: back in the pool is a new episode.
+        item.nudgedAtMs = null;
         broadcast.push(pushEvent(state, ctx, {
           kind: "system", from: null, to: null, priority: "normal",
           text: `${name} dropped holding ${item.paths[0]} — back in the pool`,
@@ -267,6 +269,10 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
       item.state = "open";
       item.offeredToId = null;
       item.offeredAtMs = null;
+      // An offered item cannot have been nudged (rule 6 only stamps `open`
+      // items) — reset anyway, so no path back to `open` is left to wonder
+      // whether leaving it out was deliberate.
+      item.nudgedAtMs = null;
       broadcast.push(pushEvent(state, ctx, {
         kind: "system", from: null, to: null, priority: "normal",
         text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,

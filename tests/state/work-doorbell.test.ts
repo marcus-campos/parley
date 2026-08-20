@@ -106,4 +106,26 @@ describe("the doorbell", () => {
     const rung = tick(state, at(100 + shortTtl + 1), { orphanPoolMs: shortTtl });
     expect(rung.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(1);
   });
+
+  test("dropping a taken item resets the bell — a new stale episode may ring again", () => {
+    apply(state, core, { v: 1, op: "claim", paths: ["src/**"] }, at(50));
+    apply(state, core, { v: 1, op: "work", title: "x", paths: ["a.ts"] }, at(100));
+    const id = state.work[0]!.id;
+
+    const firstRing = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 1));
+    expect(firstRing.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(1);
+    expect(state.work[0]!.nudgedAtMs).not.toBeNull();
+
+    // Taking it back off the pool and handing it back is a new stale episode,
+    // not a continuation of the old one — `drop` is supposed to be free
+    // (Task 4), and it would quietly stop being free if this stayed stamped.
+    apply(state, develop, { v: 1, op: "take", id }, at(100 + DEFAULTS.ORPHAN_POOL_MS + 100));
+    apply(state, develop, { v: 1, op: "drop", id }, at(100 + DEFAULTS.ORPHAN_POOL_MS + 200));
+    expect(state.work[0]!.nudgedAtMs).toBeNull();
+
+    const secondRing = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 300));
+    const bell = secondRing.broadcast.filter((e) => e.text.includes("DEVELOP"));
+    expect(bell).toHaveLength(1);
+    expect(bell[0]!.priority).toBe("high");
+  });
 });
