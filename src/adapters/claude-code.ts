@@ -170,6 +170,25 @@ lease. If you are going to pause for a long time and still need a path, touch it
 or re-claim it. A claim you took by editing expires after 15 idle minutes; one
 you asked for explicitly is yours until you release it or leave.
 
+## Work offered to you, not assigned
+
+Where the repository runs in \`shape pool\`, a front that discovers work on a
+path you hold does not have to reach you to hand it over — the offer already
+rides in the same footer every tool call reads. You do not poll for it.
+
+\`\`\`
+parley take w_0012
+parley drop w_0012 --reason "not my mission"
+\`\`\`
+
+**\`take\` hands you the notes and results already gathered for it, in the same
+response.** That is what the offer bought you — do not go rediscover what it
+already carried.
+
+**\`drop\` costs nothing, and is the right call whenever the item is not your
+mission.** It returns to the pool for whoever it actually belongs to; refusing
+is not a failure to report.
+
 ## Use parley, not a side channel
 
 Your harness may also offer a direct session-to-session message tool. **Prefer

@@ -150,6 +150,7 @@ function status(state: State, ctx: Ctx): Outcome {
     response: ok({
       protocol: PROTOCOL_VERSION,
       mode: state.mode,
+      shape: state.shape,
       seq: state.seq,
       participants: liveParticipants(state).length,
       claims: state.claims.length,

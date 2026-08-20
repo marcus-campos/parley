@@ -456,6 +456,56 @@ Claude Code. See the compatibility matrix below.
 
 ---
 
+## Shape pool
+
+`mode` says how strict territory is. `shape` says **where work comes from** —
+a second axis, also held by the daemon and also repo-scoped: a front running
+`bus` in the middle of a `pool` would ignore every offer, and the pool would
+be theatre. `bus` is everything above, and the default — a repository that
+never sets a shape behaves exactly as it always has. (`plan` is a third,
+reserved value; nothing consumes it yet.)
+
+```bash
+parley shape pool
+```
+
+A front that finds work — sixty-four instances of the same defect, a batch of
+files that all need the same label removed — publishes it instead of writing
+it into a chat message that evaporates with the scrollback:
+
+```bash
+parley work "label sem for" templates/a.html templates/b.html src/orphan.ts
+```
+
+One item per path, because the path is the unit of territory, and each is
+routed on publish, not by hand: a path a live front already holds becomes an
+**offer**, exclusive to that front for 5 minutes before it returns to the
+pool unanswered; a path owned by nobody is **open** for anyone.
+
+```bash
+parley works --mine          # what has been offered to you
+parley works --state open    # what belongs to nobody
+parley take w_0012           # first refusal is exclusive while it stands
+parley drop w_0012 --reason "not my mission"
+parley done w_0012 --summary "3 labels removed"
+```
+
+**Offers ride the footer** — the same one every hook and MCP response already
+carries — so a front never polls `works` to learn one arrived. **`take` hands
+back the notes and results already gathered for the item, in the same
+response**, so nobody re-runs the investigation that produced them. **`drop`
+costs nothing and is the right call whenever the item is not your mission**;
+it goes back in the pool for whoever it actually belongs to.
+
+A front holding no claim and no taken item is spare capacity. If the pool
+still has something open ten minutes later, parley rings that front once —
+same discipline as the doorbell for an unanswered question, never a loop.
+
+`--kind review --review-of <id>` marks an item as somebody else's work to
+check rather than new work to do.
+
+---
+
 ## Commands
 
 Everything takes `--json` for machine consumption. `--as NAME` says which front
@@ -510,6 +560,17 @@ through the environment.
 | `parley deny <id> --reason "..."` | Refuse, with a reason the requester sees. |
 | `parley requests [--all]` | Permission requests waiting, with the clock on each. |
 | `parley mode [off\|advisory\|enforced]` | The mode belongs to the repository, not to a session. |
+
+### The pool
+
+| | |
+|---|---|
+| `parley shape [bus\|pool\|plan]` | The shape belongs to the repository, not to a session. Read it with no argument. |
+| `parley work "<title>" <path…> [--evidence <id,...>] [--kind review --review-of <id>]` | Publish discovered work, one item per path. Routed on publish: offered to whoever already holds the path, open for anyone otherwise. |
+| `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. **Offers also ride the footer of every hook and MCP response** — this is for looking, not for polling. |
+| `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
+| `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. |
+| `parley done <id> [--summary "..."]` | Mark it finished. |
 
 ### Knowledge that outlives the session
 

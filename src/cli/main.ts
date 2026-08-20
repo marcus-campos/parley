@@ -78,6 +78,13 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley results [--fresh] [--key "..."]
 
   parley mode [off|advisory|enforced]
+  parley shape [bus|pool|plan]
+
+  parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
+  parley works [--state open|offered|taken|done] [--mine]
+  parley take <id>
+  parley drop <id> [--reason "..."]
+  parley done <id> [--summary "..."]
 
 Global flags: --json (machine output), --as NAME, --quiet
               --help, --version
@@ -459,7 +466,7 @@ async function main(): Promise<void> {
       const panel = readRunningPanel(repo.gitCommonDir);
       return out(
         parsed,
-        `parley up  pid ${endpoint.pid}  mode ${s.mode}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending` +
+        `parley up  pid ${endpoint.pid}  mode ${s.mode}  shape ${s.shape}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending` +
           (panel ? `\n  web panel: ${panel.url}` : ""),
         { ...(response as object), panel: panel?.url ?? null },
       );
@@ -885,6 +892,85 @@ async function main(): Promise<void> {
         return out(p, `parley: mode ${(r as unknown as { mode: string }).mode}`, r);
       }
 
+      case "shape": {
+        const wanted = p.positional[0];
+        const r = await send(wanted ? { op: "shape", shape: wanted } : { op: "shape" });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, `parley: shape ${(r as unknown as { shape: string }).shape}`, r);
+      }
+
+      case "work": {
+        const title = p.positional[0];
+        const paths = p.positional.slice(1);
+        if (!title) fail(p, `work needs a title, e.g. parley work "label sem for" templates/a.html`);
+        if (paths.length === 0) fail(p, "work needs at least one path");
+        const r = await send({
+          op: "work",
+          title,
+          paths,
+          evidence: flagString(p.flags, "evidence").split(",").map((t) => t.trim()).filter(Boolean),
+          kind: p.flags.kind === "review" ? "review" : undefined,
+          reviewOf: flagString(p.flags, "review-of") || undefined,
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const items = (r as unknown as { items: { id: string; path: string; state: string; offeredTo: string | null }[] }).items;
+        return out(
+          p,
+          `parley: published ${items.length} item(s)\n` +
+            items.map((i) => `  ${i.id}  ${i.path}  (${i.state})`).join("\n"),
+          r,
+        );
+      }
+
+      case "works": {
+        const stateFilter = flagString(p.flags, "state");
+        const r = await send({
+          op: "works",
+          state: ["open", "offered", "taken", "done"].includes(stateFilter) ? stateFilter : undefined,
+          mine: p.flags.mine === true,
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const work = (r as unknown as { work: { id: string; paths: string[]; title: string; state: string }[] }).work;
+        if (work.length === 0) return out(p, "parley: nothing in the pool", r);
+        const rows = work.map((w) => `  ${w.id}  ${w.state.padEnd(7)} ${w.paths.join(", ")} — ${w.title}`);
+        return out(p, rows.join("\n"), r);
+      }
+
+      case "take": {
+        const id = p.positional[0];
+        if (!id) fail(p, "take needs a work item id");
+        const r = await send({ op: "take", id });
+        if (!r.ok) {
+          const offered = (r as unknown as { offeredTo?: { name: string; mission: string } }).offeredTo;
+          fail(p, offered ? `${describeError(r)} — held by ${offered.name} (${offered.mission || "no mission"})` : describeError(r));
+        }
+        const d = r as unknown as {
+          title: string; paths: string[]; evidence: { notes: unknown[]; results: unknown[] };
+        };
+        const evCount = d.evidence.notes.length + d.evidence.results.length;
+        return out(
+          p,
+          `parley: took ${d.paths[0]} — ${d.title}` +
+            (evCount ? `\n  ${evCount} piece(s) of evidence came with it — read --json, do not re-discover it` : ""),
+          r,
+        );
+      }
+
+      case "drop": {
+        const id = p.positional[0];
+        if (!id) fail(p, "drop needs a work item id");
+        const r = await send({ op: "drop", id, reason: flagString(p.flags, "reason") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: dropped — back in the pool for someone else", r);
+      }
+
+      case "done": {
+        const id = p.positional[0];
+        if (!id) fail(p, "done needs a work item id");
+        const r = await send({ op: "done", id, summary: flagString(p.flags, "summary") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: marked done", r);
+      }
 
       default:
         process.stdout.write(USAGE);

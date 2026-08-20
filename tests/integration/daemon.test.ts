@@ -1,65 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { connect, type Socket } from "node:net";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { createDecoder, encodeFrame } from "../../src/protocol/codec";
-import type { Response } from "../../src/protocol/types";
 import { readEndpoint } from "../../src/daemon/endpoint";
 import { ParleyDaemon } from "../../src/daemon/server";
-
-const dirs: string[] = [];
-const daemons: ParleyDaemon[] = [];
-
-function tempRepo() {
-  const dir = mkdtempSync(join(tmpdir(), "parley-it-"));
-  dirs.push(dir);
-  return dir;
-}
-
-async function startDaemon(gitCommonDir: string, journalPath: string) {
-  const daemon = new ParleyDaemon({
-    gitCommonDir,
-    address: { kind: "unix", address: join(gitCommonDir, "p.sock") },
-    journalPath,
-    tickIntervalMs: 50,
-  });
-  daemons.push(daemon);
-  const endpoint = await daemon.listen();
-  return { daemon, endpoint };
-}
-
-/** A minimal NDJSON client, so the test exercises the wire and not our client. */
-class RawClient {
-  private socket!: Socket;
-  private readonly decoder = createDecoder();
-  private readonly waiting: ((r: Response) => void)[] = [];
-  readonly pushes: unknown[] = [];
-
-  static connect(path: string): Promise<RawClient> {
-    return new Promise((resolve) => {
-      const c = new RawClient();
-      c.socket = connect(path, () => resolve(c));
-      c.socket.setEncoding("utf8");
-      c.socket.on("data", (chunk: string) => {
-        for (const line of c.decoder.push(chunk)) {
-          if (!line.ok) continue;
-          if (line.frame.op === "push") { c.pushes.push(line.frame); continue; }
-          c.waiting.shift()?.(line.frame as unknown as Response);
-        }
-      });
-    });
-  }
-
-  send(frame: Record<string, unknown>): Promise<Response> {
-    return new Promise((resolve) => {
-      this.waiting.push(resolve);
-      this.socket.write(encodeFrame({ v: 1, ...frame }));
-    });
-  }
-
-  close() { this.socket.destroy(); }
-}
+import { RawClient, dirs, daemons, startDaemon, tempRepo } from "./harness";
 
 afterEach(async () => {
   for (const d of daemons.splice(0)) await d.close();
