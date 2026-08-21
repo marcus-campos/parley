@@ -414,7 +414,9 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       return render();
     }
 
-    // Voice only. A human does not grant, deny or arbitrate from here.
+    // Voice only, from this composer specifically. `grant`, `deny` and the
+    // rest are separate `parley` commands, gated by ownership like any
+    // front's — this input just never sends anything but `say`.
     const directed = /^@(\S+)\s+([\s\S]+)$/.exec(trimmed);
     const r = await client.request(
       directed ? { op: "say", to: directed[1], text: directed[2] } : { op: "say", text: trimmed },

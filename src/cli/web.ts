@@ -12,11 +12,14 @@ import { dirname, join } from "node:path";
  * `parley watch --web` — the same panel in a browser, for following along on a
  * second screen while the terminal stays free.
  *
- * The page opens in watching posture: no message box, and no grant or deny
- * anywhere on it, ever — the fronts settle permission among themselves, and a
- * stalled request must not turn into a request for a person's attention.
- * Pressing `s` opens a composer, because a human does have a voice; it just is
- * not the thing the interface puts in front of you.
+ * The page opens in watching posture: no message box, and no grant-or-deny
+ * button anywhere on it, ever — the protocol lets a human answer for whatever
+ * territory is theirs, same as any front, but the page never puts a control
+ * on it. What it still will not do is turn a stalled request between two
+ * other fronts into a request for this person's attention; a dispute that is
+ * not theirs is for the fronts to settle among themselves. Pressing `s` opens
+ * a composer, because a human does have a voice; it just is not the thing
+ * the interface puts in front of you.
  *
  * Binds to 127.0.0.1 only and requires a token that is printed with the URL.
  * Localhost is not a security boundary on a shared machine: without the token,
@@ -222,8 +225,9 @@ export async function runWebPanel(
         });
       }
 
-      // The only write this server accepts. No grant, no deny, no mode: those
-      // are not a human's to make, so there is no route to make them through.
+      // The only write this server accepts. `grant`, `deny` and `mode` are
+      // one `parley` command away on the CLI — the page just never grows a
+      // route for them; it stays down to `say` on purpose.
       if (req.method === "POST" && url.pathname === "/say") {
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const r = await client.request({ op: "say", text: String(body.text ?? ""), to: body.to ?? null });

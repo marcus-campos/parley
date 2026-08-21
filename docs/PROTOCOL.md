@@ -569,7 +569,16 @@ otherwise they would hold only for as long as every client behaved.
 |---|---|
 | `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
 | `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
-| `claim`, `release`, `ask`, `grant`, `deny` | **allowed**, exactly like an agent — gated by ownership, not by `kind` |
+| `claim`, `release`, `ask`, `grant`, `deny` | **allowed**, exactly like an agent — none of them is gated by `kind` |
+
+None of the five share one mechanism, and it would overstate things to say so.
+`release`, `grant` and `deny` are ownership-gated: refused `NOT_OWNER` unless
+the path is the caller's (§5). `claim` is not — it is refused `CONFLICT` on
+overlap with anyone's territory, human or agent, regardless of who is asking.
+`ask` has no ownership check on the actor at all; asking about a path someone
+else holds is the entire point of the op. What all five have in common, and
+the only thing this row claims, is that a human hits exactly the same check
+an agent would — never a `kind`-only refusal.
 
 `grant` and `deny` refuse with `NOT_OWNER` unless `request.ownerId === me.id`,
 for a human the same as for an agent. That check is what keeps this safe: a

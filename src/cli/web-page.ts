@@ -157,7 +157,7 @@ export const PAGE = String.raw`<!doctype html>
     <div class="feed" id="feed"></div>
     <footer>
       <div class="bar">
-        <span>watching &middot; the fronts settle territory and permission among themselves</span>
+        <span>watching &middot; you can grant or deny what's yours, the fronts settle the rest</span>
         <span class="grow"></span>
         <span><kbd>s</kbd> say &middot; <kbd>n</kbd> read notes &middot; click your name to change it</span>
       </div>

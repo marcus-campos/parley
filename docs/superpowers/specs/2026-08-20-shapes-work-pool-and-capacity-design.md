@@ -293,12 +293,28 @@ that shaped the question mechanism does not apply.
 
 ### 4.7 The human's voice on spending
 
-`src/state/machine.ts:60` establishes that a human observer has *"a voice, not a
-vote"* — they may watch and speak, not act.
+**Updated 2026-08-21, after `feat/human-vote`.** This section used to open
+by quoting `src/state/machine.ts:60`: a human observer has *"a voice, not a
+vote"*, enforced by a guard that refused `grant` and `deny` by `kind` alone.
+That guard is gone — a human answers for whatever territory they hold,
+exactly like any front; ownership decides, not `kind`. Nothing below needed
+that guard to begin with, so removing it makes this section simpler to state,
+not weaker:
 
-Capacity is the one exception, and it is narrow: a human observer may set
-`shape`, and may veto or approve a birth. Money is theirs. Work is still the
-fronts' to settle among themselves.
+Capacity is not a territory question, so ownership never applied to it —
+nobody *holds* the right to spend somebody's disk spawning a new front.
+`brain` (`src/state/machine.ts`) already sets the pattern for a decision like
+that: it refuses `OBSERVER_ONLY` when `me.kind !== "human"` — the opposite
+direction from the old grant/deny guard, blocking an agent and letting only a
+human through, because spending money is the person's call. The birth veto
+needs the identical, independent check, not an exception carved out of
+anything — there is nothing left to carve it from.
+
+`shape` needs no such gate at all. It was never behind the old guard —
+`setShape` has no `kind` check today and does not need one — so any front,
+human or agent, may already set it; that was true before this change and
+stays true after. Money is the person's call. Work is still the fronts' to
+settle among themselves.
 
 ---
 
