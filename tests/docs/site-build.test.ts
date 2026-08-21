@@ -57,19 +57,19 @@ describe("the documentation site", () => {
   // ignoreDeadLinks: false). Without this test, a sidebar entry can 404 on
   // the published site indefinitely with every other check staying green.
   //
-  // Four concept links document features from Task 4 of the docs-site plan
-  // (shapes, the work pool, capacity, recall — docs/superpowers/plans/
-  // 2026-08-20-docs-site.md) and are written once those features' own plans
-  // land, which Task 3 does not do. They are named here explicitly, not
-  // silently skipped, so this stays a real regression test for every link
-  // Task 3 (and earlier tasks) are actually responsible for, instead of
-  // either failing on work this task does not own or skipping the check
-  // wholesale.
+  // Four concept links were named in Task 4 of the docs-site plan (shapes,
+  // the work pool, capacity, recall — docs/superpowers/plans/
+  // 2026-08-20-docs-site.md). This branch forked before capacity's own
+  // feature (src/spawn/birth.ts) existed, so shapes, work-pool and recall
+  // are written now — each against only the machinery actually present here
+  // — while capacity stays out until the branches converge and there is
+  // real code to describe rather than a design doc. It is named here
+  // explicitly, not silently skipped, so this stays a real regression test
+  // for every link this task and earlier ones are actually responsible for,
+  // instead of either failing on work nobody has done yet or skipping the
+  // check wholesale.
   const PENDING_TASK_4 = new Set([
-    "/concepts/shapes",
-    "/concepts/work-pool",
     "/concepts/capacity",
-    "/concepts/recall",
   ]);
 
   test("every sidebar link resolves to a file", () => {
@@ -91,9 +91,9 @@ describe("the documentation site", () => {
   });
 
   // The exclusion above must not become a place where a genuinely broken
-  // link hides forever: once Task 4 lands, every one of these must actually
-  // resolve, so pin the count instead of letting the set silently grow.
-  test("exactly the four Task 4 concept pages are still pending", () => {
+  // link hides forever: once capacity lands, this must actually resolve
+  // too, so pin the set instead of letting it silently grow.
+  test("exactly capacity is still pending, now that shapes, work-pool and recall are written", () => {
     const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
     const links = [...config.matchAll(/link:\s*"(\/[^"]+)"/g)].map((m) => m[1]!);
     const missing = links.filter((link) => {
@@ -106,5 +106,13 @@ describe("the documentation site", () => {
       return !candidates.some((c) => existsSync(c));
     });
     expect(new Set(missing)).toEqual(PENDING_TASK_4);
+  });
+
+  test("the shapes page states that mode and shape are different axes", () => {
+    const page = readFileSync(join(root, "docs", "concepts", "shapes.md"), "utf8");
+    expect(page).toContain("orthogonal");
+    expect(page).toContain("bus");
+    expect(page).toContain("pool");
+    expect(page).toContain("plan");
   });
 });
