@@ -456,16 +456,10 @@ export function finishWork(state: State, actorId: string | null, frame: Record<s
   // a front publish a review by hand, and that stays a choice, not a side effect.
   if (state.shape === "plan" && item.origin === "planned" && item.kind === "work") {
     // The front that did the work is never offered its own review — that
-    // would just be the old convention wearing a state field. Among what is
-    // left, the one that has gone longest without acting gets the offer, so
-    // the review does not just keep landing on whichever front happens to
-    // sit first in the participant list, or on whichever one is busiest
-    // right now. If nobody else is live, the review goes to the pool open
-    // rather than falling back to the author.
-    const others = liveParticipants(state).filter((p) => p.id !== me.id && p.kind === "agent");
-    const reviewer = others.length > 0
-      ? others.reduce((idlest, p) => (p.lastSeenMs < idlest.lastSeenMs ? p : idlest))
-      : undefined;
+    // would just be the old convention wearing a state field. If nobody
+    // else is live, the review goes to the pool open rather than falling
+    // back to the author.
+    const reviewer = liveParticipants(state).find((p) => p.id !== me.id && p.kind === "agent");
     const review: WorkItem = {
       id: ctx.nextId("w"),
       paths: [...item.paths],

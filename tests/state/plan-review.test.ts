@@ -57,9 +57,14 @@ describe("review after every task", () => {
     apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
     expect(state.plan!.waveIndex).toBe(0);
 
+    // Whoever it landed on — the rule says only "not the author," never a
+    // specific front — closes it out, and only then does the wave move.
+    // Captured before `take`, which mutates `offeredToId` back to null on
+    // the same object.
     const review = state.work.find((w) => w.kind === "review")!;
-    apply(state, auditor, { v: 1, op: "take", id: review.id }, at(400));
-    apply(state, auditor, { v: 1, op: "done", id: review.id, summary: "validated and committed" }, at(500));
+    const reviewer = review.offeredToId!;
+    apply(state, reviewer, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, reviewer, { v: 1, op: "done", id: review.id, summary: "validated and committed" }, at(500));
     expect(state.plan!.waveIndex).toBe(1);
   });
 
@@ -79,5 +84,41 @@ describe("review after every task", () => {
     apply(state, auditor, { v: 1, op: "take", id: item.id }, at(800));
     apply(state, auditor, { v: 1, op: "done", id: item.id }, at(900));
     expect(state.work.filter((w) => w.kind === "review" && w.reviewOf === item.id)).toHaveLength(0);
+  });
+
+  // Scarcity: the rule says "never fall back to the author," not merely
+  // "prefer someone else." With only one live front, that front is both the
+  // author and the only candidate — an implementation that fell back to it
+  // when the candidate pool is empty would still pass every other test here,
+  // since all of them join at least two agents.
+  test("with no other front available, the review is published open — never to the author", () => {
+    const solo = initialState("advisory");
+    apply(solo, null, { v: 1, op: "shape", shape: "plan" }, at(1000));
+    const only = joined(solo, "ONLY", 1010);
+    apply(solo, only, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["z.ts"])] }, at(1100));
+    const item = solo.work[0]!;
+    apply(solo, only, { v: 1, op: "take", id: item.id }, at(1200));
+    apply(solo, only, { v: 1, op: "done", id: item.id }, at(1300));
+
+    const review = solo.work.find((w) => w.kind === "review" && w.reviewOf === item.id)!;
+    expect(review.state).toBe("open");
+    expect(review.offeredToId).toBeNull();
+  });
+
+  // A review is `kind: "review"`, never `kind: "work"` — the guard in
+  // finishWork checks exactly that. Without it, closing a review under
+  // shape plan would spawn a review of the review, and so on forever.
+  test("finishing a review creates no review of the review", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+
+    const review = state.work.find((w) => w.kind === "review")!;
+    const reviewer = review.offeredToId!;
+    apply(state, reviewer, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, reviewer, { v: 1, op: "done", id: review.id, summary: "looks good" }, at(500));
+
+    expect(state.work.filter((w) => w.kind === "review" && w.reviewOf === review.id)).toHaveLength(0);
   });
 });
