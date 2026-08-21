@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { embed, fuse, isLoadable, VectorIndex } from "../../src/brain/embed";
+import { aboveRelevanceFloor, embed, fuse, isLoadable, VectorIndex } from "../../src/brain/embed";
 
 const model = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "tiny-model.json"), "utf8"));
 
@@ -16,11 +16,14 @@ describe("static embeddings", () => {
   });
 
   test("an unknown token contributes nothing rather than poisoning the vector", () => {
-    expect(Array.from(embed(model, "select2 kubernetes"))).toEqual([1, 0]);
+    // "kubernetes" is deliberately not used here — the floor tests below make
+    // it a real vocabulary entry, so an actually-unknown word is needed to
+    // test this property.
+    expect(Array.from(embed(model, "select2 zzyzx"))).toEqual([1, 0]);
   });
 
   test("text with no known token gives a zero vector, and never a NaN", () => {
-    const v = embed(model, "kubernetes helm");
+    const v = embed(model, "zzyzx plugh");
     expect(Array.from(v).every((x) => x === 0)).toBe(true);
   });
 
@@ -65,11 +68,12 @@ describe("a relevance floor for the vector channel — no ties at zero, no least
     const index = new VectorIndex(2);
     index.add("n_1", embed(model, "select2 hidden"));
     index.add("n_2", embed(model, "menu lateral"));
-    // "kubernetes helm" shares no token with the tiny vocabulary, so it
-    // embeds to the zero vector (proved in the embeddings describe block
-    // above). Reproduces the review's exact finding: without this guard,
-    // every document ties at `cosine(zero, x) === 0` and comes back ranked.
-    const zeroQuery = embed(model, "kubernetes helm");
+    // "zzyzx plugh" shares no token with the tiny vocabulary, so it embeds to
+    // the zero vector (proved in the embeddings describe block above). This
+    // is the independent `norm(vec) === 0` short-circuit in `search` — not
+    // the relevance floor below, which is exercised on a real, non-zero
+    // vector instead.
+    const zeroQuery = embed(model, "zzyzx plugh");
     expect(index.search(zeroQuery, 5)).toEqual([]);
   });
 
@@ -89,6 +93,70 @@ describe("a relevance floor for the vector channel — no ties at zero, no least
     // "lateral" alone shares a real, positive-cosine direction with n_2.
     const hits = index.search(embed(model, "lateral"), 5);
     expect(hits.map((h) => h.id)).toEqual(["n_2"]);
+  });
+
+  /**
+   * The review's exact finding, reproduced with a real, non-zero query
+   * vector rather than the zero-vector short-circuit above: "kubernetes" and
+   * "helm" are both planted in the tiny vocabulary pointing the same biased
+   * direction (`[1, 1]`) — simulating the anisotropy a real dense embedding
+   * table has, where arbitrary unrelated text lands at high positive cosine.
+   * The query shares no real topic with any of the four documents, but ties
+   * every one of them at cosine 1/√2 ≈ 0.707 — the exact "everything looks
+   * similar" signature `MIN_SIMILARITY = 0` used to let straight through.
+   * Four documents, not two: below `MIN_CANDIDATES_FOR_FLOOR` the relative
+   * floor does not engage at all, so this needs the corpus large enough to
+   * arm it.
+   */
+  test("an anisotropic tie across the whole corpus does not qualify — the floor, not the zero-vector short-circuit", () => {
+    const index = new VectorIndex(2);
+    index.add("n_1", embed(model, "select2 hidden"));
+    index.add("n_2", embed(model, "menu lateral"));
+    index.add("n_3", embed(model, "select2"));
+    index.add("n_4", embed(model, "lateral"));
+
+    const query = embed(model, "kubernetes helm");
+    // Guard: if this were the zero vector, the assertion below would be
+    // proving the short-circuit again, not the floor — the exact mistake
+    // the review found in this file before the fixture was made dense.
+    expect(Array.from(query).some((x) => x !== 0)).toBe(true);
+    expect(index.search(query, 5)).toEqual([]);
+  });
+
+  test("a genuine standout still clears the floor, even inside the same anisotropic-tied corpus", () => {
+    const index = new VectorIndex(2);
+    index.add("n_1", embed(model, "select2 hidden"));
+    index.add("n_2", embed(model, "menu lateral"));
+    index.add("n_3", embed(model, "select2"));
+    // Shares the query's own tokens, not just their shared bias — a real
+    // match, not table geometry.
+    index.add("n_4", embed(model, "helm chart guide"));
+
+    const hits = index.search(embed(model, "kubernetes helm"), 5);
+    expect(hits.map((h) => h.id)).toEqual(["n_4"]);
+  });
+});
+
+describe("the relative floor's own arithmetic — aboveRelevanceFloor on plain numbers", () => {
+  test("below the gate (fewer than 4 candidates), only the absolute rule applies: a genuinely positive score always qualifies", () => {
+    expect(aboveRelevanceFloor([0, 1])).toEqual([false, true]);
+    expect(aboveRelevanceFloor([0.9, 0.91, 0.92])).toEqual([true, true, true]);
+  });
+
+  test("a tie across every candidate — the anisotropic signature — qualifies none of them", () => {
+    expect(aboveRelevanceFloor([0.7, 0.7, 0.7, 0.7])).toEqual([false, false, false, false]);
+  });
+
+  test("a genuine standout clears the floor even though it also drags the mean up", () => {
+    // A single, whole-population mean+2σ over these four values would
+    // exclude 0.95 too (mean 0.275, sd ≈0.39, floor ≈1.05) — the masking
+    // failure leave-one-out exists to avoid: a candidate is judged against
+    // its peers, never against a distribution its own value has polluted.
+    expect(aboveRelevanceFloor([0.05, 0.05, 0.05, 0.95])).toEqual([false, false, false, true]);
+  });
+
+  test("zero or negative never qualifies, however it compares to its peers", () => {
+    expect(aboveRelevanceFloor([0, -0.5, -0.5, -0.5])).toEqual([false, false, false, false]);
   });
 });
 

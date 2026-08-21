@@ -105,25 +105,74 @@ function cosine(a: Float32Array, b: Float32Array): number {
 }
 
 /**
- * The boundary of cosine similarity itself, not a tuned constant: 0 is the
- * exact point where two vectors stop sharing any positive direction at all
- * and become orthogonal (or opposed). Below or at that line there is no
- * positive signal to rank on — only its absence, or its negation — so a hit
- * scoring at or below it does not qualify, the same way `LexicalIndex`
- * refuses a match that is not distinctive rather than return the least-bad
- * document (lexical.ts, `requireDistinctive`). It also does the right thing
- * for a document with no known tokens at all: `cosine` already returns
- * exactly `0` whenever either vector has zero norm (above), so a
- * zero-vector document is excluded by this same rule without needing a
- * second check.
+ * A fixed cosine boundary cannot be the floor: dense static embedding tables
+ * are anisotropic — arbitrary, unrelated text pairs land at high positive
+ * cosine, which is what a real `potion` model is — so a constant of `0`
+ * excludes only the exactly-orthogonal case and lets an anisotropic corpus
+ * rank and pass in full, every time. There is no positive float worth
+ * hand-picking instead either: there is no deployed model yet to calibrate
+ * one against (the one registry entry is `xlmr`, which this build cannot
+ * load — see `isLoadable`), and a guess made without that evidence would be
+ * worse than none.
  *
- * This is deliberately permissive rather than a hand-picked positive float:
- * there is no deployed model yet to calibrate a tighter number against (the
- * one registry entry is `xlmr`, which this build cannot load — see
- * `isLoadable`), and a number invented without that evidence would be a
- * worse guess than the one boundary cosine similarity defines on its own.
+ * So the floor is computed from the distribution THIS query actually
+ * produces over THIS index — the direct analogue of `requireDistinctive` on
+ * the lexical side (lexical.ts): distinctively similar, not similar at all.
+ * A hit must beat the mean and spread of every OTHER scored document by
+ * `FLOOR_Z` standard deviations, on top of still needing a genuinely
+ * positive cosine (never just "less negative than the rest" — the same
+ * boundary the old constant drew, kept here as a floor under the floor).
+ *
+ * "Every OTHER document" — leave-one-out — is load-bearing, not a stylistic
+ * choice: folding a candidate's own score into the mean and standard
+ * deviation it is then compared against lets a genuine, dominant match drag
+ * its own threshold up as it drags the mean up (a real match at 0.95 among
+ * three unrelated hits at 0.05 raises the whole-population mean enough that
+ * a plain, single mean+2σ excludes the 0.95 hit too — outlier detection
+ * calls this masking). Scoring each candidate against the *rest* of the
+ * field, never against a distribution its own value has already polluted,
+ * is what lets a real standout still clear the bar while a merely
+ * anisotropic tie to the whole corpus never does — both directions proved in
+ * embed.test.ts.
+ *
+ * Below `MIN_CANDIDATES_FOR_FLOOR`, "distinctively above the rest" cannot be
+ * asked of one or two points (mean and spread over a single peer are not a
+ * distribution) — the same discipline `LexicalIndex.search` already applies
+ * to document frequency before treating a term's rarity as signal
+ * (`MIN_DOCS_FOR_THRESHOLD`, lexical.ts). Below the gate, a hit qualifies on
+ * the old absolute rule alone: a genuinely positive cosine.
  */
-const MIN_SIMILARITY = 0;
+const FLOOR_Z = 2;
+const MIN_CANDIDATES_FOR_FLOOR = 4;
+
+/**
+ * Which of `scores` are distinctively similar, not merely similar at all —
+ * one boolean per input score, same order. Exported so the floor's
+ * statistics are assertable directly, on plain numbers, without having to
+ * reverse-engineer a cosine geometry that produces them (`VectorIndex.search`
+ * below is the only caller in production).
+ */
+export function aboveRelevanceFloor(scores: number[]): boolean[] {
+  if (scores.length < MIN_CANDIDATES_FOR_FLOOR) return scores.map((s) => s > 0);
+
+  const sum = scores.reduce((a, b) => a + b, 0);
+  const sumSq = scores.reduce((a, b) => a + b * b, 0);
+  const n = scores.length;
+
+  return scores.map((x) => {
+    if (x <= 0) return false;
+    const othersN = n - 1;
+    const othersMean = (sum - x) / othersN;
+    // Population variance of the n-1 peers, from the running sums rather
+    // than a second pass per candidate — the same one-pass-stats trick, just
+    // with this candidate's own contribution subtracted back out first.
+    // Clamped at 0 for the floating-point sliver that can otherwise land
+    // just under it when every peer is identical.
+    const othersVar = Math.max(0, (sumSq - x * x) / othersN - othersMean * othersMean);
+    const floor = othersMean + FLOOR_Z * Math.sqrt(othersVar);
+    return x > floor;
+  });
+}
 
 interface Entry { vec: Float32Array; kind: Hit["kind"] }
 
@@ -162,9 +211,11 @@ export class VectorIndex {
     // on (Task 2's distinctiveness threshold). Silence is the honest answer.
     if (norm(vec) === 0) return [];
 
-    return [...this.entries.entries()]
-      .map(([id, e]) => ({ id, score: cosine(vec, e.vec), kind: e.kind }))
-      .filter((h) => h.score > MIN_SIMILARITY)
+    const scored = [...this.entries.entries()].map(([id, e]) => ({ id, score: cosine(vec, e.vec), kind: e.kind }));
+    const qualifies = aboveRelevanceFloor(scored.map((h) => h.score));
+
+    return scored
+      .filter((_, i) => qualifies[i])
       // Ties break on the id, so the same corpus always answers in the same
       // order — the same rule `LexicalIndex.search` uses.
       .sort((a, b) => (b.score - a.score) || a.id.localeCompare(b.id))

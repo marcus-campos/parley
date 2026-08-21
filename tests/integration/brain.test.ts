@@ -24,7 +24,18 @@ function plantFixtureModel(modelsDir: string): void {
   mkdirSync(join(path, ".."), { recursive: true });
   writeFileSync(
     path,
-    JSON.stringify({ dims: 2, vocab: { select2: [1, 0], hidden: [1, 0], menu: [0, 1], lateral: [0, 1] } }),
+    JSON.stringify({
+      dims: 2,
+      vocab: {
+        select2: [1, 0], hidden: [1, 0], menu: [0, 1], lateral: [0, 1],
+        // "kubernetes" and "helm" point the same biased direction on
+        // purpose — simulating the anisotropy a real dense embedding table
+        // has, where two unrelated words still land close together. Used by
+        // the relevance-floor test below; unrelated to every other test in
+        // this file.
+        kubernetes: [1, 1], helm: [1, 1],
+      },
+    }),
     "utf8",
   );
 }
@@ -69,15 +80,12 @@ describe("the brain, wired into a real daemon", () => {
   });
 
   /**
-   * The review's exact reproduction, run against a real daemon: a query
-   * sharing no token with the corpus at all, lexically or in the embedding
-   * vocabulary. Before the relevance floor (`VectorIndex.search`,
-   * `embed.ts`), the query embedded to the zero vector, every document tied
-   * at `cosine(zero, x) === 0`, and `fuse` gave that tie a positive RRF
-   * bump — resurrecting a hit neither ranking genuinely qualified. With the
-   * floor in place, the vector channel returns `[]` for a zero-signal
-   * query, lexical already returns `[]` (no shared token), and fusion of
-   * two empty rankings must stay empty.
+   * The genuinely zero-signal case: a query sharing no token with the corpus
+   * at all, lexically or in the embedding vocabulary, so it embeds to the
+   * zero vector. This exercises the independent `norm(vec) === 0`
+   * short-circuit in `VectorIndex.search` (embed.ts) — not the relevance
+   * floor, which needs a real, non-zero query vector to exercise at all (see
+   * the next test for that).
    */
   test("on: a query with zero signal — lexical or semantic — still finds nothing, not the least-bad note", async () => {
     const dir = tempRepo();
@@ -94,9 +102,47 @@ describe("the brain, wired into a real daemon", () => {
     const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
     expect(enabled.ok).toBe(true);
 
-    // Neither "kubernetes" nor "helm" is in the tiny vocabulary or the
+    // Neither "opentelemetry" nor "zzyzx" is in the tiny vocabulary or the
     // corpus's text — zero signal on both channels at once.
-    const out = await core.send({ op: "notes", q: "kubernetes helm" });
+    const out = await core.send({ op: "notes", q: "opentelemetry zzyzx" });
+    expect((out as unknown as { notes: unknown[] }).notes).toEqual([]);
+
+    human.close();
+    core.close();
+  });
+
+  /**
+   * The review's exact reproduction, run against a real daemon: a 4-note
+   * corpus and a query — "kubernetes helm chart" — that shares no lexical
+   * token with any of them. Before the relevance floor (`VectorIndex.search`,
+   * `embed.ts`), a fixed `MIN_SIMILARITY = 0` let every document that scored
+   * above zero cosine straight through, and because dense embedding tables
+   * are anisotropic — "kubernetes" and "helm" are planted pointing the same
+   * biased direction as every note's real vocabulary (see
+   * `plantFixtureModel`) — the query ties all four notes at cosine 1/√2, a
+   * real, non-zero vector, not the zero-vector short-circuit the previous
+   * test exercises. Reproduces the review's own finding verbatim: without the
+   * floor, all four notes came back; with it, none should.
+   */
+  test("on: an anisotropic tie across a 4-note corpus still finds nothing — the floor, not the least-bad note", async () => {
+    const dir = tempRepo();
+    const modelsDir = tempRepo();
+    plantFixtureModel(modelsDir);
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+    const core = await RawClient.connect(endpoint.address);
+    await core.send({ op: "join", name: "CORE", mission: "m" });
+
+    await core.send({ op: "note", title: "o menu do sistema" });
+    await core.send({ op: "note", title: "select2 dropdown" });
+    await core.send({ op: "note", title: "hidden trap" });
+    await core.send({ op: "note", title: "lateral padding" });
+    const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
+    expect(enabled.ok).toBe(true);
+
+    const out = await core.send({ op: "notes", q: "kubernetes helm chart" });
     expect((out as unknown as { notes: unknown[] }).notes).toEqual([]);
 
     human.close();
