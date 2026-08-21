@@ -1,6 +1,7 @@
 import type {
   GrantScope, Mode, ParticipantKind, Priority, RequestState, Response, Shape,
 } from "../protocol/types";
+import type { PlanTask } from "../plan/parse";
 
 export interface Participant {
   id: string;
@@ -199,6 +200,30 @@ export interface CommandResult {
   staleBecause: string | null;
 }
 
+/**
+ * The state of one dispatched plan, one wave at a time.
+ *
+ * `waves` only carries task numbers because that is the shape other fronts
+ * read (and, eventually, the wire) — never the full task data, which is kept
+ * separately below so it is not duplicated into every response.
+ */
+export interface PlanState {
+  goal: string;
+  spec: string | null;
+  waves: { taskNumbers: number[] }[];
+  waveIndex: number;
+  /** Work item ids created for each task number, across every wave opened so far. */
+  itemsByTask: Record<number, string[]>;
+  /**
+   * The parsed tasks behind each wave, index-aligned with `waves` above —
+   * needed again whenever a later wave opens. Kept as the literal per-wave
+   * groupings `waves()` produced, not looked up by task number: two tasks
+   * sharing a number (a malformed plan, but one `graph.ts` promises not to
+   * throw on) would otherwise collapse to whichever was seen last.
+   */
+  tasksByWave: PlanTask[][];
+}
+
 export interface State {
   mode: Mode;
   /**
@@ -220,6 +245,8 @@ export interface State {
   results: Record<string, CommandResult>;
   questions: Record<string, Question>;
   work: WorkItem[];
+  /** Set by `parley plan <file>` under `shape plan`; null otherwise. */
+  plan: PlanState | null;
 }
 
 /**
@@ -244,7 +271,7 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
-    work: [],
+    work: [], plan: null,
   };
 }
 

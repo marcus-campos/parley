@@ -9,6 +9,8 @@ import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
+import { parsePlan } from "../plan/parse";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
@@ -80,6 +82,9 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley mode [off|advisory|enforced]
   parley shape [bus|pool|plan]
 
+  parley plan <path-to-plan.md>
+                             read a superpowers plan and dispatch its first
+                             wave onto the pool — parley shape plan first
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
   parley works [--state open|offered|taken|done] [--mine]
   parley take <id>
@@ -897,6 +902,29 @@ async function main(): Promise<void> {
         const r = await send(wanted ? { op: "shape", shape: wanted } : { op: "shape" });
         if (!r.ok) fail(p, describeError(r));
         return out(p, `parley: shape ${(r as unknown as { shape: string }).shape}`, r);
+      }
+
+      case "plan": {
+        const file = p.positional[0];
+        if (!file) fail(p, "plan needs a path, e.g. parley plan docs/superpowers/plans/2026-08-20-shape-plan.md");
+        let markdown: string;
+        try {
+          markdown = readFileSync(file, "utf8");
+        } catch (e) {
+          fail(p, `could not read ${file}: ${(e as Error).message}`);
+        }
+        // The daemon never touches the filesystem: parsing happens here, and
+        // only the parsed tasks cross the wire.
+        const parsed = parsePlan(markdown);
+        const r = await send({ op: "plan", goal: parsed.goal, spec: parsed.spec, tasks: parsed.tasks });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as { waves: number; dispatched: number };
+        return out(
+          p,
+          `parley: ${parsed.tasks.length} task(s) in ${d.waves} wave(s) — ${d.dispatched} item(s) open now\n` +
+            `  parley works --state open`,
+          r,
+        );
       }
 
       case "work": {

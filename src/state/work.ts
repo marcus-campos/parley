@@ -1,8 +1,11 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, readPathList } from "../repo/paths";
+import { waves as computeWaves } from "../plan/graph";
+import type { PlanTask } from "../plan/parse";
 import { staleReason } from "./results";
 import {
-  actorOf, liveParticipants, pushEvent, type Ctx, type Outcome, type Participant, type State, type WorkItem,
+  actorOf, liveParticipants, pushEvent,
+  type ConvEvent, type Ctx, type Outcome, type Participant, type State, type WorkItem,
 } from "./types";
 
 /**
@@ -100,6 +103,131 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
     }),
     broadcast,
   };
+}
+
+/**
+ * A superpowers plan is dispatched one wave at a time: only the first wave's
+ * tasks become work now, and every later wave waits for `finishWork` to open
+ * it once its predecessor is entirely done.
+ *
+ * The waves are computed here, once, from the paths every task declares —
+ * `waves()` is a proof those tasks cannot collide, not a guess that they
+ * probably do not.
+ */
+export function dispatchPlan(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  if (state.shape !== "plan") {
+    return { state, response: err("UNKNOWN_OP", "plans are dispatched in shape plan — parley shape plan"), broadcast: [] };
+  }
+  const tasks = (Array.isArray(frame.tasks) ? frame.tasks : []) as PlanTask[];
+  if (tasks.length === 0) return { state, response: err("UNKNOWN_OP", "a plan needs tasks"), broadcast: [] };
+
+  const computed = computeWaves(tasks);
+  me.lastSeenMs = ctx.nowMs;
+
+  state.plan = {
+    goal: typeof frame.goal === "string" ? frame.goal : "",
+    spec: typeof frame.spec === "string" ? frame.spec : null,
+    waves: computed.map((w) => ({ taskNumbers: w.tasks.map((t) => t.n) })),
+    waveIndex: 0,
+    itemsByTask: {},
+    tasksByWave: computed.map((w) => w.tasks),
+  };
+
+  const broadcast = [pushEvent(state, ctx, {
+    kind: "system", from: null, to: null, priority: "high",
+    text: `${me.name} dispatched a plan: ${tasks.length} task(s) in ${computed.length} wave(s) — the waves are computed from the paths each task declares`,
+    about: me.id,
+  })];
+
+  broadcast.push(...openWave(state, state.plan.tasksByWave[0]!, ctx));
+
+  return {
+    state,
+    response: ok({ waves: computed.length, dispatched: state.plan.tasksByWave[0]!.length }),
+    broadcast,
+  };
+}
+
+/**
+ * Publish every item of one wave.
+ *
+ * A task is never dropped: a `**Files:**` block that failed to parse still
+ * gets an item, titled with the real reason parse.ts gave — never a
+ * made-up one, and never "no paths" for a task that has some — so a plan
+ * can never look fully dispatched while one of its tasks quietly never
+ * happened.
+ *
+ * Dispatch authority covers fronts working the plan; it never covers a front
+ * a person is directing by hand. A path already held under an explicit claim
+ * is still published here, open, rather than taken from its holder — the
+ * wait is announced instead of silently skipped.
+ */
+function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): ConvEvent[] {
+  const plan = state.plan!;
+  const events: ConvEvent[] = [];
+  for (const task of waveTasks) {
+    const label = task.title || `task ${task.n}`;
+    const title = task.parseError ? `${label} — ${task.parseError}` : label;
+    const paths = task.paths.length > 0 ? task.paths : ["(no declared path)"];
+    for (const path of paths) {
+      // Ruling: dispatch authority covers fronts working the plan, never a
+      // front a person is directing by hand — so a held path is published
+      // open and announced as waiting, not taken from its owner.
+      const holder = state.claims.find((c) => c.orphanedAtMs === null && !c.auto && matchesPath(c.pattern, path));
+      const item: WorkItem = {
+        id: ctx.nextId("w"),
+        paths: [path],
+        title,
+        evidenceIds: plan.spec ? [plan.spec] : [],
+        publishedById: "",
+        publishedByName: "the plan",
+        kind: "work",
+        origin: "planned",
+        state: "open",
+        offeredToId: null,
+        offeredAtMs: null,
+        takenById: null,
+        orphanedAtMs: null,
+        nudgedAtMs: null,
+        reviewOf: null,
+        at: ctx.now,
+      };
+      state.work.push(item);
+      (plan.itemsByTask[task.n] ??= []).push(item.id);
+      if (holder) {
+        const owner = state.participants[holder.ownerId];
+        events.push(pushEvent(state, ctx, {
+          kind: "system", from: null, to: null, priority: "normal",
+          text: `task ${task.n} is waiting: ${path} is held by ${owner?.name ?? "someone"} — the plan does not take it`,
+        }));
+      }
+    }
+  }
+  return events;
+}
+
+/**
+ * A wave is not over until every item it dispatched — across every task the
+ * wave holds — is done. Checked after every `done`, not only ones known in
+ * advance to belong to a plan: the ids in `itemsByTask` can only ever be
+ * items `openWave` created, so the check is a no-op whenever there is
+ * nothing left to advance.
+ */
+function advancePlanIfWaveDone(state: State, ctx: Ctx): ConvEvent[] {
+  const plan = state.plan;
+  if (!plan) return [];
+  const wave = plan.waves[plan.waveIndex];
+  if (!wave) return [];
+  const ids = wave.taskNumbers.flatMap((n) => plan.itemsByTask[n] ?? []);
+  if (ids.length === 0) return [];
+  if (!ids.every((id) => state.work.find((w) => w.id === id)?.state === "done")) return [];
+
+  plan.waveIndex += 1;
+  const nextTasks = plan.tasksByWave[plan.waveIndex];
+  if (!nextTasks) return [];
+  return openWave(state, nextTasks, ctx);
 }
 
 export function listWork(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
@@ -301,13 +429,16 @@ export function finishWork(state: State, actorId: string | null, frame: Record<s
   me.lastSeenMs = ctx.nowMs;
   const summary = typeof frame.summary === "string" ? frame.summary : "";
 
+  const broadcast = [pushEvent(state, ctx, {
+    kind: "system", from: null, to: null, priority: "normal",
+    text: `${me.name} finished ${item.paths[0]}${summary ? ` — ${summary}` : ""}`,
+    about: me.id,
+  })];
+  broadcast.push(...advancePlanIfWaveDone(state, ctx));
+
   return {
     state,
     response: ok({ id: item.id, state: item.state }),
-    broadcast: [pushEvent(state, ctx, {
-      kind: "system", from: null, to: null, priority: "normal",
-      text: `${me.name} finished ${item.paths[0]}${summary ? ` — ${summary}` : ""}`,
-      about: me.id,
-    })],
+    broadcast,
   };
 }
