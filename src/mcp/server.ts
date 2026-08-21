@@ -37,8 +37,11 @@ const list = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string")
   : typeof v === "string" && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean)
   : [];
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
-const TOOLS: Tool[] = [
+/** Exported for tests/mcp/server.test.ts — the schema, frame and render logic
+ * for every tool, asserted directly rather than through a live stdio round trip. */
+export const TOOLS: Tool[] = [
   {
     name: "parley_who",
     description:
@@ -113,6 +116,7 @@ const TOOLS: Tool[] = [
         claimed?: string[];
         notes?: { title: string; body: string; kind: string; authorName: string }[];
         more_notes?: number;
+        more_decisions?: number;
         recent?: { byName: string; intent: string; at: string }[];
       };
       const parts: string[] = [];
@@ -121,6 +125,7 @@ const TOOLS: Tool[] = [
         const lines = d.notes.map(
           (n) => `- [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.body ? `\n  ${n.body}` : ""} (${n.authorName})`,
         );
+        if (d.more_decisions) lines.push(`- ${d.more_decisions} more decision(s) — parley notes --path ${list(a.paths)[0] ?? ""} --kind decision`);
         if (d.more_notes) lines.push(`- ${d.more_notes} more — parley notes --path ${list(a.paths)[0] ?? ""}`);
         parts.push(`What other fronts wrote down about these paths:\n${lines.join("\n")}`);
       }
@@ -307,36 +312,60 @@ const TOOLS: Tool[] = [
   },
   {
     name: "parley_notes",
-    description: "Durable knowledge left by every front, present and past. Filter by `path` to get only what is about a file you are touching.",
+    description:
+      "Durable knowledge left by every front, present and past. Filter by `path` to get only what is about a file you are touching, or ask a question with `query` to get back the few notes that actually answer it instead of reading everything.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         tag: { type: "string" },
         kind: { type: "string", enum: ["note", "decision"] },
+        query: { type: "string", description: "Ask instead of listing — ranked recall over every note, newest push channel aside." },
+        k: { type: "number", description: "How many to return when `query` is set. Default 5." },
       },
     },
-    frame: (a) => ({ op: "notes", path: str(a.path) || undefined, tag: str(a.tag) || undefined, kind: str(a.kind) || undefined, active: true }),
+    frame: (a) => ({
+      op: "notes", path: str(a.path) || undefined, tag: str(a.tag) || undefined, kind: str(a.kind) || undefined,
+      active: true, q: str(a.query) || undefined, k: num(a.k), semantic: str(a.query) ? true : undefined,
+    }),
     render: (r) => {
-      const notes = (r as unknown as { notes: { id: string; title: string; body: string; kind: string; paths: string[]; authorName: string }[] }).notes;
-      if (!notes?.length) return "Nothing written down yet.";
-      return notes
+      const d = r as unknown as {
+        notes: { id: string; title: string; body: string; kind: string; paths: string[]; authorName: string }[];
+        ranked?: boolean;
+      };
+      if (!d.notes?.length) return "Nothing written down yet.";
+      const lines = d.notes
         .map((n) => `- ${n.id} [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.paths.length ? ` (${n.paths.join(", ")})` : ""}${n.body ? `\n  ${n.body}` : ""}`)
         .join("\n");
+      return d.ranked ? `Ranked by relevance to your query:\n${lines}` : lines;
     },
   },
   {
     name: "parley_results",
     description:
-      "What another front already ran, and whether the answer still holds. Check this BEFORE running a long suite: if nothing it depends on has been touched since, running it again costs minutes and buys nothing.",
-    inputSchema: { type: "object", properties: { key: { type: "string" } } },
-    frame: (a) => ({ op: "results", key: str(a.key) || undefined }),
+      "What another front already ran, and whether the answer still holds. Check this BEFORE running a long suite: if nothing it depends on has been touched since, running it again costs minutes and buys nothing. `query` ranks by relevance instead of listing everything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string" },
+        query: { type: "string", description: "Ask instead of listing — ranked recall over every recorded result." },
+        k: { type: "number", description: "How many to return when `query` is set. Default 5." },
+      },
+    },
+    frame: (a) => ({
+      op: "results", key: str(a.key) || undefined,
+      q: str(a.query) || undefined, k: num(a.k), semantic: str(a.query) ? true : undefined,
+    }),
     render: (r) => {
-      const rs = (r as unknown as { results: { key: string; status: string; summary: string; byName: string; staleBecause: string | null }[] }).results;
-      if (!rs?.length) return "Nothing recorded yet.";
-      return rs
+      const d = r as unknown as {
+        results: { key: string; status: string; summary: string; byName: string; staleBecause: string | null }[];
+        ranked?: boolean;
+      };
+      if (!d.results?.length) return "Nothing recorded yet.";
+      const lines = d.results
         .map((x) => `- ${x.key}: ${x.status.toUpperCase()} — ${x.summary || "(no summary)"} (${x.byName})\n  ${x.staleBecause ? `STALE: ${x.staleBecause}` : "still valid, do not re-run"}`)
         .join("\n");
+      return d.ranked ? `Ranked by relevance to your query:\n${lines}` : lines;
     },
   },
   {

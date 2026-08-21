@@ -834,6 +834,10 @@ async function main(): Promise<void> {
           fresh: p.flags.fresh === true,
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // A query is the front asking for recall — spec §5.1's activation
+          // flow only fires on this flag, so an actual `--query` call is what
+          // has to set it, not just the daemon's own optional field existing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as {
@@ -881,6 +885,9 @@ async function main(): Promise<void> {
           active: p.flags.active === true,
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // Same reasoning as `results` above: asking is what should surface
+          // the brain's existence to the panel, once — never a bare listing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
