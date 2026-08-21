@@ -172,6 +172,19 @@ you asked for explicitly is yours until you release it or leave.
 
 ## Work offered to you, not assigned
 
+Found something that is not your mission to fix — sixty-four instances of the
+same defect, a batch of files that all need the same label removed? Publish it
+instead of writing it into a chat message that evaporates with the scrollback:
+
+\`\`\`
+parley shape pool
+parley work "label sem for" templates/a.html templates/b.html --evidence n_0003
+\`\`\`
+
+\`--evidence\` is what makes an item worth more than a chat message: whoever
+takes it gets the note or result you already gathered, not just your
+description of it.
+
 Where the repository runs in \`shape pool\`, a front that discovers work on a
 path you hold does not have to reach you to hand it over — the offer already
 rides in the same footer every tool call reads. You do not poll for it.

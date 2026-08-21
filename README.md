@@ -920,8 +920,9 @@ integration. Long-term search over history.
 still local-only and single-user: `parley watch --web` binds to `127.0.0.1`
 behind a token and is not a hosted interface.)*
 
-And above all: **parley does not distribute work.** It coordinates sessions
-someone already created. Orchestration is a different project.
+And above all: **parley does not assign work. It provides capacity.** It
+coordinates sessions someone already created. Orchestration — deciding what
+runs and dispatching it — is a different project.
 
 ---
 

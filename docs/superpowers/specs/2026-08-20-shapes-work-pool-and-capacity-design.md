@@ -382,9 +382,19 @@ component in the system you can trust when everything else has failed.
 
 ## 6. Guarantees
 
-**Durability is free.** Work items are frames like any other:
-`journal.append` before responding, replay rebuilds the pool. Nothing new is
-written to make this work.
+**Durability holds for what a frame decided, not for what a tick decided.**
+Work items are frames like any other: `journal.append` before responding, and
+replay puts every item back with the same id, paths and frame-set state.
+Nothing new is written to make that much work.
+
+What replay does not reproduce is a tick-driven transition — an unanswered
+offer lapsing back to `open`, an orphaned item's grace period elapsing — because
+`restore()` replays frames without ever calling `tick`, while the live daemon
+calls `tick` before every `apply`. A pool rebuilt from the journal can
+therefore diverge from the live one it was rebuilt from. This is not new to
+work: the same gap already exists for territory's auto-claim expiry and
+permission's timeout grant. It matters and it is not fixed here — closing it
+is a follow-up that covers all three at once, not a one-off patch to the pool.
 
 **Degradation is unchanged.** A dead bus means nothing is born, nothing is
 offered, and the fronts a person opened carry on exactly as they are. The
@@ -422,7 +432,11 @@ Everything interesting is a pure-state test, as with the rest of the machine:
 - Plan parsing: tasks and paths extracted; a malformed `**Files:**` block
   publishes to the pool rather than disappearing.
 - Two tasks in one plan that collide — serialised, never dispatched together.
-- Journal replay reconstructs a pool mid-flight with identical ids.
+- Journal replay reconstructs a pool mid-flight with identical ids and
+  frame-set state — but not a tick-driven transition (an offer that lapsed, an
+  orphan grace that elapsed), since replay never calls `tick`. Known gap,
+  shared with territory and permissions, tracked as a follow-up rather than
+  asserted away here.
 
 Integration tests keep using a real daemon over a real socket with a
 hand-written NDJSON client, so the wire is exercised rather than our abstraction
