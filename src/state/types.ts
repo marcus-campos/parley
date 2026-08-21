@@ -220,6 +220,13 @@ export interface State {
   results: Record<string, CommandResult>;
   questions: Record<string, Question>;
   work: WorkItem[];
+  /**
+   * The optional layer above the lexical floor. `active`/`model` are the
+   * person's decision (`parley brain enable`, human-only — see machine.ts);
+   * `askedAtMs` is parley's own nudge-once bookkeeping for the panel notice
+   * raised the first time a front wants semantic recall while it is off.
+   */
+  brain: { active: boolean; model: string | null; askedAtMs: number | null };
 }
 
 /**
@@ -245,6 +252,7 @@ export function emptyState(mode: Mode = "advisory"): State {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
     work: [],
+    brain: { active: false, model: null, askedAtMs: null },
   };
 }
 

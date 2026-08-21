@@ -1,6 +1,6 @@
 import { err, ok } from "../protocol/types";
 import { matchesPath, normalizeTerritoryPath, readPathList } from "../repo/paths";
-import { actorOf, pushEvent, type Ctx, type Note, type Outcome, type State } from "./types";
+import { actorOf, pushEvent, type ConvEvent, type Ctx, type Note, type Outcome, type State } from "./types";
 
 /** Knowledge anchored to a concrete path, newest last. */
 export function notesForPath(state: State, path: string): Note[] {
@@ -53,7 +53,7 @@ export function note(state: State, actorId: string | null, frame: Record<string,
   return { state, response: ok({ id: entry.id, kind: entry.kind }), broadcast };
 }
 
-export function listNotes(state: State, frame: Record<string, unknown>): Outcome {
+export function listNotes(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   let notes = state.notes;
   if (typeof frame.tag === "string" && frame.tag) {
     notes = notes.filter((n) => n.tags.includes(frame.tag as string));
@@ -74,15 +74,32 @@ export function listNotes(state: State, frame: Record<string, unknown>): Outcome
   // `apply` carrying a bare `q` (Task 5's tests call it that way, with no
   // daemon in front) has nothing to rank by, so `q` itself is never read here;
   // the honest degrade is the unranked list, not an attempt to search.
+
+  // A front asking for `semantic` recall cannot be blocked on a prompt it has
+  // no way to answer — a model choice and a ~100MB download are the person's
+  // call (see `brain` in machine.ts), so the request is answered from the
+  // floor unconditionally. What it earns instead is one nudge to the panel,
+  // never a repeat: `askedAtMs` is the same once-only bookkeeping as the
+  // permission and question nudges elsewhere in src/state/, so a front that
+  // keeps asking cannot turn this into noise.
+  const broadcast: ConvEvent[] = [];
+  if (frame.semantic === true && !state.brain.active && state.brain.askedAtMs === null) {
+    state.brain.askedAtMs = ctx.nowMs;
+    broadcast.push(pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "high",
+      text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
+    }));
+  }
+
   if (Array.isArray(frame.ids)) {
     const byId = new Map(notes.map((n) => [n.id, n]));
     const ranked = (frame.ids as unknown[])
       .map((id) => (typeof id === "string" ? byId.get(id) : undefined))
       .filter((n): n is Note => n !== undefined);
-    return { state, response: ok({ notes: ranked, ranked: true }), broadcast: [] };
+    return { state, response: ok({ notes: ranked, ranked: true }), broadcast };
   }
 
-  return { state, response: ok({ notes }), broadcast: [] };
+  return { state, response: ok({ notes }), broadcast };
 }
 
 /** Reversing a decision keeps it in the record and stops it binding. */

@@ -1,4 +1,5 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
+import { findModel } from "../brain/registry";
 import { drain, history, say } from "./conversation";
 import { listResults, recordResult } from "./results";
 import { acknowledge, askFront, listQuestions, markNudged, questionStatus, replyToQuestion } from "./questions";
@@ -81,7 +82,7 @@ export function apply(
     case "deny": return deny(state, actorId, frame, ctx);
     case "requests": return listRequests(state, frame, ctx, actorId);
     case "note": return note(state, actorId, frame, ctx);
-    case "notes": return listNotes(state, frame);
+    case "notes": return listNotes(state, frame, ctx);
     case "reverse": return reverse(state, actorId, frame, ctx);
     case "result": return recordResult(state, actorId, frame, ctx);
     case "results": return listResults(state, frame);
@@ -99,6 +100,7 @@ export function apply(
     case "take": return takeWork(state, actorId, frame, ctx);
     case "drop": return dropWork(state, actorId, frame, ctx);
     case "done": return finishWork(state, actorId, frame, ctx);
+    case "brain": return brain(state, actorId, frame);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
@@ -142,6 +144,61 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
       text: `shape is now ${wanted} (was ${before}) — it belongs to the repository, not to a session`,
     })],
   };
+}
+
+/**
+ * Status is a fact anyone on the bus can already infer is missing from a
+ * `notes` response — refusing to just say it would only hide the reason a
+ * front is stuck on the floor. Turning the brain on or off is a different
+ * matter: a ~100MB download and a model choice spend somebody's disk and
+ * somebody's money, on somebody's machine, and an agent cannot answer the
+ * interactive prompt that decision deserves on that person's behalf.
+ *
+ * This is the one op in the file where the asymmetry inverts: everywhere
+ * else a human has a voice, not a vote (AGENTS_ONLY_OPS, above) — territory
+ * is for the fronts to settle among themselves. Deliberately not folding
+ * `enable`/`disable` into AGENTS_ONLY_OPS: that set fires on `kind ===
+ * "human"`, i.e. it blocks humans and lets agents through — exactly
+ * backwards for spending someone's disk. The check has to live here, gated
+ * on the opposite kind.
+ */
+function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
+  const acting = frame.enable !== undefined || frame.disable !== undefined;
+  if (!acting) {
+    return { state, response: ok({ active: state.brain.active, model: state.brain.model }), broadcast: [] };
+  }
+
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  if (me.kind !== "human") {
+    return {
+      state,
+      response: err(
+        "OBSERVER_ONLY",
+        "brain enable/disable is the person's call, not a front's — it is somebody's disk and somebody's money",
+      ),
+      broadcast: [],
+    };
+  }
+
+  if (frame.disable === true) {
+    state.brain.active = false;
+    state.brain.model = null;
+    // A fresh "off" period earns its own one-time panel nudge, same as the
+    // period that started at first boot.
+    state.brain.askedAtMs = null;
+    return { state, response: ok({ active: false, model: null }), broadcast: [] };
+  }
+
+  const name = String(frame.enable ?? "");
+  const model = findModel(name);
+  if (!model) {
+    return { state, response: err("UNKNOWN_OP", `no such model in the registry: ${name}`), broadcast: [] };
+  }
+  state.brain.active = true;
+  state.brain.model = model.name;
+  state.brain.askedAtMs = null;
+  return { state, response: ok({ active: true, model: model.name }), broadcast: [] };
 }
 
 function status(state: State, ctx: Ctx): Outcome {

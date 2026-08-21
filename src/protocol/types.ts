@@ -18,6 +18,7 @@ export const OPS = [
   "note", "notes", "reverse", "result", "results",
   "mode", "shape", "status",
   "work", "works", "take", "drop", "done",
+  "brain",
 ] as const;
 export type Op = (typeof OPS)[number];
 
