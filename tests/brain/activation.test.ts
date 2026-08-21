@@ -49,6 +49,11 @@ describe("turning the brain on", () => {
     expect(second.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(0);
   });
 
+  // The CLI probes `may_enable` first so it never spends a download on an
+  // answer the daemon already knows — but that probe is a courtesy, not the
+  // gate. This test calls `apply` directly with an agent actor, skipping any
+  // probe entirely, so it proves the enforcement still lives here and did
+  // not quietly move to the CLI.
   test("an agent may not turn it on — it is somebody's disk and somebody's money", () => {
     const out = apply(state, core, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
     expect(out.response.ok).toBe(false);
@@ -70,6 +75,14 @@ describe("turning the brain on", () => {
   test("status is readable by anyone", () => {
     const out = apply(state, core, { v: 1, op: "brain" }, at(400));
     expect(out.response).toMatchObject({ ok: true, active: false });
+  });
+
+  test("status tells the calling participant whether it may enable — both ways, not a constant", () => {
+    const forAgent = apply(state, core, { v: 1, op: "brain" }, at(400));
+    expect(forAgent.response).toMatchObject({ ok: true, may_enable: false });
+
+    const forHuman = apply(state, human, { v: 1, op: "brain" }, at(400));
+    expect(forHuman.response).toMatchObject({ ok: true, may_enable: true });
   });
 
   test("disabling puts it back on the floor without losing the corpus", () => {

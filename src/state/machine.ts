@@ -165,7 +165,18 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
 function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
   const acting = frame.enable !== undefined || frame.disable !== undefined;
   if (!acting) {
-    return { state, response: ok({ active: state.brain.active, model: state.brain.model }), broadcast: [] };
+    // `may_enable` lets a caller (the CLI) find out whether it is even worth
+    // attempting a download before spending one byte on it — the daemon
+    // already knows `me.kind` for free. This is a courtesy for callers that
+    // choose to probe first; it is not the gate. A client that skips the
+    // probe and sends `enable` directly is still refused below, by `me.kind
+    // !== "human"`, exactly as before.
+    const me = actorOf(state, actorId);
+    return {
+      state,
+      response: ok({ active: state.brain.active, model: state.brain.model, may_enable: me?.kind === "human" }),
+      broadcast: [],
+    };
   }
 
   const me = actorOf(state, actorId);

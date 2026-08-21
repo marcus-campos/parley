@@ -925,6 +925,23 @@ async function main(): Promise<void> {
         }
 
         if (sub === "enable") {
+          // Probe before spending a single byte: the daemon already knows
+          // whether this participant may enable it (`me.kind`), so ask
+          // first rather than downloading ~100MB and only then finding out
+          // the answer was always going to be no. This probe is a courtesy,
+          // not the gate — `enable` below still refuses an agent on its own
+          // even if some other client skipped straight to it.
+          const probe = await send({ op: "brain" });
+          if (!probe.ok) fail(p, describeError(probe));
+          const mayEnable = (probe as unknown as { may_enable: boolean }).may_enable;
+          if (!mayEnable) {
+            fail(
+              p,
+              "brain enable/disable is the person's call, not a front's — it is somebody's disk and " +
+                "somebody's money. Ask the human on this bus to run it (with --human).",
+            );
+          }
+
           const name = p.positional[1];
           if (!name) {
             const rows = MODELS.map(
