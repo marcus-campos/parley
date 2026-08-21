@@ -87,9 +87,13 @@ export class ParleyDaemon {
     this.now = opts.now ?? (() => Date.now());
     this.journal = new Journal(opts.journalPath);
     this.token = opts.address.kind === "tcp" ? randomBytes(24).toString("hex") : null;
+    // Read before `restore()` runs: replaying a journaled `summon` needs the
+    // same ceiling a live one would have been checked against (see `restore`
+    // below) — a state reconstruction is only lossless if it re-derives what
+    // happened, not what would happen under today's hardcoded default.
+    this.spawnConfig = readSpawnConfig(opts.gitCommonDir);
     this.state = this.restore(opts.mode ?? "advisory");
     this.lastActivityMs = this.now();
-    this.spawnConfig = readSpawnConfig(opts.gitCommonDir);
   }
 
   /**
@@ -101,7 +105,11 @@ export class ParleyDaemon {
     const { entries, discarded } = this.journal.replay();
     for (const entry of entries) {
       const ms = Date.parse(entry.at);
-      apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
+      apply(
+        state, entry.actorId, entry.frame,
+        makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter),
+        this.spawnConfig.maxFronts,
+      );
     }
     // Nothing survives a restart connected; presence has to be re-proven.
     for (const p of Object.values(state.participants)) p.connected = false;

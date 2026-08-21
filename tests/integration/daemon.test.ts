@@ -240,4 +240,63 @@ describe("only one daemon may serve a repository", () => {
     const granted = await summonAtCeiling(6);
     expect(granted).toMatchObject({ ok: true, summoned: true });
   });
+
+  test("replay reproduces a summon denied live, not what a hardcoded ceiling would grant", async () => {
+    // `gitCommonDir` (and so `spawn.json`) and the journal both stay fixed
+    // across the restart below — only the socket address changes, the same
+    // way a real restart on a real repository keeps its config and its
+    // journal but cannot reuse a socket a dead process still holds.
+    const dir = tempRepo();
+    mkdirSync(join(dir, "parley"), { recursive: true });
+    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 2 }));
+    const journalPath = join(dir, "journal.ndjson");
+
+    const first = new ParleyDaemon({
+      gitCommonDir: dir,
+      address: { kind: "unix", address: join(dir, "p1.sock") },
+      journalPath,
+      tickIntervalMs: 50,
+    });
+    daemons.push(first);
+    const firstEndpoint = await first.listen();
+
+    const a = await RawClient.connect(firstEndpoint.address);
+    await a.send({ op: "join", name: "CORE", cwd: "/wt/a" });
+    const b = await RawClient.connect(firstEndpoint.address);
+    await b.send({ op: "join", name: "SECOND", cwd: "/wt/b" });
+
+    // Two live agent fronts already fill the configured ceiling of 2 — denied,
+    // live, and (per "journal BEFORE responding") still written to the journal.
+    const denied = await a.send({ op: "summon", reason: "need a hand" });
+    expect(denied).toMatchObject({ error: { code: "NO_CAPACITY" } });
+
+    const live = first.snapshot();
+    expect(live.lastBirthMs).toBeNull(); // sanity: a denial never stamps this
+
+    a.close();
+    b.close();
+    await first.close();
+
+    // Restart. Same repository, same journal, same `spawn.json` — a fresh
+    // socket only, exactly like a real process restart on a real machine.
+    const second = new ParleyDaemon({
+      gitCommonDir: dir,
+      address: { kind: "unix", address: join(dir, "p2.sock") },
+      journalPath,
+      tickIntervalMs: 50,
+    });
+    daemons.push(second);
+    await second.listen();
+
+    // The property to pin: replay reproduces what happened, not what would
+    // have happened under a different (hardcoded) ceiling. If restore()'s
+    // apply() ever again falls back to the default of 6, this replay sees two
+    // agents (2 < 6) and silently *grants* the summon that was denied live —
+    // stamping lastBirthMs and pushing an event that never existed in the
+    // original session.
+    const replayed = second.snapshot();
+    expect(replayed.lastBirthMs).toBeNull();
+    expect(replayed.events.length).toBe(live.events.length);
+    expect(replayed.seq).toBe(live.seq);
+  });
 });
