@@ -17,7 +17,7 @@ export const OPS = [
   "ask", "grant", "deny", "requests",
   "note", "notes", "reverse", "result", "results",
   "mode", "shape", "status",
-  "work", "works", "take", "drop", "done",
+  "work", "works", "take", "drop", "done", "summon",
 ] as const;
 export type Op = (typeof OPS)[number];
 
@@ -78,6 +78,8 @@ export const DEFAULTS = {
    * practice the bell only ever reaches a front holding a live connection.
    */
   ORPHAN_POOL_MS: 10 * 60_000,
+  /** At most one front is created per window, however large the pool is. */
+  BIRTH_COOLDOWN_MS: 5 * 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

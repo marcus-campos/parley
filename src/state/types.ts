@@ -37,6 +37,11 @@ export interface Participant {
    * id where there is one. This, not the name, is what identity is keyed on.
    */
   session: string | null;
+  /**
+   * Who created this session. `parley` fronts are the only ones parley can
+   * genuinely wake, because it owns their process — see §4.6 of the spec.
+   */
+  born: "person" | "parley";
 }
 
 export interface Claim {
@@ -220,6 +225,8 @@ export interface State {
   results: Record<string, CommandResult>;
   questions: Record<string, Question>;
   work: WorkItem[];
+  /** When capacity was last asked for. The cooldown is what stops a big pool becoming six fronts in ten seconds. */
+  lastBirthMs: number | null;
 }
 
 /**
@@ -244,7 +251,7 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
-    work: [],
+    work: [], lastBirthMs: null,
   };
 }
 

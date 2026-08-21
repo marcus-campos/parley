@@ -288,6 +288,38 @@ export function poolFooterFor(state: State, participantId: string): string {
   return `parley pool:\n${lines.join("\n")}`;
 }
 
+/**
+ * A front asking outright for a hand, distinct from the tick-driven birth
+ * intent: this one is spoken, not inferred from a stale pool. Same ceiling,
+ * same cooldown stamp — a summon that lands under the ceiling still costs a
+ * window, so a person spamming the command cannot bypass the rule that
+ * governs the automatic path.
+ */
+export function summonCapacity(
+  state: State,
+  actorId: string | null,
+  frame: Record<string, unknown>,
+  ctx: Ctx,
+  maxFronts: number,
+): Outcome {
+  const me = actorOf(state, actorId);
+  if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
+  if (liveParticipants(state).filter((p) => p.kind === "agent").length >= maxFronts) {
+    return { state, response: err("NO_CAPACITY", `already at ${maxFronts} front(s)`), broadcast: [] };
+  }
+  state.lastBirthMs = ctx.nowMs;
+  const reason = typeof frame.reason === "string" && frame.reason ? frame.reason : "asked for";
+  return {
+    state,
+    response: ok({ summoned: true, reason }),
+    broadcast: [pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "high",
+      text: `${me.name} asked for a front — ${reason}`,
+      about: me.id,
+    })],
+  };
+}
+
 export function finishWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };

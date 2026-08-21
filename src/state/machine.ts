@@ -6,7 +6,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
-import { dropWork, finishWork, idleFronts, listWork, publishWork, takeWork } from "./work";
+import { dropWork, finishWork, idleFronts, listWork, publishWork, summonCapacity, takeWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -36,6 +36,11 @@ export function apply(
   actorId: string | null,
   frame: Record<string, unknown>,
   ctx: Ctx,
+  // Threaded from the daemon's SpawnConfig (Task 1) so `summon` is refused at
+  // the same ceiling a repository configured for itself. Defaults to
+  // SPAWN_DEFAULTS.maxFronts for every caller that has not wired it through —
+  // tests included.
+  maxFronts: number = 6,
 ): Outcome {
   const version = typeof frame.v === "number" ? frame.v : null;
   if (version !== null && version !== PROTOCOL_VERSION) {
@@ -99,6 +104,7 @@ export function apply(
     case "take": return takeWork(state, actorId, frame, ctx);
     case "drop": return dropWork(state, actorId, frame, ctx);
     case "done": return finishWork(state, actorId, frame, ctx);
+    case "summon": return summonCapacity(state, actorId, frame, ctx, maxFronts);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
@@ -167,6 +173,20 @@ export interface TickOptions {
   orphanGraceMs?: number;
   offerTtlMs?: number;
   orphanPoolMs?: number;
+  /** Ceiling on live agent fronts. Same number `summon` is refused against. */
+  maxFronts?: number;
+  /** At most one birth intent per window, regardless of pool size. */
+  birthCooldownMs?: number;
+}
+
+/**
+ * What `tick` asks the daemon to do, never does itself. The state machine
+ * decides that capacity is missing; spawning a process is a clock, a PID and
+ * an exit code all at once, so it belongs on the other side of this line.
+ */
+export interface BirthIntent {
+  reason: string;
+  forItemIds: string[];
 }
 
 /**
@@ -174,7 +194,11 @@ export interface TickOptions {
  * below expires on its own — the daemon calls `tick` on a timer and before
  * each command, so a bus that no one touches never invents events.
  */
-export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: State; broadcast: ConvEvent[] } {
+export function tick(
+  state: State,
+  ctx: Ctx,
+  opts: TickOptions = {},
+): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null } {
   const autoTtl = opts.autoClaimTtlMs ?? DEFAULTS.AUTO_CLAIM_TTL_MS;
   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
@@ -290,9 +314,14 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
   const stale = state.work.filter(
     (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
   );
+  let birth: BirthIntent | null = null;
   if (stale.length > 0) {
     const idle = idleFronts(state);
     if (idle.length > 0) {
+      // Recycle before creating. A front idle beside an orphan pool is the
+      // larger waste, and reviving it costs nothing: no worktree, no
+      // dependency install, no cold context. Creating is the fallback, never
+      // the first move.
       const target = idle[0]!;
       for (const w of stale) w.nudgedAtMs = ctx.nowMs;
       broadcast.push(pushEvent(state, ctx, {
@@ -302,10 +331,38 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
         kind: "system", from: null, to: target.name, priority: "high",
         text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
       }));
+    } else if (canBearFront(state, ctx, opts)) {
+      // Stamped when the intent is emitted, not when a spawn succeeds. A
+      // spawn that fails therefore costs one cooldown window and then asks
+      // again — self-healing, and it cannot spin the way stamping on success
+      // would if a permanently failing spawn were retried on every tick.
+      state.lastBirthMs = ctx.nowMs;
+      birth = {
+        reason: `${stale.length} open item(s) and no idle front`,
+        forItemIds: stale.map((w) => w.id),
+      };
+      broadcast.push(pushEvent(state, ctx, {
+        kind: "system", from: null, to: null, priority: "high",
+        text: `the pool has ${stale.length} open item(s) and nobody is idle — providing a front`,
+      }));
     }
   }
 
-  return { state, broadcast };
+  return { state, broadcast, birth };
+}
+
+/**
+ * Whether `tick` may hand the daemon a birth intent: under the ceiling, and
+ * outside the cooldown window. The daemon still decides whether the spawn
+ * actually happens — this only decides whether the state machine is allowed
+ * to ask.
+ */
+function canBearFront(state: State, ctx: Ctx, opts: TickOptions): boolean {
+  const ceiling = opts.maxFronts ?? 6;
+  if (liveParticipants(state).filter((p) => p.kind === "agent").length >= ceiling) return false;
+  const cooldown = opts.birthCooldownMs ?? DEFAULTS.BIRTH_COOLDOWN_MS;
+  if (state.lastBirthMs !== null && ctx.nowMs - state.lastBirthMs < cooldown) return false;
+  return true;
 }
 
 /** Deterministic Ctx factory for the daemon. Tests build their own. */

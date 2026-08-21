@@ -92,12 +92,18 @@ describe("the doorbell", () => {
     expect(again.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(0);
   });
 
-  test("no idle front means no bell at all", () => {
+  test("no idle front means no recycle bell — capacity asks for a front instead", () => {
     apply(state, core, { v: 1, op: "claim", paths: ["src/**"] }, at(50));
     apply(state, develop, { v: 1, op: "claim", paths: ["other/**"] }, at(60));
     apply(state, core, { v: 1, op: "work", title: "x", paths: ["a.ts"] }, at(100));
     const out = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 1));
-    expect(out.broadcast.filter((e) => e.text.includes("pool"))).toHaveLength(0);
+    // Recycling only ever targets someone idle, and nobody here is — neither
+    // busy front is named or addressed by the recycle message specifically.
+    expect(out.broadcast.some((e) => e.text.includes("is idle and the pool"))).toBe(false);
+    expect(out.broadcast.some((e) => e.to === "CORE" || e.to === "DEVELOP")).toBe(false);
+    // With both busy, capacity fills the gap instead of leaving it silent —
+    // see tests/state/capacity.test.ts for the birth intent itself.
+    expect(out.birth).not.toBeNull();
   });
 
   test("an explicit orphanPoolMs governs the bell, not just the default", () => {
