@@ -53,4 +53,31 @@ describe("parsing a superpowers plan", () => {
     expect(plan.tasks[0]!.paths).toEqual([]);
     expect(plan.tasks[0]!.parseError).toContain("no usable path");
   });
+
+  test("indented Files bullets are captured in full, not truncated mid-block", () => {
+    const plan = parsePlan(
+      "### Task 1: x\n\n**Files:**\n  - Create: `a.ts`\n  - Modify: `b.ts`\n  - Test: `c.ts`\n",
+    );
+    expect(plan.tasks[0]!.paths.sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+    expect(plan.tasks[0]!.parseError).toBeNull();
+  });
+
+  test("a heading with an empty title still registers as its own task, and does not absorb its neighbor", () => {
+    const plan = parsePlan(
+      "### Task 1: First\n\n**Files:**\n- Create: `a.ts`\n\n### Task 2:\n\n**Files:**\n- Create: `b.ts`\n",
+    );
+    expect(plan.tasks.map((t) => t.n)).toEqual([1, 2]);
+    expect(plan.tasks[1]!.title).toBe("");
+    expect(plan.tasks[1]!.paths).toEqual(["b.ts"]);
+    // The empty-title task must not have folded its file into its predecessor.
+    expect(plan.tasks[0]!.paths).toEqual(["a.ts"]);
+  });
+
+  test("a path that fails to normalize is not silently dropped when a sibling path succeeds", () => {
+    const plan = parsePlan(
+      "### Task 1: x\n\n**Files:**\n- Modify: `src/app.ts`\n- Modify: `../../escape.ts`\n",
+    );
+    expect(plan.tasks[0]!.paths).toEqual(["src/app.ts"]);
+    expect(plan.tasks[0]!.parseError).not.toBeNull();
+  });
 });
