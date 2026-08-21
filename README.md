@@ -1,5 +1,6 @@
 # parley
 
+<!-- #region what-it-is -->
 **A coordination bus for concurrent agent sessions working in one repository.**
 
 Running four or five agent sessions on the same repository works. The problem is
@@ -25,6 +26,7 @@ parley: CONFLICT
   src/backend/finance/services.py held by FINANCEIRO (month-end closing) since 2026-08-18T13:50:00Z
 Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 ```
+<!-- #endregion what-it-is -->
 
 - **Protocol reference:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - **How it works inside:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
@@ -33,6 +35,7 @@ Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 
 ## Where this fits, and where it does not
 
+<!-- #region where-it-fits -->
 The most common reaction to parley is that the problem is already solved — by
 worktrees, by subagents, by an orchestrator. Each of those is good, each of them
 is something to keep using, and none of them covers the case parley was built
@@ -112,11 +115,13 @@ from nothing.
 So: for one big decomposable task, master and subagents. For several independent,
 long-running fronts, the cost of keeping everything under a single master stops
 being obvious — and that is where this earns its place.
+<!-- #endregion where-it-fits -->
 
 ---
 
 ## The one rule
 
+<!-- #region one-rule -->
 **A broken parley must never stop the work.**
 
 If the daemon is unreachable, `enforced` degrades to `advisory` and says so
@@ -124,11 +129,13 @@ loudly. If a hook overruns its time budget, it lets go. If the journal has a tor
 line from a `kill -9`, the daemon drops that line and boots anyway. A
 coordination system that freezes the machine when it fails is worse than no
 system at all.
+<!-- #endregion one-rule -->
 
 ---
 
 ## Install
 
+<!-- #region install -->
 ### One line — macOS, Linux, WSL
 
 ```bash
@@ -322,6 +329,7 @@ what that implies.
 **After upgrading by hand**, run `parley stop` once — a daemon that is already
 running keeps serving the version it started with. `parley update` does this for
 you.
+<!-- #endregion install -->
 
 ---
 
