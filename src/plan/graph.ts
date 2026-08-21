@@ -51,10 +51,23 @@ export function collisions(tasks: PlanTask[]): Map<number, number[]> {
 }
 
 /**
- * Greedy by plan order: a task joins the first wave that holds nothing it
- * collides with. Ties (including two tasks sharing a number, see
- * `collisions` above) fall back to original list order — plan order is the
- * only ordering a malformed, duplicate-numbered plan still has.
+ * Greedy by plan order, but not first-fit: a task is seated no earlier than
+ * one wave past the highest wave already holding a task it collides with.
+ * First-fit alone is unsound the moment a task carries more than one path —
+ * the normal shape of a `**Files:**` block. Given t1{x,y}, t2{y,z}, t3{z,w},
+ * t3 shares no path with t1 and so passes t1's wave clean, even though t3
+ * collides with t2, which was pushed out of that same wave by t1. First-fit
+ * would seat t3 with t1, a wave before t2 — running t3's edit to z.ts before
+ * t2's, silently out of the plan's declared order. Seating by "one past the
+ * latest colliding predecessor" instead means every wave this function
+ * assigns already reflects every earlier collision that forced it there, so
+ * no later re-check of that wave is needed: a task never appears before a
+ * lower-numbered task it collides with, directly or through the chain of
+ * waves that task's own collisions already pushed it into.
+ *
+ * Ties (including two tasks sharing a number, see `collisions` above) fall
+ * back to original list order — plan order is the only ordering a
+ * malformed, duplicate-numbered plan still has.
  */
 export function waves(tasks: PlanTask[]): Wave[] {
   const ordered = tasks
@@ -63,10 +76,15 @@ export function waves(tasks: PlanTask[]): Wave[] {
     .map(({ task }) => task);
 
   const out: Wave[] = [];
+  const placed: { task: PlanTask; wave: number }[] = [];
   for (const task of ordered) {
-    const wave = out.find((w) => !w.tasks.some((other) => tasksCollide(task, other)));
-    if (wave) wave.tasks.push(task);
-    else out.push({ tasks: [task] });
+    let minWave = 0;
+    for (const p of placed) {
+      if (tasksCollide(task, p.task)) minWave = Math.max(minWave, p.wave + 1);
+    }
+    while (out.length <= minWave) out.push({ tasks: [] });
+    out[minWave]!.tasks.push(task);
+    placed.push({ task, wave: minWave });
   }
   return out;
 }
