@@ -104,6 +104,27 @@ function cosine(a: Float32Array, b: Float32Array): number {
   return denom === 0 ? 0 : dot(a, b) / denom;
 }
 
+/**
+ * The boundary of cosine similarity itself, not a tuned constant: 0 is the
+ * exact point where two vectors stop sharing any positive direction at all
+ * and become orthogonal (or opposed). Below or at that line there is no
+ * positive signal to rank on — only its absence, or its negation — so a hit
+ * scoring at or below it does not qualify, the same way `LexicalIndex`
+ * refuses a match that is not distinctive rather than return the least-bad
+ * document (lexical.ts, `requireDistinctive`). It also does the right thing
+ * for a document with no known tokens at all: `cosine` already returns
+ * exactly `0` whenever either vector has zero norm (above), so a
+ * zero-vector document is excluded by this same rule without needing a
+ * second check.
+ *
+ * This is deliberately permissive rather than a hand-picked positive float:
+ * there is no deployed model yet to calibrate a tighter number against (the
+ * one registry entry is `xlmr`, which this build cannot load — see
+ * `isLoadable`), and a number invented without that evidence would be a
+ * worse guess than the one boundary cosine similarity defines on its own.
+ */
+const MIN_SIMILARITY = 0;
+
 interface Entry { vec: Float32Array; kind: Hit["kind"] }
 
 /**
@@ -133,8 +154,17 @@ export class VectorIndex {
   }
 
   search(vec: Float32Array, k: number): Hit[] {
+    // A query with no known token at all embeds to the zero vector — there is
+    // nothing to compare, not universal agreement. Without this, every
+    // document would tie at `cosine(zero, x) === 0`, get ranked, and receive
+    // a positive RRF bump once fused — resurrecting "least-bad note over
+    // silence" through the one channel the lexical floor already closed it
+    // on (Task 2's distinctiveness threshold). Silence is the honest answer.
+    if (norm(vec) === 0) return [];
+
     return [...this.entries.entries()]
       .map(([id, e]) => ({ id, score: cosine(vec, e.vec), kind: e.kind }))
+      .filter((h) => h.score > MIN_SIMILARITY)
       // Ties break on the id, so the same corpus always answers in the same
       // order — the same rule `LexicalIndex.search` uses.
       .sort((a, b) => (b.score - a.score) || a.id.localeCompare(b.id))

@@ -56,7 +56,13 @@ function isStoredFile(value: unknown, dims: number): value is StoredFile {
       typeof (e as StoredEntry).id === "string" &&
       validKinds.includes((e as StoredEntry).kind) &&
       typeof (e as StoredEntry).scale === "number" &&
-      Array.isArray((e as StoredEntry).values),
+      Array.isArray((e as StoredEntry).values) &&
+      // The same check `loadStaticModel` already applies to a vocabulary row
+      // (embed.ts) — reused here rather than a second one: a syntactically
+      // valid file whose values are not actually numbers (`["x","y"]`) must
+      // not load, because `dequantize` would multiply straight through to a
+      // NaN similarity that corrupts every ranking it touches, silently.
+      (e as StoredEntry).values.every((x) => typeof x === "number"),
   );
 }
 

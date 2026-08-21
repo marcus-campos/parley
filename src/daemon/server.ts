@@ -6,7 +6,7 @@ import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
-import type { ConvEvent, State } from "../state/types";
+import type { ConvEvent, Outcome, State } from "../state/types";
 import { indexFromState, type LexicalIndex } from "../brain/lexical";
 import { embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
 import { loadVectors, saveVectors } from "../brain/vectors";
@@ -102,6 +102,16 @@ export class ParleyDaemon {
    * this field being `null` is never itself a failure state.
    */
   private brain: { model: StaticModel; vectors: VectorIndex } | null = null;
+  /**
+   * Whether the bus has already been told, for the *current* activation
+   * attempt, that this daemon cannot actually load what `state.brain`
+   * records as active. Reset at the top of every `loadBrain()` call — enable,
+   * disable, or a fresh boot — so a new attempt always earns its own
+   * one-time notice rather than inheriting silence from the last one. Never
+   * persisted: it is a fact about this process's ability to load a file
+   * right now, not a change to the bus's shared state.
+   */
+  private brainLoadNudged = false;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
@@ -135,6 +145,7 @@ export class ParleyDaemon {
    */
   private loadBrain(): void {
     this.brain = null;
+    this.brainLoadNudged = false;
     if (!this.state.brain.active || !this.state.brain.model) return;
     try {
       const model = findModel(this.state.brain.model);
@@ -177,6 +188,74 @@ export class ParleyDaemon {
     } catch (e) {
       process.stderr.write(`parley: could not persist vectors: ${(e as Error).message}\n`);
     }
+  }
+
+  /**
+   * Corrects an already-computed `brain` outcome — response and broadcast —
+   * before either one is sent, so what the caller and the bus are told
+   * matches what `loadBrain` (called just before this, in `handle`) actually
+   * managed. `state.brain.active` is the person's decision and stands
+   * regardless; this only ever downgrades the *announcement* of it, never
+   * the decision itself.
+   *
+   * Nothing to correct when the two already agree: truly on (`active` and
+   * loaded), or truly off (`!active`, and `loadBrain` already cleared
+   * `this.brain` for that same reason). Only the mismatch — recorded active,
+   * not actually loaded — needs a correction.
+   */
+  private reconcileBrainAnnouncement(outcome: Outcome): void {
+    if (!this.state.brain.active || this.brain) return;
+    const response = outcome.response as unknown as Record<string, unknown>;
+    response.loaded = false;
+    response.note = `${this.state.brain.model} could not be loaded by this daemon — the lexical floor is answering instead`;
+    for (const event of outcome.broadcast) {
+      event.text = `${this.state.brain.model} was recorded as enabled, but this daemon could not load it — ` +
+        `the lexical floor is answering for every front on this bus until that changes`;
+    }
+    // Only actually correcting the bus-wide broadcast counts as having told
+    // anyone besides the direct caller; an empty broadcast (the state did
+    // not change — e.g. re-enabling an already-active model that has since
+    // stopped loading) leaves the ambient nudge armed to catch it instead.
+    if (outcome.broadcast.length > 0) this.brainLoadNudged = true;
+  }
+
+  /**
+   * The other half of the same finding: a mismatch discovered with no live
+   * `brain` frame to correct — a fresh boot replaying a journal whose model
+   * file has since gone missing or corrupt, or a disk error during a later
+   * backfill. Checked cheaply on every request; the moment there is at least
+   * one other connected, joined front to tell, it is told once and latches
+   * (`brainLoadNudged`) until the next `loadBrain()` attempt.
+   */
+  private maybeNudgeBrainLoadFailure(): void {
+    if (this.brainLoadNudged || !this.state.brain.active || this.brain) return;
+    const sent = this.notifyAllConnected(
+      `brain is recorded as enabled (${this.state.brain.model}), but this daemon could not load it — ` +
+        `the lexical floor is answering until that changes`,
+    );
+    if (sent) this.brainLoadNudged = true;
+  }
+
+  /**
+   * A daemon-local admin notice, not a bus event: it is never added to
+   * `state.events` and never touches `state.seq` or `state.cursors`, since it
+   * is a fact about *this* process's ability to load a file, not a change to
+   * the replayable, journaled conversation every front shares. A different
+   * daemon (after the file reappears, or a fresh restart) may succeed where
+   * this one didn't, and history should not remember this as a bus event.
+   */
+  private notifyAllConnected(text: string): boolean {
+    let sent = false;
+    const event = {
+      seq: this.state.seq, at: new Date(this.now()).toISOString(),
+      kind: "system" as const, from: null, to: null, priority: "high" as const, text,
+    };
+    for (const conn of this.conns) {
+      if (!conn.authed || !conn.participantId) continue;
+      this.send(conn, { v: PROTOCOL_VERSION, op: "push", events: [event] });
+      sent = true;
+    }
+    return sent;
   }
 
   /**
@@ -313,6 +392,14 @@ export class ParleyDaemon {
 
     const ctx = makeCtx(this.now(), this.counter);
 
+    // Cheap on every request; only ever does anything the first time there is
+    // someone connected to tell about a `state.brain.active` this particular
+    // daemon process cannot honor (a fresh boot replaying a journal whose
+    // model has since gone missing or corrupt — the silent branches the
+    // review named). Latches via `brainLoadNudged` once it actually reaches
+    // someone.
+    this.maybeNudgeBrainLoadFailure();
+
     // Expire before deciding: a claim held by a front that died two minutes ago
     // must not win a conflict against the front asking right now.
     const expired = tick(this.state, ctx, {});
@@ -362,6 +449,20 @@ export class ParleyDaemon {
 
     const outcome = apply(this.state, conn.participantId, toApply, ctx);
 
+    // A person just changed `state.brain` — enabled, disabled, or switched
+    // models. Reloading here, rather than waiting for a restart, is what
+    // makes that decision take effect immediately: enabling backfills every
+    // note already in state (see `loadBrain`), and disabling drops the
+    // vector index from memory right away. Done *before* the response and
+    // broadcast below are sent — never after — so both can be corrected by
+    // `reconcileBrainAnnouncement` if what actually loaded does not match
+    // what was just recorded, instead of the bus being told a success that
+    // this same function already knows, one line later, was not real.
+    if (frame.op === "brain" && outcome.response.ok) {
+      this.loadBrain();
+      this.reconcileBrainAnnouncement(outcome);
+    }
+
     if (frame.op === "join" && outcome.response.ok) {
       conn.participantId = (outcome.response as unknown as { id: string }).id;
       const p = this.state.participants[conn.participantId];
@@ -384,13 +485,6 @@ export class ParleyDaemon {
     // never reaches here, so the index can never diverge from what was
     // actually accepted.
     if (outcome.response.ok) this.maintainIndex(String(frame.op), outcome.response as Record<string, unknown>);
-
-    // A person just changed `state.brain` — enabled, disabled, or switched
-    // models. Reloading here, rather than waiting for a restart, is what
-    // makes that decision take effect immediately: enabling backfills every
-    // note already in state (see `loadBrain`), and disabling drops the
-    // vector index from memory right away.
-    if (frame.op === "brain" && outcome.response.ok) this.loadBrain();
   }
 
   /**

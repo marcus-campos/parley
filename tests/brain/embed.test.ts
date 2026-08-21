@@ -59,3 +59,41 @@ describe("which registry entries this build can actually load", () => {
   });
 });
 
+
+describe("a relevance floor for the vector channel — no ties at zero, no least-bad note", () => {
+  test("a query with no known token at all — the zero vector — matches nothing, not everything", () => {
+    const index = new VectorIndex(2);
+    index.add("n_1", embed(model, "select2 hidden"));
+    index.add("n_2", embed(model, "menu lateral"));
+    // "kubernetes helm" shares no token with the tiny vocabulary, so it
+    // embeds to the zero vector (proved in the embeddings describe block
+    // above). Reproduces the review's exact finding: without this guard,
+    // every document ties at `cosine(zero, x) === 0` and comes back ranked.
+    const zeroQuery = embed(model, "kubernetes helm");
+    expect(index.search(zeroQuery, 5)).toEqual([]);
+  });
+
+  test("a genuinely orthogonal (zero-similarity) document does not qualify either", () => {
+    const index = new VectorIndex(2);
+    index.add("n_1", embed(model, "menu lateral"));
+    // "select2" is orthogonal to "menu"/"lateral" in the tiny vocabulary
+    // (cosine 0 exactly) — a real, non-zero query vector, but with nothing
+    // in common with the only document in the index.
+    expect(index.search(embed(model, "select2"), 5)).toEqual([]);
+  });
+
+  test("genuine semantic signal still returns its hit — the floor must not refuse everything", () => {
+    const index = new VectorIndex(2);
+    index.add("n_1", embed(model, "select2 hidden"));
+    index.add("n_2", embed(model, "menu lateral"));
+    // "lateral" alone shares a real, positive-cosine direction with n_2.
+    const hits = index.search(embed(model, "lateral"), 5);
+    expect(hits.map((h) => h.id)).toEqual(["n_2"]);
+  });
+});
+
+describe("fusion never resurrects a document neither channel qualified", () => {
+  test("both channels empty means the fused result is empty", () => {
+    expect(fuse([], [], 5)).toEqual([]);
+  });
+});

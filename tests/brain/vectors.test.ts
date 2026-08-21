@@ -36,13 +36,16 @@ describe("persisting the int8 vectors beside the journal", () => {
   test("removing an id and re-saving is honoured on reload", () => {
     const dir = tempDir();
     const index = new VectorIndex(2);
-    index.add("n_1", new Float32Array([1, 0]));
-    index.add("n_2", new Float32Array([0, 1]));
+    // Both share a positive-cosine direction with the query below, so a
+    // failure to actually remove `n_1` (rather than the query simply not
+    // matching it) is what this test would catch.
+    index.add("n_1", new Float32Array([1, 1]));
+    index.add("n_2", new Float32Array([1, 2]));
     index.remove("n_1");
     saveVectors(dir, index);
 
     const reloaded = loadVectors(dir, 2);
-    expect(reloaded!.search(new Float32Array([1, 0]), 5).map((h) => h.id)).toEqual(["n_2"]);
+    expect(reloaded!.search(new Float32Array([1, 1]), 5).map((h) => h.id)).toEqual(["n_2"]);
   });
 
   test("nothing on disk yet degrades to null, not a throw", () => {
@@ -62,6 +65,24 @@ describe("persisting the int8 vectors beside the journal", () => {
   test("a corrupt file loads as null instead of throwing", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "vectors.json"), "{ not json", "utf8");
+    expect(loadVectors(dir, 2)).toBeNull();
+  });
+
+  /**
+   * A syntactically valid file whose quantized `values` are not actually
+   * numbers must not load. `dequantize` (vectors.ts) multiplies each stored
+   * value by its scale with no further check — a string sneaking through
+   * would produce a genuine `NaN` similarity at search time, silently
+   * corrupting every ranking it touches. Reproduces the review's exact
+   * finding.
+   */
+  test("a file whose quantized values are not numbers loads as null, never a NaN vector", () => {
+    const dir = tempDir();
+    writeFileSync(
+      join(dir, "vectors.json"),
+      JSON.stringify({ dims: 2, entries: [{ id: "n_1", kind: "note", scale: 1, values: ["x", "y"] }] }),
+      "utf8",
+    );
     expect(loadVectors(dir, 2)).toBeNull();
   });
 });
