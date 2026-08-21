@@ -51,4 +51,43 @@ describe("what rides along on a claim", () => {
     const notes = (out.response as unknown as { notes: Note[] }).notes;
     expect(notes.some((n) => n.kind === "decision")).toBe(true);
   });
+
+  /**
+   * The review's Important-5 finding: the two tests above pass separately,
+   * and that separation is exactly what hid the bug. Decisions were exempt
+   * from `NOTES_CAP` entirely — the right instinct on its own ("a standing
+   * decision is never truncated away" above) — but "exempt" meant
+   * "unbounded", so 30 decisions and 30 plain notes on one path answered a
+   * claim with all 35, and 60 would have answered with all 60. This test
+   * puts both a large decision count and a large plain-note count on the
+   * same path in the same claim, which is the only way to see whether the
+   * footer's *worst case* — not just its typical case — is actually bounded.
+   */
+  test("a decision present together with more_notes accounting — both caps hold at once", () => {
+    for (let i = 0; i < 30; i++) {
+      apply(state, core, { v: 1, op: "note", title: `decision ${i}`, kind: "decision", paths: ["a.ts"] }, at(10 + i));
+    }
+    for (let i = 0; i < 30; i++) {
+      apply(state, core, { v: 1, op: "note", title: `note ${i}`, paths: ["a.ts"] }, at(100 + i));
+    }
+    const other = joined(state, "OTHER", 200);
+    const out = apply(state, other, { v: 1, op: "claim", paths: ["a.ts"] }, at(300));
+    const response = out.response as unknown as { notes: Note[]; more_notes: number; more_decisions: number };
+
+    const decisionsReturned = response.notes.filter((n) => n.kind === "decision");
+    const plainReturned = response.notes.filter((n) => n.kind !== "decision");
+
+    // Decisions bind, so they still get their own cap — just not an exemption
+    // from every cap at all.
+    expect(decisionsReturned).toHaveLength(20);
+    expect(response.more_decisions).toBe(10);
+
+    // Plain notes are unaffected by how many decisions also live on the path.
+    expect(plainReturned).toHaveLength(5);
+    expect(response.more_notes).toBe(25);
+
+    // The property that actually matters: the worst case is bounded,
+    // regardless of how many decisions and plain notes exist on the path.
+    expect(response.notes.length).toBeLessThanOrEqual(25);
+  });
 });

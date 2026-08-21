@@ -506,6 +506,106 @@ check rather than new work to do.
 
 ---
 
+## Recall: ask, don't just list
+
+`claim` already pushes path-anchored notes at whoever edits that file next —
+the deal since day one. What was missing: a front with a *question* that has
+no single path to anchor on could only list everything or filter by path, both
+of which cost tokens on a corpus that outgrows any one session fast.
+
+```bash
+parley notes --query "how does the footer cap work" --k 3
+parley results --query "select2 dropdown test" --k 3
+```
+
+Both `notes` and `results` gain `--query` (`q` in the protocol, `query` on the
+MCP tools) and `--k`. Every front gets a lexical floor for free — no download,
+no configuration, no model:
+
+- **Identifier-aware tokenisation.** `screen_builder.html` is retrieved by
+  `screen builder`; `is_staff()` by `is_staff`. This corpus is notes about
+  code, so splitting on `_`, `-`, `.` and camelCase is the common case, not an
+  edge case.
+- **BM25 with a distinctiveness threshold.** A term present in more than half
+  the corpus does not count as a match on its own — otherwise a note sharing
+  only "the" or "test" with the query would outrank returning nothing. (Below
+  four documents in the corpus this threshold does not engage yet; a corpus
+  that small has no meaningful notion of "common.")
+- **Silence below the floor, on purpose.** A query with no good answer returns
+  `[]`, never the least-bad note. The least-bad note costs tokens and teaches
+  the agent to distrust the channel.
+
+### The brain: optional, local, off by default
+
+Enabling the brain (`parley brain enable`) fuses a local embedding model into
+every ranked query by reciprocal rank, on top of the lexical floor — so a
+Portuguese note about *"o menu lateral"* is still found by an English query
+about *"hidden sidebar,"* paraphrase rather than shared tokens. It is opt-in,
+deliberately:
+
+- **Human-only.** An agent asking `parley brain enable` is refused — it is
+  somebody's disk and somebody's ~100MB download, so it is the person's call.
+  An agent's query still answers from the lexical floor either way; the daemon
+  nudges the panel once — *"a front asked for semantic recall and the brain is
+  off — `parley brain enable` to pick a model"* — and never repeats itself for
+  the same asking front, and never makes that front wait on a person to
+  answer.
+- **Static embeddings only.** A token-lookup-and-mean model, not a
+  transformer: deterministic down to the bit, no GPU, no per-platform native
+  runtime. Vectors persist beside the journal, int8-quantised, and are
+  rebuilt from the notes and results already in `state` if that file ever
+  goes missing — nothing here needs re-deriving from scratch.
+- **A relevance floor that is relative, not fixed.** Dense embedding tables
+  are anisotropic — arbitrary, unrelated text still lands at a high positive
+  cosine — so a hit must be distinctively similar to the rest of *this
+  query's* results, not merely similar at all. Same discipline the lexical
+  floor already applies to document frequency, aimed at cosine instead.
+
+**Honestly, about this build:** the registry lists one model today,
+`potion-multilingual-128M-int8`, and it declares the `xlmr` tokenizer —
+XLM-RoBERTa's SentencePiece tokenizer, which has no TypeScript implementation
+yet (only Python or WASM). **This build cannot load it.** `parley brain
+enable` says so, and refuses, before a single byte downloads — not after.
+The registry entry is not hidden or removed to paper over that: a reader
+deserves to see that the intended model is known and simply not shippable
+yet, not silently absent. Recall still works in full on the lexical floor
+regardless of any of this — the brain is strictly additive, never a
+dependency.
+
+### The footer cap
+
+A live session accumulates notes fast — forty, sixty, more — and `claim`
+already rides some of them on every call, automatically. Sending the whole
+corpus on every edit is a tax on every edit, so both halves of it are capped,
+each with its own overflow count:
+
+| kind | rides in full up to | overflow field |
+|---|---|---|
+| plain notes | newest 5 | `more_notes` |
+| decisions | newest 20 | `more_decisions` |
+
+Decisions get their own cap rather than an outright exemption from one: a
+decision binds until reversed, so it is worth more per line than a plain note
+— but "worth more" is not "unbounded," and a path that has collected thirty
+decisions over a repository's lifetime should not answer every claim with all
+thirty of them. Either overflow count points at `parley notes --path <file>`
+(add `--kind decision` for just the rest of those) for the full list.
+
+### Degradation
+
+| failure | behaviour |
+|---|---|
+| brain off | lexical floor answers |
+| model missing, corrupt, or fails its checksum | lexical floor answers, and says so once |
+| lexical index cold or broken | path-anchored delivery, i.e. today's behaviour |
+| daemon unreachable | today's behaviour |
+
+Nothing here can block an edit, delay a hook, or stop the work — [the one
+rule](#the-one-rule) applies to recall exactly as it applies to everything
+else.
+
+---
+
 ## Commands
 
 Everything takes `--json` for machine consumption. `--as NAME` says which front
@@ -580,8 +680,20 @@ through the environment.
 | `parley decide --title "..."` | Record something binding. Announced to everyone, stands until reversed — so the next front does not relitigate a settled question. |
 | `parley reverse <id> --reason "..."` | Un-bind a decision while keeping it on the record. |
 | `parley notes [--path p] [--tag t] [--kind decision] [--export] [--import]` | Read them. `--export` rewrites `.parley/notes.md` (it is written automatically on every note anyway); `--import` reads that file back onto the bus, which is what a fresh clone needs. |
+| `parley notes --query "..." [--k N]` | **Ask** instead of listing: ranked recall over every note and decision, top-`k` only (default 5). See [Recall](#recall-ask-dont-just-list) below. |
 | `parley result "<cmd>" --status pass\|fail --paths <globs>` | Record what a command produced, and what it depends on. |
 | `parley results [--fresh]` | What is already known, and whether it still holds. **Check this before running a long suite** — if nothing it depends on changed, running it again buys nothing. |
+| `parley results --query "..." [--k N]` | Same idea, over recorded results instead of notes. |
+
+### The brain
+
+| | |
+|---|---|
+| `parley brain` | Is semantic recall on, and with which model. Readable by anyone; a human sees whether they may turn it on, an agent sees that they may not. |
+| `parley brain enable [<model>]` | **Human-only** — it is somebody's disk and somebody's download. With no model named, lists the registry — name, languages, size, and whether **this build** can actually load it — so you weigh it before anything downloads. |
+| `parley brain disable` | Back to the lexical floor, without losing the corpus. |
+
+See [Recall](#recall-ask-dont-just-list) below for what turning it on actually buys you, and the honest state of what this build can load today.
 
 ### Watching
 
