@@ -16,12 +16,10 @@ shell. If you are the kind of person who already keeps a pane open for `git
 status`, this is that pane's neighbor.
 
 Reach for the **web panel** (`parley watch --web`) when you want it open
-continuously without owning a terminal tab, when you want to glance at it
-from a browser window on a second monitor, or when more than one person
-needs to watch the same bus — a phone on the same network can hit the URL
-too, token and all. `--detach` is the option that makes this practical: start
-it once, close the terminal, and the URL keeps working until you
-`--stop` it.
+continuously without owning a terminal tab, or when you want to glance at it
+from a browser window on a second monitor. `--detach` is the option that
+makes this practical: start it once, close the terminal, and the URL keeps
+working until you `--stop` it.
 
 Running both at once is fine. They read the same bus and neither one holds a
 lock on it.

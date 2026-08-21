@@ -51,15 +51,13 @@ run further commands to keep it going.
 
 ## One repository, many worktrees
 
-`parley init --global` is what makes this work: the hooks live outside the
-working tree, so every worktree of the repository picks them up without a
-second `init`. If you only ever run `parley init` (without `--global`) in
-your main checkout, a session opened in a worktree will look installed —
-`.claude/skills/parley` exists there too, since skills are usually tracked —
-but the hooks that actually join the bus and settle territory will be
-missing, because `.claude/settings.json` is untracked and worktree-local.
-Running the global command once resolves this for every worktree you create
-afterward, including ones that do not exist yet.
+If you only ever run `parley init` (without `--global`) in your main
+checkout, a session opened in a different worktree of the same repository
+will look installed but never actually join the bus. That case has its own
+flag (`parley init --global`) and its own explanation in the README — see
+[Set it up in a repository](https://github.com/marcus-campos/parley#set-it-up-in-a-repository).
+Run it once and it covers every worktree you create afterward, including
+ones that do not exist yet.
 
 ## Multiple repositories under one VS Code workspace
 
@@ -80,7 +78,8 @@ for the repository you are standing in:
 - which transport it will use (unix socket, named pipe, or loopback — this
   matters most in WSL)
 - whether the skill in this project matches the binary you have installed
-- the mode and shape currently in effect
+- where state lives on this machine, and whether a daemon is currently
+  running for this repository (with its process id, if so)
 
 Run it any time something feels off before reaching for anything more
 invasive. It is read-only and safe to run as often as you like.
