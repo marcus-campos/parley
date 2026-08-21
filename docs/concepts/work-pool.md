@@ -7,10 +7,11 @@ relates to `mode`); everything below only runs once that is set.
 
 ## Walking one item through it
 
-A front is chasing something unrelated and notices the same defect in
-thirteen files — sixty-four instances of it, but thirteen places to fix.
-It publishes one item per file, not per instance, because the path is
-already the unit parley uses for territory (`src/state/work.ts:40-44`):
+Hypothetically, a front is chasing something unrelated and notices the
+same defect in thirteen files — sixty-four instances of it, but thirteen
+places to fix. It publishes one item per file, not per instance, because
+the path is already the unit parley uses for territory
+(`src/state/work.ts:40-44`):
 
 ```
 parley work "remove the deprecated retry wrapper" src/a.ts src/b.ts ... (13 paths)

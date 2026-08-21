@@ -1,5 +1,7 @@
 # parley
 
+**Documentation:** <https://marcus-campos.github.io/parley/>
+
 <!-- #region what-it-is -->
 **A coordination bus for concurrent agent sessions working in one repository.**
 

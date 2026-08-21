@@ -40,6 +40,10 @@ jobs:
       - name: Test
         run: bun test
 
+      - name: Build the docs site
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run docs:build
+
       - name: Smoke test the built binary
         shell: bash
         run: |
