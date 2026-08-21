@@ -73,9 +73,10 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley decide --title "..." [--body "..."] [--paths a,b]
   parley reverse <id> [--reason "..."]
   parley notes [--tag x] [--path p] [--kind decision] [--export] [--import]
+                             [--query "..." [--k N]]
 
   parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
-  parley results [--fresh] [--key "..."]
+  parley results [--fresh] [--key "..."] [--query "..." [--k N]]
 
   parley mode [off|advisory|enforced]
   parley shape [bus|pool|plan]
@@ -816,10 +817,13 @@ async function main(): Promise<void> {
       }
 
       case "results": {
+        const query = flagString(p.flags, "query") || undefined;
         const r = await send({
           op: "results",
           key: flagString(p.flags, "key") || undefined,
           fresh: p.flags.fresh === true,
+          q: query,
+          k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as {
@@ -858,12 +862,15 @@ async function main(): Promise<void> {
             { ok: true, imported, found: fromDisk.length },
           );
         }
+        const query = flagString(p.flags, "query") || undefined;
         const r = await send({
           op: "notes",
           tag: flagString(p.flags, "tag") || undefined,
           path: flagString(p.flags, "path") || undefined,
           kind: flagString(p.flags, "kind") || undefined,
           active: p.flags.active === true,
+          q: query,
+          k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;

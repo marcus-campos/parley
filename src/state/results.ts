@@ -60,5 +60,15 @@ export function listResults(state: State, frame: Record<string, unknown>): Outco
     .map((r) => ({ ...r, staleBecause: staleReason(state, r) }))
     .filter((r) => frame.fresh !== true || r.staleBecause === null);
 
+  // Same treatment as listNotes: the daemon resolves `q` into ranked `ids`
+  // before `apply`, so this stays pure and never searches on its own.
+  if (Array.isArray(frame.ids)) {
+    const byKey = new Map(results.map((r) => [r.key, r]));
+    const ranked = (frame.ids as unknown[])
+      .map((id) => (typeof id === "string" ? byKey.get(id) : undefined))
+      .filter((r): r is CommandResult => r !== undefined);
+    return { state, response: ok({ results: ranked, ranked: true }), broadcast: [] };
+  }
+
   return { state, response: ok({ results }), broadcast: [] };
 }

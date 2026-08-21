@@ -7,6 +7,7 @@ import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
 import type { ConvEvent, State } from "../state/types";
+import { indexFromState, type LexicalIndex } from "../brain/lexical";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
@@ -76,12 +77,23 @@ export class ParleyDaemon {
   private lastActivityMs: number;
   private readonly token: string | null;
   private readonly now: () => number;
+  /**
+   * Held here, not in `state`: an index is derived and a search is not a pure
+   * function of `(state, frame, ctx)`. The daemon is long-lived and resolves
+   * `q` into ids before `apply` ever sees the frame, so `src/state/` only
+   * ever sees data.
+   */
+  private readonly index: LexicalIndex;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
     this.journal = new Journal(opts.journalPath);
     this.token = opts.address.kind === "tcp" ? randomBytes(24).toString("hex") : null;
     this.state = this.restore(opts.mode ?? "advisory");
+    // Not persisted on purpose: a restart already rebuilds `state` from the
+    // journal, and the index is a read-side structure with nothing of its own
+    // to lose — rebuilding it here is the same story as restoring state.
+    this.index = indexFromState(this.state);
     this.lastActivityMs = this.now();
   }
 
@@ -232,7 +244,23 @@ export class ParleyDaemon {
       process.stderr.write(`parley: journal append failed: ${(e as Error).message}\n`);
     }
 
-    const outcome = apply(this.state, conn.participantId, frame, ctx);
+    // The journal keeps exactly the frame that came over the wire; ranking
+    // only touches the copy handed to `apply`, so a replay never has to agree
+    // with what the index looked like at write time.
+    let toApply = frame;
+    if ((frame.op === "notes" || frame.op === "results") && typeof frame.q === "string" && frame.q.trim()) {
+      try {
+        const k = typeof frame.k === "number" ? Math.max(1, Math.min(20, frame.k)) : 5;
+        const hits = this.index.search(frame.q, k);
+        toApply = { ...frame, ids: hits.map((h) => h.id), ranked: true };
+      } catch (e) {
+        // A broken index must never take the query down with it — the honest
+        // degrade is the same unranked list a plain notes/results call gets.
+        process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
+      }
+    }
+
+    const outcome = apply(this.state, conn.participantId, toApply, ctx);
 
     if (frame.op === "join" && outcome.response.ok) {
       conn.participantId = (outcome.response as unknown as { id: string }).id;
@@ -249,6 +277,48 @@ export class ParleyDaemon {
     // anyone having to remember an export step. Committing it stays a decision
     // a person or an agent makes on purpose — parley never commits.
     if (frame.op === "note" && outcome.response.ok) this.exportNotes();
+
+    // Only these three ops can change what search should see; rebuilding the
+    // whole index on every write would make every write's cost grow with the
+    // corpus, on a daemon meant to run a whole working day. A rejected frame
+    // never reaches here, so the index can never diverge from what was
+    // actually accepted.
+    if (outcome.response.ok) this.maintainIndex(String(frame.op), outcome.response as Record<string, unknown>);
+  }
+
+  /**
+   * `note` adds one document; `reverse` removes one — a reversed note no
+   * longer binds and `indexFromState` skips it on a fresh rebuild, so a live
+   * daemon has to enforce the same rule itself instead of waiting for a
+   * restart; `result` adds or replaces one keyed by its `key`. Nothing else
+   * touches the corpus.
+   */
+  private maintainIndex(op: string, response: Record<string, unknown>): void {
+    try {
+      if (op === "note") {
+        const id = typeof response.id === "string" ? response.id : null;
+        const entry = id ? this.state.notes.find((n) => n.id === id) : undefined;
+        if (entry) {
+          this.index.add(
+            entry.id, entry.kind,
+            [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" "),
+          );
+        }
+      } else if (op === "reverse") {
+        const id = typeof response.id === "string" ? response.id : null;
+        if (id) this.index.remove(id);
+      } else if (op === "result") {
+        const key = typeof response.key === "string" ? response.key : null;
+        const entry = key ? this.state.results[key] : undefined;
+        if (entry) {
+          this.index.add(entry.key, "result", [entry.key, entry.summary, entry.paths.join(" ")].join(" "));
+        }
+      }
+    } catch (e) {
+      // The write already succeeded and is already journaled; a failure here
+      // must never surface as if the command itself had failed.
+      process.stderr.write(`parley: index update failed: ${(e as Error).message}\n`);
+    }
   }
 
   private onTick(): void {

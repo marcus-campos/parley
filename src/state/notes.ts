@@ -68,6 +68,20 @@ export function listNotes(state: State, frame: Record<string, unknown>): Outcome
     notes = notes.filter((n) => n.kind === frame.kind);
   }
   if (frame.active === true) notes = notes.filter((n) => n.reversedBy === null);
+
+  // The daemon resolves `q` into ranked `ids` before calling `apply` — this
+  // module has no clock and no I/O, so it cannot search on its own. A direct
+  // `apply` carrying a bare `q` (Task 5's tests call it that way, with no
+  // daemon in front) has nothing to rank by, so `q` itself is never read here;
+  // the honest degrade is the unranked list, not an attempt to search.
+  if (Array.isArray(frame.ids)) {
+    const byId = new Map(notes.map((n) => [n.id, n]));
+    const ranked = (frame.ids as unknown[])
+      .map((id) => (typeof id === "string" ? byId.get(id) : undefined))
+      .filter((n): n is Note => n !== undefined);
+    return { state, response: ok({ notes: ranked, ranked: true }), broadcast: [] };
+  }
+
   return { state, response: ok({ notes }), broadcast: [] };
 }
 
