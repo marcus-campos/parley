@@ -180,7 +180,12 @@ function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): ConvEvent[] {
         id: ctx.nextId("w"),
         paths: [path],
         title,
-        evidenceIds: plan.spec ? [plan.spec] : [],
+        // NOT `plan.spec`: `evidenceIds` is documented (see WorkItem) as ids
+        // of a Note or a CommandResult, and `evidenceFor` resolves strictly
+        // against those two — a spec path is neither, and would sit here as
+        // a reference that can never resolve. The honest state for "no
+        // resolvable evidence yet" is an empty array, not a made-up id.
+        evidenceIds: [],
         publishedById: "",
         publishedByName: "the plan",
         kind: "work",

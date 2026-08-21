@@ -110,6 +110,39 @@ describe("dispatching a plan", () => {
     expect(live.map((w) => w.title)).toEqual(["Task 2"]);
   });
 
+  // Pins "every item in the wave, not just one" as the advancement rule.
+  // Task 1 and Task 2 share a wave because they do not collide with each
+  // other; Task 3 collides with Task 1 on a.ts, so it is pushed to the wave
+  // after. A regression that advanced on "some item done" instead of "every
+  // item done" would dispatch Task 3 the moment Task 1 alone finished —
+  // every existing test's multi-item waves happen to collide down to one
+  // item per wave, so none of them would have caught that.
+  test("a wave with two non-colliding tasks does not advance until BOTH are done, not just one", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [task(1, ["a.ts"]), task(2, ["b.ts"]), task(3, ["a.ts"])],
+    }, at(100));
+
+    const item1 = state.work.find((w) => w.title === "Task 1")!;
+    const item2 = state.work.find((w) => w.title === "Task 2")!;
+
+    apply(state, worker, { v: 1, op: "take", id: item1.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item1.id }, at(300));
+
+    // Half the wave is done. The wave must NOT have advanced, and Task 3's
+    // item must not exist yet.
+    expect(state.plan!.waveIndex).toBe(0);
+    expect(state.work.find((w) => w.title === "Task 3")).toBeUndefined();
+
+    apply(state, worker, { v: 1, op: "take", id: item2.id }, at(400));
+    apply(state, worker, { v: 1, op: "done", id: item2.id }, at(500));
+
+    // Now the whole wave is done, and only now does Task 3 open.
+    expect(state.plan!.waveIndex).toBe(1);
+    const task3 = state.work.find((w) => w.title === "Task 3");
+    expect(task3?.state).toBe("open");
+  });
+
   test("planning is refused outside shape plan", () => {
     apply(state, null, { v: 1, op: "shape", shape: "pool" }, at(90));
     const out = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
