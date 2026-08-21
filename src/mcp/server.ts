@@ -29,7 +29,7 @@ interface Tool {
   /** The parley frame to send. */
   frame: (args: Record<string, unknown>) => Record<string, unknown>;
   /** How to render the answer for a reader that is a language model. */
-  render: (response: Record<string, unknown>) => string;
+  render: (response: Record<string, unknown>, args: Record<string, unknown>) => string;
 }
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -108,20 +108,21 @@ const TOOLS: Tool[] = [
       required: ["paths"],
     },
     frame: (a) => ({ op: "claim", paths: list(a.paths), intent: str(a.intent) }),
-    render: (r) => {
+    render: (r, a) => {
       const d = r as unknown as {
         claimed?: string[];
         notes?: { title: string; body: string; kind: string; authorName: string }[];
+        more_notes?: number;
         recent?: { byName: string; intent: string; at: string }[];
       };
       const parts: string[] = [];
       parts.push(d.claimed?.length ? `Claimed: ${d.claimed.join(", ")}` : "Already yours.");
       if (d.notes?.length) {
-        parts.push(
-          `What other fronts wrote down about these paths:\n${d.notes
-            .map((n) => `- [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.body ? `\n  ${n.body}` : ""} (${n.authorName})`)
-            .join("\n")}`,
+        const lines = d.notes.map(
+          (n) => `- [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.body ? `\n  ${n.body}` : ""} (${n.authorName})`,
         );
+        if (d.more_notes) lines.push(`- ${d.more_notes} more — parley notes --path ${list(a.paths)[0] ?? ""}`);
+        parts.push(`What other fronts wrote down about these paths:\n${lines.join("\n")}`);
       }
       if (d.recent?.length) {
         parts.push(
@@ -491,7 +492,7 @@ export async function runMcpServer(): Promise<void> {
         });
       }
 
-      const text = tool.render(response as unknown as Record<string, unknown>);
+      const text = tool.render(response as unknown as Record<string, unknown>, args);
       const tail = name === "parley_drain" ? "" : await footer(connection);
       return reply(id, { content: [{ type: "text", text: text + tail }] });
     }

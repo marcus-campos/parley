@@ -25,6 +25,9 @@ function recordTouch(state: State, path: string, ownerId: string, intent: string
   }
 }
 
+/** A live session accumulates forty-plus notes; riding all of them on every claim is a tax on every edit. */
+const NOTES_CAP = 5;
+
 /**
  * What someone else did to this path recently, and what is known about it.
  *
@@ -32,13 +35,20 @@ function recordTouch(state: State, path: string, ownerId: string, intent: string
  * before an edit — so the agent learns who rewrote the file four minutes ago,
  * and whatever a previous front wrote down about it, without a second round
  * trip and without having to think to ask.
+ *
+ * Notes are capped because `claim` runs on every tool call — the corpus must
+ * not. A decision is exempt from the cap: it binds until reversed, and an
+ * agent that never sees it will relitigate exactly what it was recorded to
+ * settle, so it rides in full while plain notes are trimmed to the newest few
+ * and the rest are left to `parley notes --path` on request.
  */
 function contextFor(state: State, paths: string[], meId: string, ctx: Ctx): {
   recent: Touch[];
   notes: Note[];
+  moreNotes: number;
 } {
   const recent: Touch[] = [];
-  const notes: Note[] = [];
+  const gathered: Note[] = [];
   const seen = new Set<string>();
   for (const path of paths) {
     const touch = state.touches[path];
@@ -46,10 +56,20 @@ function contextFor(state: State, paths: string[], meId: string, ctx: Ctx): {
     for (const note of notesForPath(state, path)) {
       if (seen.has(note.id)) continue;
       seen.add(note.id);
-      notes.push(note);
+      gathered.push(note);
     }
   }
-  return { recent, notes };
+
+  const decisions = gathered.filter((n) => n.kind === "decision");
+  const rest = gathered
+    .filter((n) => n.kind !== "decision")
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+
+  return {
+    recent,
+    notes: [...decisions, ...rest.slice(0, NOTES_CAP)],
+    moreNotes: Math.max(0, rest.length - NOTES_CAP),
+  };
 }
 
 export interface ConflictReport {
@@ -169,7 +189,7 @@ export function claim(state: State, actorId: string | null, frame: Record<string
 
   return {
     state,
-    response: ok({ claimed, auto, recent: context.recent, notes: context.notes }),
+    response: ok({ claimed, auto, recent: context.recent, notes: context.notes, more_notes: context.moreNotes }),
     broadcast,
   };
 }
