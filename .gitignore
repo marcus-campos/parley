@@ -7,3 +7,4 @@ bun.lockb
 
 # .parley/notes.md is versioned on purpose; only local runtime state is ignored
 .parley/state/
+.parley/worktrees/
