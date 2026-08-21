@@ -296,7 +296,10 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
       const target = idle[0]!;
       for (const w of stale) w.nudgedAtMs = ctx.nowMs;
       broadcast.push(pushEvent(state, ctx, {
-        kind: "system", from: null, to: null, priority: "high",
+        // Addressed to the front it is about, same as ask/grant/deny — every
+        // other front already gets the pool count from poolFooterFor on its
+        // own next call, so broadcasting this too would only be noise for them.
+        kind: "system", from: null, to: target.name, priority: "high",
         text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
       }));
     }

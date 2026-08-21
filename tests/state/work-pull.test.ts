@@ -162,4 +162,14 @@ describe("pulling from the pool", () => {
     apply(state, responsivo, { v: 1, op: "done", id }, at(300));
     expect(apply(state, core, { v: 1, op: "take", id }, at(400)).response.ok).toBe(false);
   });
+
+  test("a done item cannot be dropped back into the pool", () => {
+    const [id] = publish(state, core, ["a.ts"], 100);
+    apply(state, responsivo, { v: 1, op: "take", id }, at(200));
+    apply(state, responsivo, { v: 1, op: "done", id, summary: "3 labels" }, at(300));
+
+    const dropped = apply(state, responsivo, { v: 1, op: "drop", id }, at(400));
+    expect(dropped.response).toMatchObject({ ok: false, error: { code: "NOT_TAKEN" } });
+    expect(state.work[0]!.state).toBe("done");
+  });
 });

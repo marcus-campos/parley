@@ -71,7 +71,14 @@ export function conflictsFor(state: State, pattern: string, ownerId: string): Cl
   return state.claims.filter((c) => c.ownerId !== ownerId && patternsOverlap(c.pattern, pattern));
 }
 
-/** The claim covering a concrete path, if any. */
+/**
+ * The claim covering a concrete path, if any.
+ *
+ * Not the same function as `ownerForPath` in `work.ts`, on purpose: this one
+ * serves permissions and may lean on the no-overlapping-live-claims invariant
+ * `claim` enforces, while that one must stay correct even when a replayed
+ * journal has broken it. Different correctness contracts, so not collapsed.
+ */
 export function ownerOfPath(state: State, path: string): Claim | undefined {
   return state.claims.find((c) => matchesPath(c.pattern, path));
 }

@@ -1,5 +1,5 @@
 import { err, ok } from "../protocol/types";
-import { matchesPath, normalizeTerritoryPath } from "../repo/paths";
+import { matchesPath, readPathList } from "../repo/paths";
 import { actorOf, type CommandResult, type Ctx, type Outcome, type State } from "./types";
 
 /**
@@ -24,16 +24,6 @@ export function staleReason(state: State, result: CommandResult): string | null 
   return null;
 }
 
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const p of value) {
-    if (typeof p !== "string" || !p.trim()) continue;
-    try { out.push(normalizeTerritoryPath(p)); } catch { /* not a usable path */ }
-  }
-  return out;
-}
-
 export function recordResult(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
@@ -50,7 +40,7 @@ export function recordResult(state: State, actorId: string | null, frame: Record
     summary: typeof frame.summary === "string" ? frame.summary : "",
     // With no paths declared, anything touched anywhere invalidates it. That is
     // the safe default: better to re-run than to trust a stale green.
-    paths: readPaths(frame.paths).length ? readPaths(frame.paths) : ["**"],
+    paths: readPathList(frame.paths).length ? readPathList(frame.paths) : ["**"],
     byId: me.id,
     byName: me.name,
     at: ctx.now,

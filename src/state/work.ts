@@ -13,6 +13,11 @@ import {
  * it. Otherwise the front that discovered the work would have acquired
  * authority over the front that holds the file, which is the hierarchy this
  * whole system exists to do without.
+ *
+ * Not the same function as `ownerOfPath` in `territory.ts`, on purpose: that one
+ * serves permissions and may lean on the no-overlapping-live-claims invariant
+ * `claim` enforces, while this one must still answer correctly when a replayed
+ * journal has broken it. Different correctness contracts, so not collapsed.
  */
 export function ownerForPath(state: State, path: string, exceptId: string): string | null {
   const live = new Set(liveParticipants(state).map((p) => p.id));
@@ -192,6 +197,12 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
   // Dispatch is not an offer. A planned item stays where the plan put it.
   if (item.origin === "planned") {
     return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+  }
+  // done is terminal, same as takeWork and tick already treat it — a finisher
+  // still holds takenById, so without this an already-delivered item could be
+  // dropped and redone by someone else.
+  if (item.state === "done") {
+    return { state, response: err("NOT_TAKEN", "already done"), broadcast: [] };
   }
   if (item.offeredToId !== me.id && item.takenById !== me.id) {
     return { state, response: err("NOT_TAKEN", "not offered to you and not taken by you"), broadcast: [] };

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { DEFAULTS } from "../../src/protocol/types";
+import { pendingFor } from "../../src/state/conversation";
 import { apply, initialState, makeCtx, tick } from "../../src/state/machine";
 import { idleFronts } from "../../src/state/work";
 import type { Ctx, State } from "../../src/state/types";
@@ -79,6 +80,13 @@ describe("the doorbell", () => {
     const bell = rung.broadcast.filter((e) => e.text.includes("DEVELOP"));
     expect(bell).toHaveLength(1);
     expect(bell[0]!.priority).toBe("high");
+
+    // Addressed to the idle front, not broadcast to the bus: CORE is busy
+    // holding the claim and this bell is not about it, so it must never see
+    // the event at all — not just be told to ignore it.
+    expect(bell[0]!.to).toBe("DEVELOP");
+    expect(pendingFor(state, core).some((e) => e.text.includes("is idle"))).toBe(false);
+    expect(pendingFor(state, develop).some((e) => e.text.includes("is idle"))).toBe(true);
 
     const again = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 5000));
     expect(again.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(0);
