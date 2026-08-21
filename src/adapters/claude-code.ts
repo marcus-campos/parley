@@ -202,6 +202,40 @@ already carried.
 mission.** It returns to the pool for whoever it actually belongs to; refusing
 is not a failure to report.
 
+## A plan is dispatched, not handed out
+
+Wrote a plan with \`superpowers:writing-plans\`? Do not paste task numbers into
+other sessions:
+
+\`\`\`
+parley shape plan
+parley plan docs/superpowers/plans/2026-08-20-thing.md
+\`\`\`
+
+parley reads the \`**Files:**\` block of every task and **computes which tasks
+can run at the same time** from the paths they declare — do not fan them out by
+hand and do not guess. Two tasks that touch the same file never open together.
+The first wave is published open, other fronts take it, and the next wave opens
+by itself once the current one is entirely done.
+
+A planned item is **dispatched, not offered**: \`drop\` refuses it. It does not
+arrive named in your footer either — it is open to everybody, so go and look:
+
+\`\`\`
+parley works --state open
+parley take w_0004
+parley done w_0004 --summary "..."
+\`\`\`
+
+Finishing a planned item publishes a **review** of it, offered to another front
+— never to you. The wave is not over until those reviews are done too, so
+review here is a state on the bus, not something two fronts agreed to do.
+
+The plan never takes a path a person's front already holds under an explicit
+claim: that task is published anyway and announced as waiting. And a task whose
+\`**Files:**\` block did not parse still gets an item, titled with the failure —
+so a broken task never looks like a task that quietly never happened.
+
 ## Use parley, not a side channel
 
 Your harness may also offer a direct session-to-session message tool. **Prefer
@@ -366,7 +400,7 @@ a broken parley must never stop the work. It degrades to advisory and says so.
  */
 export const SKILL_STAMP = /<!-- parley skill v([0-9][^ ]*) -->/;
 
-const SKILL = `${SKILL_BODY}\n<!-- parley skill v${VERSION} -->\n`;
+export const SKILL = `${SKILL_BODY}\n<!-- parley skill v${VERSION} -->\n`;
 
 /** Which version wrote the skill on disk, if it says. */
 export function skillVersionAt(path: string): string | null {

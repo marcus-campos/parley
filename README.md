@@ -462,8 +462,8 @@ Claude Code. See the compatibility matrix below.
 a second axis, also held by the daemon and also repo-scoped: a front running
 `bus` in the middle of a `pool` would ignore every offer, and the pool would
 be theatre. `bus` is everything above, and the default — a repository that
-never sets a shape behaves exactly as it always has. (`plan` is a third,
-reserved value; nothing consumes it yet.)
+never sets a shape behaves exactly as it always has. `plan` is the third value,
+and it has its own section below.
 
 ```bash
 parley shape pool
@@ -503,6 +503,49 @@ same discipline as the doorbell for an unanswered question, never a loop.
 
 `--kind review --review-of <id>` marks an item as somebody else's work to
 check rather than new work to do.
+
+---
+
+## Shape plan
+
+The third shape, on the same axis. `mode` is untouched by it: territory is
+still `off`, `advisory` or `enforced`, and it still means exactly what it means
+above. The two compose, and `plan` + `enforced` is the strongest pairing — the
+wave says what may be worked on, and territory blocks every edit outside it.
+
+**superpowers itself is not modified in any way.** You write the plan exactly
+as you write one today, with `superpowers:brainstorming` and
+`superpowers:writing-plans`. What this fills is a branch superpowers' own
+decision tree already declares and does not implement: its
+`subagent-driven-development` asks *"Stay in this session?"* and routes
+`no - parallel session` to `executing-plans` — which today ends with a person
+opening another window by hand and pasting a plan path.
+
+```bash
+parley shape plan
+parley plan docs/superpowers/plans/2026-08-20-thing.md
+# parley: 6 task(s) in 3 wave(s) — 2 item(s) open now
+#   parley works --state open
+```
+
+Every task in a `writing-plans` plan is required to state its exact paths, in a
+`**Files:**` block. parley parses those and computes the collision graph before
+anything is dispatched: tasks whose paths are disjoint open together, tasks that
+touch the same file are pushed into later waves. Other orchestrators ask a human
+to eyeball *"are these tasks independent?"* — they have to, because none of them
+keeps a territory map. Here it is computed from what the plan already declares,
+and it is a deterministic unit test.
+
+| | |
+|---|---|
+| Dispatched, not offered | A planned item cannot be dropped. It is published **open**, owned by nobody, and any front takes it. |
+| A wave, not a queue | The next wave opens by itself, the moment every item of the current one is done. |
+| Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. |
+| A person's front outranks the plan | A path held under an explicit claim is never taken from its holder. That task is published anyway and announced as waiting — you re-sequence, or the holder releases. |
+| No task disappears | A task whose `**Files:**` block is missing or unparseable is published with the parse failure as its title. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
+
+The coordinator is a front, never the daemon. The daemon stores state and
+expires things — it has no idea what a plan is.
 
 ---
 
@@ -566,6 +609,7 @@ through the environment.
 | | |
 |---|---|
 | `parley shape [bus\|pool\|plan]` | The shape belongs to the repository, not to a session. Read it with no argument. |
+| `parley plan <path-to-plan.md>` | Read a `superpowers:writing-plans` plan, compute its waves from the paths each task declares, and publish the first one. `parley shape plan` first. |
 | `parley work "<title>" <path…> [--evidence <id,...>] [--kind review --review-of <id>]` | Publish discovered work, one item per path. Routed on publish: offered to whoever already holds the path, open for anyone otherwise. |
 | `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. **Offers also ride the footer of every hook and MCP response** — this is for looking, not for polling. |
 | `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
