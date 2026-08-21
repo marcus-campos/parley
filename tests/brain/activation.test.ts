@@ -91,3 +91,50 @@ describe("turning the brain on", () => {
     expect(state.brain.active).toBe(false);
   });
 });
+
+/**
+ * `setMode` and `setShape` already announce a changed bus-wide setting so
+ * every front learns it without polling — `brain enable`/`disable` shipped
+ * without that broadcast (Task 5) because nothing conditioned behaviour on
+ * `brain.active` yet. This task is what changes that, so the announcement
+ * is no longer optional.
+ */
+describe("turning the brain on or off is announced, the same way mode and shape are", () => {
+  test("enabling broadcasts once, at high priority, naming the model", () => {
+    const out = apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
+    expect(out.broadcast).toHaveLength(1);
+    expect(out.broadcast[0]!.priority).toBe("high");
+    expect(out.broadcast[0]!.text).toContain(MODELS[0]!.name);
+  });
+
+  test("disabling broadcasts once too", () => {
+    apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
+    const out = apply(state, human, { v: 1, op: "brain", disable: true }, at(400));
+    expect(out.broadcast).toHaveLength(1);
+    expect(out.broadcast[0]!.priority).toBe("high");
+  });
+
+  test("enabling the model that is already active changes nothing, so nothing is announced again", () => {
+    apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
+    const out = apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(400));
+    expect(out.broadcast).toHaveLength(0);
+  });
+
+  test("disabling while already off changes nothing, so nothing is announced", () => {
+    const out = apply(state, human, { v: 1, op: "brain", disable: true }, at(300));
+    expect(out.broadcast).toHaveLength(0);
+  });
+
+  test("a refused attempt — wrong actor, unknown model — announces nothing", () => {
+    const byAgent = apply(state, core, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
+    expect(byAgent.broadcast).toHaveLength(0);
+
+    const unknownModel = apply(state, human, { v: 1, op: "brain", enable: "not-a-model" }, at(300));
+    expect(unknownModel.broadcast).toHaveLength(0);
+  });
+
+  test("every other front hears it, exactly like a mode change", () => {
+    const out = apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
+    expect(out.broadcast[0]).toMatchObject({ kind: "system", from: null, to: null, priority: "high" });
+  });
+});

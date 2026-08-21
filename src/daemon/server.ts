@@ -8,6 +8,10 @@ import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
 import type { ConvEvent, State } from "../state/types";
 import { indexFromState, type LexicalIndex } from "../brain/lexical";
+import { embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
+import { loadVectors, saveVectors } from "../brain/vectors";
+import { findModel } from "../brain/registry";
+import { modelPath } from "../brain/download";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
@@ -29,6 +33,13 @@ export interface DaemonOptions {
   /** Injected in tests so a whole lifetime runs in milliseconds. */
   now?: () => number;
   onListening?: (endpoint: Endpoint) => void;
+  /**
+   * Where model files live. Defaults (via `modelPath`, `download.ts`) to the
+   * real machine-local models directory so every production caller is
+   * unchanged; tests inject a throwaway directory instead, the same
+   * discipline `download.ts` already keeps for `ensureModel`.
+   */
+  modelsDir?: string;
 }
 
 export class DaemonAlreadyRunning extends Error {
@@ -84,6 +95,13 @@ export class ParleyDaemon {
    * ever sees data.
    */
   private readonly index: LexicalIndex;
+  /**
+   * The optional layer above the lexical floor. `null` whenever the brain is
+   * off, or its model is missing, corrupt, or not in the registry — every
+   * one of those degrades silently to the floor rather than erroring, so
+   * this field being `null` is never itself a failure state.
+   */
+  private brain: { model: StaticModel; vectors: VectorIndex } | null = null;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
@@ -94,7 +112,71 @@ export class ParleyDaemon {
     // journal, and the index is a read-side structure with nothing of its own
     // to lose — rebuilding it here is the same story as restoring state.
     this.index = indexFromState(this.state);
+    this.loadBrain();
     this.lastActivityMs = this.now();
+  }
+
+  /**
+   * Reflects `state.brain` into a loaded model plus its vector index, or
+   * clears both. Called on boot (replaying whatever the journal already
+   * decided) and again every time a `brain` frame is accepted, so enabling
+   * takes effect immediately rather than after a restart.
+   *
+   * Vectors persist beside the journal (`vectors.ts`) so a restart does not
+   * re-embed the whole corpus; when nothing is on disk yet — first
+   * activation — every note and result already in `state` is embedded once,
+   * right here, so there is no window where old knowledge is invisible to
+   * semantic recall.
+   *
+   * Every failure mode — unknown registry name, missing file, corrupt JSON,
+   * a disk error while backfilling — degrades to `this.brain = null`, never
+   * a throw. A broken model must never stop the daemon, only turn off the
+   * extra signal it was offering.
+   */
+  private loadBrain(): void {
+    this.brain = null;
+    if (!this.state.brain.active || !this.state.brain.model) return;
+    try {
+      const model = findModel(this.state.brain.model);
+      if (!model) return;
+      const staticModel = loadStaticModel(modelPath(model, this.opts.modelsDir));
+      if (!staticModel) return;
+
+      const dir = dirname(this.opts.journalPath);
+      let vectors = loadVectors(dir, staticModel.dims);
+      if (!vectors) {
+        vectors = new VectorIndex(staticModel.dims);
+        for (const note of this.state.notes) {
+          if (note.reversedBy !== null) continue;
+          vectors.add(
+            note.id,
+            embed(staticModel, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" ")),
+            note.kind,
+          );
+        }
+        for (const result of Object.values(this.state.results)) {
+          vectors.add(
+            result.key,
+            embed(staticModel, [result.key, result.summary, result.paths.join(" ")].join(" ")),
+            "result",
+          );
+        }
+        saveVectors(dir, vectors);
+      }
+      this.brain = { model: staticModel, vectors };
+    } catch (e) {
+      process.stderr.write(`parley: brain load failed, falling back to the lexical floor: ${(e as Error).message}\n`);
+    }
+  }
+
+  /** Persists the vector index beside the journal; a failure here never surfaces as a write failure. */
+  private saveBrainVectors(): void {
+    if (!this.brain) return;
+    try {
+      saveVectors(dirname(this.opts.journalPath), this.brain.vectors);
+    } catch (e) {
+      process.stderr.write(`parley: could not persist vectors: ${(e as Error).message}\n`);
+    }
   }
 
   /**
@@ -261,8 +343,14 @@ export class ParleyDaemon {
         // already scores and sorts every candidate before slicing — the
         // kind filter below only changes where the slice happens.
         const wantsNote = frame.op === "notes";
-        const hits = this.index
-          .search(frame.q, this.index.size)
+        const lexicalHits = this.index.search(frame.q, this.index.size);
+        // Strictly additive: when the brain is off, missing, or corrupt,
+        // `vectorHits` is empty and `fuse` degrades to exactly the lexical
+        // ranking — the same floor this daemon has always answered from.
+        const vectorHits = this.brain
+          ? this.brain.vectors.search(embed(this.brain.model, frame.q), this.brain.vectors.size)
+          : [];
+        const hits = fuse(lexicalHits, vectorHits, this.index.size + vectorHits.length)
           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
       } catch (e) {
@@ -296,6 +384,13 @@ export class ParleyDaemon {
     // never reaches here, so the index can never diverge from what was
     // actually accepted.
     if (outcome.response.ok) this.maintainIndex(String(frame.op), outcome.response as Record<string, unknown>);
+
+    // A person just changed `state.brain` — enabled, disabled, or switched
+    // models. Reloading here, rather than waiting for a restart, is what
+    // makes that decision take effect immediately: enabling backfills every
+    // note already in state (see `loadBrain`), and disabling drops the
+    // vector index from memory right away.
+    if (frame.op === "brain" && outcome.response.ok) this.loadBrain();
   }
 
   /**
@@ -304,6 +399,11 @@ export class ParleyDaemon {
    * daemon has to enforce the same rule itself instead of waiting for a
    * restart; `result` adds or replaces one keyed by its `key`. Nothing else
    * touches the corpus.
+   *
+   * The vector twin rides along on the same three ops, whenever the brain is
+   * actually loaded — embedding is cheap (microseconds, no forward pass), and
+   * keeping it here rather than a second pass over `state` later is what
+   * lets a restart skip re-embedding entirely (`vectors.ts`).
    */
   private maintainIndex(op: string, response: Record<string, unknown>): void {
     try {
@@ -311,19 +411,32 @@ export class ParleyDaemon {
         const id = typeof response.id === "string" ? response.id : null;
         const entry = id ? this.state.notes.find((n) => n.id === id) : undefined;
         if (entry) {
-          this.index.add(
-            entry.id, entry.kind,
-            [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" "),
-          );
+          const text = [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" ");
+          this.index.add(entry.id, entry.kind, text);
+          if (this.brain) {
+            this.brain.vectors.add(entry.id, embed(this.brain.model, text), entry.kind);
+            this.saveBrainVectors();
+          }
         }
       } else if (op === "reverse") {
         const id = typeof response.id === "string" ? response.id : null;
-        if (id) this.index.remove(id);
+        if (id) {
+          this.index.remove(id);
+          if (this.brain) {
+            this.brain.vectors.remove(id);
+            this.saveBrainVectors();
+          }
+        }
       } else if (op === "result") {
         const key = typeof response.key === "string" ? response.key : null;
         const entry = key ? this.state.results[key] : undefined;
         if (entry) {
-          this.index.add(entry.key, "result", [entry.key, entry.summary, entry.paths.join(" ")].join(" "));
+          const text = [entry.key, entry.summary, entry.paths.join(" ")].join(" ");
+          this.index.add(entry.key, "result", text);
+          if (this.brain) {
+            this.brain.vectors.add(entry.key, embed(this.brain.model, text), "result");
+            this.saveBrainVectors();
+          }
         }
       }
     } catch (e) {

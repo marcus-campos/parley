@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDecoder, encodeFrame } from "../../src/protocol/codec";
 import type { Response } from "../../src/protocol/types";
-import { ParleyDaemon } from "../../src/daemon/server";
+import { ParleyDaemon, type DaemonOptions } from "../../src/daemon/server";
 
 export const dirs: string[] = [];
 export const daemons: ParleyDaemon[] = [];
@@ -15,12 +15,17 @@ export function tempRepo() {
   return dir;
 }
 
-export async function startDaemon(gitCommonDir: string, journalPath: string) {
+export async function startDaemon(
+  gitCommonDir: string,
+  journalPath: string,
+  opts: Partial<DaemonOptions> = {},
+) {
   const daemon = new ParleyDaemon({
     gitCommonDir,
     address: { kind: "unix", address: join(gitCommonDir, "p.sock") },
     journalPath,
     tickIntervalMs: 50,
+    ...opts,
   });
   daemons.push(daemon);
   const endpoint = await daemon.listen();

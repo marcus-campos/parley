@@ -100,7 +100,7 @@ export function apply(
     case "take": return takeWork(state, actorId, frame, ctx);
     case "drop": return dropWork(state, actorId, frame, ctx);
     case "done": return finishWork(state, actorId, frame, ctx);
-    case "brain": return brain(state, actorId, frame);
+    case "brain": return brain(state, actorId, frame, ctx);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
@@ -162,7 +162,7 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
  * backwards for spending someone's disk. The check has to live here, gated
  * on the opposite kind.
  */
-function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
+function brain(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const acting = frame.enable !== undefined || frame.disable !== undefined;
   if (!acting) {
     // `may_enable` lets a caller (the CLI) find out whether it is even worth
@@ -192,13 +192,15 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
     };
   }
 
+  const before = { active: state.brain.active, model: state.brain.model };
+
   if (frame.disable === true) {
     state.brain.active = false;
     state.brain.model = null;
     // A fresh "off" period earns its own one-time panel nudge, same as the
     // period that started at first boot.
     state.brain.askedAtMs = null;
-    return { state, response: ok({ active: false, model: null }), broadcast: [] };
+    return { state, response: ok({ active: false, model: null }), broadcast: brainChangeBroadcast(state, ctx, before) };
   }
 
   const name = String(frame.enable ?? "");
@@ -209,7 +211,25 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
   state.brain.active = true;
   state.brain.model = model.name;
   state.brain.askedAtMs = null;
-  return { state, response: ok({ active: true, model: model.name }), broadcast: [] };
+  return { state, response: ok({ active: true, model: model.name }), broadcast: brainChangeBroadcast(state, ctx, before) };
+}
+
+/**
+ * `setMode` and `setShape` announce a changed bus-wide setting once, and
+ * only when it actually changed — this is the same shape, deferred at Task 5
+ * because nothing conditioned behaviour on `brain.active` yet. This task is
+ * what changes that, so other fronts need to learn the brain came on (or
+ * off) without polling `brain` for it.
+ */
+function brainChangeBroadcast(
+  state: State, ctx: Ctx, before: { active: boolean; model: string | null },
+): ConvEvent[] {
+  const after = state.brain;
+  if (before.active === after.active && before.model === after.model) return [];
+  const text = after.active
+    ? `brain enabled: ${after.model} (semantic recall now backs every front on this bus)`
+    : `brain disabled (was ${before.model}) — back to the lexical floor for every front on this bus`;
+  return [pushEvent(state, ctx, { kind: "system", from: null, to: null, priority: "high", text })];
 }
 
 function status(state: State, ctx: Ctx): Outcome {
