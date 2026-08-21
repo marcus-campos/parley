@@ -877,6 +877,7 @@ it — *"FINANCEIRO dropped holding 3 claim(s)"* — and they are released after
 
 ## Compatibility matrix
 
+<!-- #region compatibility -->
 No makeup. Only Claude Code has a pre-tool gate, so it is the only harness where
 everything works without the agent remembering anything.
 
@@ -900,6 +901,7 @@ honest and different: the agent joins on its first tool call, territory is
 manual, and **every MCP tool response carries the pending inbox in its footer**
 — which turns "never reads its messages" into "reads them whenever it touches
 parley at all".
+<!-- #endregion compatibility -->
 
 ---
 

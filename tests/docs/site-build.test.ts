@@ -50,4 +50,61 @@ describe("the documentation site", () => {
     expect(gitignore).toContain(".vitepress/dist");
     expect(gitignore).toContain(".vitepress/cache");
   });
+
+  // The nav and sidebar in config.ts are declared config, not proof: VitePress
+  // does not fail its build when they point at a page that does not exist
+  // (only broken links *inside rendered markdown* fail the build under
+  // ignoreDeadLinks: false). Without this test, a sidebar entry can 404 on
+  // the published site indefinitely with every other check staying green.
+  //
+  // Four concept links document features from Task 4 of the docs-site plan
+  // (shapes, the work pool, capacity, recall — docs/superpowers/plans/
+  // 2026-08-20-docs-site.md) and are written once those features' own plans
+  // land, which Task 3 does not do. They are named here explicitly, not
+  // silently skipped, so this stays a real regression test for every link
+  // Task 3 (and earlier tasks) are actually responsible for, instead of
+  // either failing on work this task does not own or skipping the check
+  // wholesale.
+  const PENDING_TASK_4 = new Set([
+    "/concepts/shapes",
+    "/concepts/work-pool",
+    "/concepts/capacity",
+    "/concepts/recall",
+  ]);
+
+  test("every sidebar link resolves to a file", () => {
+    const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
+    const links = [...config.matchAll(/link:\s*"(\/[^"]+)"/g)].map((m) => m[1]!);
+    // The regex above cannot fail to match anything (it would just find zero
+    // links), so assert there is a non-trivial number of them first — a test
+    // that "passes" over an empty list proves nothing.
+    expect(links.length).toBeGreaterThanOrEqual(9);
+    for (const link of links) {
+      if (link.startsWith("http") || PENDING_TASK_4.has(link)) continue;
+      const candidates = [
+        join(root, "docs", `${link}.md`),
+        join(root, "docs", link, "index.md"),
+        join(root, "docs", `${link.replace(/^\//, "")}.md`),
+      ];
+      expect(candidates.some((c) => existsSync(c))).toBe(true);
+    }
+  });
+
+  // The exclusion above must not become a place where a genuinely broken
+  // link hides forever: once Task 4 lands, every one of these must actually
+  // resolve, so pin the count instead of letting the set silently grow.
+  test("exactly the four Task 4 concept pages are still pending", () => {
+    const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
+    const links = [...config.matchAll(/link:\s*"(\/[^"]+)"/g)].map((m) => m[1]!);
+    const missing = links.filter((link) => {
+      if (link.startsWith("http")) return false;
+      const candidates = [
+        join(root, "docs", `${link}.md`),
+        join(root, "docs", link, "index.md"),
+        join(root, "docs", `${link.replace(/^\//, "")}.md`),
+      ];
+      return !candidates.some((c) => existsSync(c));
+    });
+    expect(new Set(missing)).toEqual(PENDING_TASK_4);
+  });
 });
