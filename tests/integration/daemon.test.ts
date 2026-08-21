@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEFAULTS } from "../../src/protocol/types";
 import { readEndpoint } from "../../src/daemon/endpoint";
 import { ParleyDaemon } from "../../src/daemon/server";
 import { RawClient, dirs, daemons, startDaemon, tempRepo } from "./harness";
@@ -157,5 +158,56 @@ describe("only one daemon may serve a repository", () => {
     const client = await RawClient.connect(address);
     expect(await client.send({ op: "status" })).toMatchObject({ ok: true });
     client.close();
+  });
+
+  test("editing spawn.json raises the daemon's birth ceiling without a restart", async () => {
+    const dir = tempRepo();
+    // maxFronts: 1 from boot — the one participant that is about to join
+    // already fills that ceiling, so a stale, nobody-idle pool must stay
+    // silent no matter how many ticks run.
+    mkdirSync(join(dir, "parley"), { recursive: true });
+    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 1 }));
+
+    // The clock is injected so the pool can age past ORPHAN_POOL_MS (10
+    // minutes) without the test actually waiting ten minutes — only the real
+    // setInterval that drives ticks, and the watcher's fs event, need real time.
+    let simulatedMs = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const daemon = new ParleyDaemon({
+      gitCommonDir: dir,
+      address: { kind: "unix", address: join(dir, "p.sock") },
+      journalPath: join(dir, "journal.ndjson"),
+      tickIntervalMs: 20,
+      now: () => simulatedMs,
+    });
+    daemons.push(daemon);
+    const endpoint = await daemon.listen();
+
+    const a = await RawClient.connect(endpoint.address);
+    await a.send({ op: "join", name: "CORE", cwd: "/wt/a" });
+    await a.send({ op: "shape", shape: "pool" });
+    // CORE holds a claim so it counts as busy, not idle — otherwise tick's
+    // rule 6 recycles CORE itself instead of ever considering a birth, and
+    // this test would not be exercising the ceiling at all.
+    await a.send({ op: "claim", paths: ["src/**"] });
+    await a.send({ op: "work", title: "32 triviais", paths: ["a.ts"] });
+
+    simulatedMs += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await new Promise((r) => setTimeout(r, 150)); // several real tick intervals
+    expect(JSON.stringify(a.pushes)).not.toContain("providing a front");
+
+    // Raise the ceiling on disk while the daemon is already running and
+    // already past the cooldown-free first attempt — this is the one write
+    // the watcher, not the boot-time read, is responsible for picking up.
+    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 6 }));
+
+    const deadline = Date.now() + 3_000;
+    let sawBirth = false;
+    while (Date.now() < deadline && !sawBirth) {
+      await new Promise((r) => setTimeout(r, 30));
+      sawBirth = JSON.stringify(a.pushes).includes("providing a front");
+    }
+    expect(sawBirth).toBe(true);
+
+    a.close();
   });
 });

@@ -127,8 +127,11 @@ export function bearFront(opts: {
       } catch {
         // A terminal that will not open must not stop the front being born.
         // Degrade to the same headless spawn `panel` mode already uses below
-        // — the same discipline as `enforced` degrading to `advisory` — and
-        // say so (the daemon announces it; see src/daemon/server.ts).
+        // — the same discipline as `enforced` degrading to `advisory`. This
+        // function only degrades; it does not announce anything itself — the
+        // returned `mode: "panel"` differing from the requested `config.mode`
+        // is the signal `src/daemon/server.ts`'s `bearFrontFor` compares
+        // against to push the "degraded to panel" system event.
       }
     }
 

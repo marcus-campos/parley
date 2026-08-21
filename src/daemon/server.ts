@@ -174,10 +174,13 @@ export class ParleyDaemon {
   }
 
   /**
-   * A person changes their mind about `mode` or `maxFronts` without a daemon
-   * restart — the same reason `panel.json` is watched. Losing this watcher is
-   * a convenience lost, never a reason to stop: the config already read at
-   * boot keeps working exactly as it was.
+   * A daemon is meant to run all day; a person editing `spawn.json` to change
+   * `mode` or `maxFronts` should not have to know a restart is required for it
+   * to take effect. `readSpawnConfig` already degrades a missing or unreadable
+   * file to `SPAWN_DEFAULTS`, so a delete/replace/split write mid-edit costs
+   * at most one cycle before it self-corrects. Losing the watcher itself is a
+   * convenience lost, never a reason to stop: the config already read at boot
+   * keeps working exactly as it was.
    */
   private watchSpawnConfig(): void {
     try {
@@ -305,23 +308,39 @@ export class ParleyDaemon {
     const root = this.repoRootForExport();
     if (!root) return;
 
+    const wanted = this.spawnConfig.mode;
     const born = bearFront({
       repoRoot: root,
       config: this.spawnConfig,
       intent: birth,
       index: this.nextFrontIndex++,
     });
-    if (born) return;
 
-    // A birth that fails leaves the pool exactly as open as it was; the
-    // cooldown in `tick` passes and the next tick asks again. Announcing it
-    // is the only thing that would otherwise be lost — the retry needs no
-    // help from us.
-    const event = pushEvent(this.state, ctx, {
-      kind: "system", from: null, to: null, priority: "high",
-      text: "a front could not be started — the pool is still open",
-    });
-    this.push([event], null);
+    if (!born) {
+      // A birth that fails leaves the pool exactly as open as it was; the
+      // cooldown in `tick` passes and the next tick asks again. Announcing it
+      // is the only thing that would otherwise be lost — the retry needs no
+      // help from us.
+      const event = pushEvent(this.state, ctx, {
+        kind: "system", from: null, to: null, priority: "high",
+        text: "a front could not be started — the pool is still open",
+      });
+      this.push([event], null);
+      return;
+    }
+
+    if (born.mode !== wanted) {
+      // Same discipline as `enforced` degrading to `advisory` (`setMode`) or a
+      // shape change (`setShape`): a silent degrade is a config that quietly
+      // stops doing what somebody asked for. Without this, `terminal` in
+      // `spawn.json` would spawn into `panel` forever and nobody would learn
+      // why.
+      const event = pushEvent(this.state, ctx, {
+        kind: "system", from: null, to: null, priority: "high",
+        text: `${born.name} could not open a terminal — degraded to panel mode`,
+      });
+      this.push([event], null);
+    }
   }
 
   /** Unsolicited frames on the same connection: inbox and territory events. */
