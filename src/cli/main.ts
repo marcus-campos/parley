@@ -10,6 +10,7 @@ import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { ensureModel } from "../brain/download";
+import { isLoadable } from "../brain/embed";
 import { findModel, MODELS } from "../brain/registry";
 import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
@@ -944,19 +945,46 @@ async function main(): Promise<void> {
 
           const name = p.positional[1];
           if (!name) {
-            const rows = MODELS.map(
-              (m) => `  ${m.name}\n        ${m.languages} — ~${Math.round(m.bytes / (1024 * 1024))} MB`,
-            );
+            // A menu offering a choice that cannot work is worse than a
+            // shorter menu — so every row says plainly whether this build
+            // can even load it, not just its size and languages.
+            const rows = MODELS.map((m) => {
+              const size = `~${Math.round(m.bytes / (1024 * 1024))} MB`;
+              const notice = isLoadable(m) ? "" : `  — not loadable in this build (needs the ${m.tokenizer} tokenizer)`;
+              return `  ${m.name}${notice}\n        ${m.languages} — ${size}`;
+            });
             return out(
               p,
               `parley: no model named. Available:\n${rows.join("\n")}\n\n` +
                 `Choose one: parley brain enable <name>`,
-              { ok: true, models: MODELS.map((m) => ({ name: m.name, languages: m.languages, bytes: m.bytes })) },
+              {
+                ok: true,
+                models: MODELS.map((m) => ({
+                  name: m.name, languages: m.languages, bytes: m.bytes, loadable: isLoadable(m),
+                })),
+              },
             );
           }
 
           const model = findModel(name);
           if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
+
+          // Refuse before a single byte moves — the same suspicion Task 6
+          // already applies to the download itself, aimed here at whether
+          // this build could ever load the result. The registry knows about
+          // `xlmr` models; this build's loader (`src/brain/embed.ts`) only
+          // understands `wordlevel`. Downloading first and finding that out
+          // after would spend somebody's disk and time on an outcome that
+          // was already certain.
+          if (!isLoadable(model)) {
+            fail(
+              p,
+              `${model.name} needs the ${model.tokenizer} tokenizer, which this build does not carry — only ` +
+                `wordlevel loads today. That is a limitation of this build, not a bad download or a broken ` +
+                `model; it stays listed because the model is real. Run "parley brain enable" to see which ` +
+                `entries are loadable.`,
+            );
+          }
 
           // The size is shown before anything is downloaded, unconditionally
           // — even under --json, since this goes to stderr and never

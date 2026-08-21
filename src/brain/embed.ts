@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Hit } from "./lexical";
+import type { BrainModel } from "./registry";
 import { tokenize } from "./tokenize";
 
 /**
@@ -9,6 +10,25 @@ import { tokenize } from "./tokenize";
  * lets top-k be asserted exactly in a test rather than approximated.
  */
 export interface StaticModel { dims: number; vocab: Record<string, number[]> }
+
+/**
+ * This build's loader understands only `wordlevel` — a token lookup plus
+ * the regex split in `tokenize.ts`. `xlmr` needs the XLM-RoBERTa
+ * SentencePiece tokenizer, which has no TypeScript path (only Python or
+ * WASM); adding either is out of scope here, on purpose. The registry keeps
+ * `xlmr` entries anyway — deleting them would hide that the intended model
+ * is known and simply not yet loadable, which a reader deserves to see.
+ *
+ * A caller that skips this and enables an unloadable entry anyway is not in
+ * danger: `loadStaticModel` still refuses whatever bytes land on disk
+ * (they won't parse as the `{dims, vocab}` shape) and the daemon degrades to
+ * the lexical floor, same as any other missing or corrupt model. This check
+ * exists so that refusal happens *before* a person spends disk and time on
+ * a download that was always going to end there.
+ */
+export function isLoadable(model: BrainModel): boolean {
+  return model.tokenizer === "wordlevel";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

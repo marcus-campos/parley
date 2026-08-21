@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { embed, fuse, VectorIndex } from "../../src/brain/embed";
+import { embed, fuse, isLoadable, VectorIndex } from "../../src/brain/embed";
 
 const model = JSON.parse(readFileSync(join(import.meta.dir, "fixtures", "tiny-model.json"), "utf8"));
 
@@ -42,3 +42,20 @@ describe("static embeddings", () => {
     expect(out.map((h) => h.id)).toEqual(["a"]);
   });
 });
+
+describe("which registry entries this build can actually load", () => {
+  test("a wordlevel entry is loadable", () => {
+    expect(isLoadable({
+      name: "tiny", dims: 2, languages: "test", bytes: 1,
+      url: "https://example.invalid/m.json", sha256: "0".repeat(64), tokenizer: "wordlevel",
+    })).toBe(true);
+  });
+
+  test("an xlmr entry is not — this build has no XLM-RoBERTa tokenizer", () => {
+    expect(isLoadable({
+      name: "big", dims: 256, languages: "many", bytes: 1,
+      url: "https://example.invalid/m.safetensors", sha256: "0".repeat(64), tokenizer: "xlmr",
+    })).toBe(false);
+  });
+});
+
