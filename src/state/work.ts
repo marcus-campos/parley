@@ -235,6 +235,15 @@ function advancePlanIfWaveDone(state: State, ctx: Ctx): ConvEvent[] {
   return openWave(state, nextTasks, ctx);
 }
 
+/** Which task an item belongs to, or null for work published outside a plan. */
+function taskNumberOf(state: State, itemId: string): number | null {
+  if (!state.plan) return null;
+  for (const [n, ids] of Object.entries(state.plan.itemsByTask)) {
+    if (ids.includes(itemId)) return Number(n);
+  }
+  return null;
+}
+
 export function listWork(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
   let work = state.work;
   const wanted = frame.state;
@@ -439,6 +448,54 @@ export function finishWork(state: State, actorId: string | null, frame: Record<s
     text: `${me.name} finished ${item.paths[0]}${summary ? ` — ${summary}` : ""}`,
     about: me.id,
   })];
+
+  // superpowers already requires a review after every task. Making it an item
+  // is what turns the reviewing front people run by agreement into a state the
+  // bus can see: who asked, who took it, and whether the verdict was applied.
+  // Only under shape plan, and only for planned work — shape pool already lets
+  // a front publish a review by hand, and that stays a choice, not a side effect.
+  if (state.shape === "plan" && item.origin === "planned" && item.kind === "work") {
+    // The front that did the work is never offered its own review — that
+    // would just be the old convention wearing a state field. Among what is
+    // left, the one that has gone longest without acting gets the offer, so
+    // the review does not just keep landing on whichever front happens to
+    // sit first in the participant list, or on whichever one is busiest
+    // right now. If nobody else is live, the review goes to the pool open
+    // rather than falling back to the author.
+    const others = liveParticipants(state).filter((p) => p.id !== me.id && p.kind === "agent");
+    const reviewer = others.length > 0
+      ? others.reduce((idlest, p) => (p.lastSeenMs < idlest.lastSeenMs ? p : idlest))
+      : undefined;
+    const review: WorkItem = {
+      id: ctx.nextId("w"),
+      paths: [...item.paths],
+      title: `review: ${item.title}`,
+      evidenceIds: [item.id, ...item.evidenceIds],
+      publishedById: me.id,
+      publishedByName: me.name,
+      kind: "review",
+      origin: "planned",
+      state: reviewer ? "offered" : "open",
+      offeredToId: reviewer?.id ?? null,
+      offeredAtMs: reviewer ? ctx.nowMs : null,
+      takenById: null,
+      orphanedAtMs: null,
+      nudgedAtMs: null,
+      reviewOf: item.id,
+      at: ctx.now,
+    };
+    state.work.push(review);
+    const taskN = taskNumberOf(state, item.id);
+    if (taskN !== null) (state.plan!.itemsByTask[taskN] ??= []).push(review.id);
+    broadcast.push(pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "normal",
+      text: reviewer
+        ? `review needed: ${item.paths[0]} — ${item.title}, offered to ${reviewer.name}`
+        : `review needed: ${item.paths[0]} — ${item.title}, open — nobody else is live`,
+      about: me.id,
+    }));
+  }
+
   broadcast.push(...advancePlanIfWaveDone(state, ctx));
 
   return {

@@ -105,6 +105,11 @@ describe("dispatching a plan", () => {
     apply(state, worker, { v: 1, op: "take", id: first.id }, at(200));
     apply(state, worker, { v: 1, op: "done", id: first.id }, at(300));
 
+    // Task 4 gates the wave on the review the done just spawned, too.
+    const review = state.work.find((w) => w.kind === "review" && w.reviewOf === first.id)!;
+    apply(state, coord, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, coord, { v: 1, op: "done", id: review.id }, at(500));
+
     expect(state.plan!.waveIndex).toBe(1);
     const live = state.work.filter((w) => w.state === "open" || w.state === "offered");
     expect(live.map((w) => w.title)).toEqual(["Task 2"]);
@@ -136,6 +141,18 @@ describe("dispatching a plan", () => {
 
     apply(state, worker, { v: 1, op: "take", id: item2.id }, at(400));
     apply(state, worker, { v: 1, op: "done", id: item2.id }, at(500));
+
+    // Both tasks are done, but Task 4 gates the wave on their reviews too —
+    // the wave must still not have advanced.
+    expect(state.plan!.waveIndex).toBe(0);
+    expect(state.work.find((w) => w.title === "Task 3")).toBeUndefined();
+
+    const review1 = state.work.find((w) => w.kind === "review" && w.reviewOf === item1.id)!;
+    const review2 = state.work.find((w) => w.kind === "review" && w.reviewOf === item2.id)!;
+    apply(state, coord, { v: 1, op: "take", id: review1.id }, at(600));
+    apply(state, coord, { v: 1, op: "done", id: review1.id }, at(700));
+    apply(state, coord, { v: 1, op: "take", id: review2.id }, at(800));
+    apply(state, coord, { v: 1, op: "done", id: review2.id }, at(900));
 
     // Now the whole wave is done, and only now does Task 3 open.
     expect(state.plan!.waveIndex).toBe(1);
