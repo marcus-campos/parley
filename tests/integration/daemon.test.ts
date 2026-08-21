@@ -210,4 +210,34 @@ describe("only one daemon may serve a repository", () => {
 
     a.close();
   });
+
+  test("summon honors the repository's configured ceiling, not a hardcoded default", async () => {
+    async function summonAtCeiling(maxFronts: number) {
+      const dir = tempRepo();
+      mkdirSync(join(dir, "parley"), { recursive: true });
+      writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts }));
+      const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));
+
+      const a = await RawClient.connect(endpoint.address);
+      await a.send({ op: "join", name: "CORE", cwd: "/wt/a" });
+      const b = await RawClient.connect(endpoint.address);
+      await b.send({ op: "join", name: "SECOND", cwd: "/wt/b" });
+
+      // Two live agent fronts already joined; summon is asking for a third.
+      const result = await a.send({ op: "summon", reason: "need a hand" });
+      a.close();
+      b.close();
+      return result;
+    }
+
+    // The same two-participant setup, only the configured ceiling differs —
+    // proves the daemon reads `spawn.json`'s `maxFronts` for `summon`, not a
+    // hardcoded 6. A refuse-everything implementation would fail the second
+    // half; a grant-everything implementation would fail the first.
+    const refused = await summonAtCeiling(2);
+    expect(refused).toMatchObject({ error: { code: "NO_CAPACITY" } });
+
+    const granted = await summonAtCeiling(6);
+    expect(granted).toMatchObject({ ok: true, summoned: true });
+  });
 });

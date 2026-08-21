@@ -266,7 +266,11 @@ export class ParleyDaemon {
       process.stderr.write(`parley: journal append failed: ${(e as Error).message}\n`);
     }
 
-    const outcome = apply(this.state, conn.participantId, frame, ctx);
+    // `summon`'s ceiling check reads this fifth argument (see its doc comment
+    // in src/state/machine.ts) — without it, `summon` was refused/granted
+    // against the hardcoded default of 6, never against what this repository
+    // actually configured in `spawn.json`.
+    const outcome = apply(this.state, conn.participantId, frame, ctx, this.spawnConfig.maxFronts);
 
     if (frame.op === "join" && outcome.response.ok) {
       conn.participantId = (outcome.response as unknown as { id: string }).id;
