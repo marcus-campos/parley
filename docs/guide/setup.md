@@ -78,8 +78,9 @@ for the repository you are standing in:
 - which transport it will use (unix socket, named pipe, or loopback — this
   matters most in WSL)
 - whether the skill in this project matches the binary you have installed
-- where state lives on this machine, and whether a daemon is currently
-  running for this repository (with its process id, if so)
+- where state lives on this machine, and the process id an endpoint file
+  claims — that file existing is not proof the process behind it is still
+  alive; `parley status` is the command that actually asks
 
 Run it any time something feels off before reaching for anything more
 invasive. It is read-only and safe to run as often as you like.
