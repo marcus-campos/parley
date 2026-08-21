@@ -12,6 +12,7 @@ import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint
 import type { Address } from "../transport/address";
 import { readSpawnConfig, type SpawnConfig } from "../cli/spawn-config";
 import { bearFront } from "../spawn/birth";
+import { removeWorktreeIfClean } from "../spawn/worktree";
 
 interface Conn {
   socket: Socket;
@@ -265,6 +266,7 @@ export class ParleyDaemon {
     const expired = tick(this.state, ctx, { maxFronts: this.spawnConfig.maxFronts });
     if (expired.broadcast.length) this.push(expired.broadcast, null);
     this.bearFrontFor(expired.birth, ctx);
+    this.retireFronts(expired.retire, ctx);
 
     // Journal BEFORE responding. This ordering is the entire crash story.
     const entry: JournalEntry = { at: ctx.now, actorId: conn.participantId, frame };
@@ -302,6 +304,7 @@ export class ParleyDaemon {
     const result = tick(this.state, ctx, { maxFronts: this.spawnConfig.maxFronts });
     if (result.broadcast.length) this.push(result.broadcast, null);
     this.bearFrontFor(result.birth, ctx);
+    this.retireFronts(result.retire, ctx);
 
     const idleFor = this.now() - this.lastActivityMs;
     const limit = this.opts.idleShutdownMs ?? DEFAULTS.IDLE_SHUTDOWN_MS;
@@ -352,6 +355,32 @@ export class ParleyDaemon {
         text: `${born.name} could not open a terminal — degraded to panel mode`,
       });
       this.push([event], null);
+    }
+  }
+
+  /**
+   * Where `shouldRetire` (Task 5) becomes disk given back. `tick` only ever
+   * names who has no reason to exist any more — this is the only place
+   * allowed to touch the filesystem for it, same division as `bearFrontFor`.
+   *
+   * Told, not killed: parley did not spawn a promise to obey, and a broken
+   * parley must never stop the work. The message goes out on the bus exactly
+   * like any other system event, so the front reads it on its own next tool
+   * call and leaves by itself; `removeWorktreeIfClean` only ever collects
+   * what a front already walked away from clean.
+   */
+  private retireFronts(ids: string[], ctx: Ctx): void {
+    if (ids.length === 0) return;
+    const root = this.repoRootForExport();
+    for (const id of ids) {
+      const p = this.state.participants[id];
+      if (!p) continue;
+      const event = pushEvent(this.state, ctx, {
+        kind: "system", from: null, to: p.name, priority: "high",
+        text: `${p.name}: the pool is empty and you hold nothing — parley is retiring you. Leave, and let your worktree go.`,
+      });
+      this.push([event], null);
+      if (root && p.cwd) removeWorktreeIfClean(root, p.cwd);
     }
   }
 

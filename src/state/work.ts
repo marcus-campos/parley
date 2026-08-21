@@ -231,6 +231,20 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
 }
 
 /**
+ * A front parley created, holding nothing, with an empty pool, has no reason to
+ * exist. Without this you accumulate newborns occupying the ceiling while none
+ * of them works — which is the failure that looks exactly like success.
+ *
+ * A front a person opened is never retired. Their session is theirs.
+ */
+export function shouldRetire(state: State, p: Participant): boolean {
+  if (p.born !== "parley" || p.gone) return false;
+  if (state.work.some((w) => w.state === "taken" && w.takenById === p.id)) return false;
+  if (state.work.some((w) => w.state === "open" || w.state === "offered")) return false;
+  return true;
+}
+
+/**
  * Alive fronts holding no explicit claim and no taken item — spare capacity
  * the doorbell may address.
  *

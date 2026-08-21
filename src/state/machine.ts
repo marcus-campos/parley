@@ -6,7 +6,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
-import { dropWork, finishWork, idleFronts, listWork, publishWork, summonCapacity, takeWork } from "./work";
+import { dropWork, finishWork, idleFronts, listWork, publishWork, shouldRetire, summonCapacity, takeWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -198,7 +198,7 @@ export function tick(
   state: State,
   ctx: Ctx,
   opts: TickOptions = {},
-): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null } {
+): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null; retire: string[] } {
   const autoTtl = opts.autoClaimTtlMs ?? DEFAULTS.AUTO_CLAIM_TTL_MS;
   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
@@ -348,7 +348,13 @@ export function tick(
     }
   }
 
-  return { state, broadcast, birth };
+  // 7. A newborn parley bore, holding nothing, beside a pool that has gone
+  //    empty, is not spare capacity waiting for work — it is the ceiling
+  //    quietly filled with nobody working. A front a person opened never
+  //    qualifies; `shouldRetire` is the line that keeps it that way.
+  const retire = liveParticipants(state).filter((p) => shouldRetire(state, p)).map((p) => p.id);
+
+  return { state, broadcast, birth, retire };
 }
 
 /**
