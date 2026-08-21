@@ -251,8 +251,20 @@ export class ParleyDaemon {
     if ((frame.op === "notes" || frame.op === "results") && typeof frame.q === "string" && frame.q.trim()) {
       try {
         const k = typeof frame.k === "number" ? Math.max(1, Math.min(20, frame.k)) : 5;
-        const hits = this.index.search(frame.q, k);
-        toApply = { ...frame, ids: hits.map((h) => h.id), ranked: true };
+        // `search` ranks across every kind in one corpus-wide score, and its
+        // distinctiveness threshold is a property of the whole corpus — a
+        // term's document frequency does not mean anything as "half of just
+        // the notes". So `k` cannot be handed to `search` directly: the top-k
+        // across all kinds can be entirely the other op's kind, which would
+        // starve this op of a real match it actually has. Asking for up to
+        // the whole index back costs almost nothing extra, because `search`
+        // already scores and sorts every candidate before slicing — the
+        // kind filter below only changes where the slice happens.
+        const wantsNote = frame.op === "notes";
+        const hits = this.index
+          .search(frame.q, this.index.size)
+          .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
+        toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
       } catch (e) {
         // A broken index must never take the query down with it — the honest
         // degrade is the same unranked list a plain notes/results call gets.
