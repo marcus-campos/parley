@@ -9,6 +9,8 @@ import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
+import { ensureModel } from "../brain/download";
+import { findModel, MODELS } from "../brain/registry";
 import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
@@ -80,6 +82,13 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley mode [off|advisory|enforced]
   parley shape [bus|pool|plan]
+
+  parley brain               is semantic recall on, and with which model
+  parley brain enable [<model>]
+                             human-only. With no model named, lists the
+                             registry — name, languages, size — so you can
+                             weigh it before anything downloads.
+  parley brain disable
 
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
   parley works [--state open|offered|taken|done] [--mine]
@@ -904,6 +913,54 @@ async function main(): Promise<void> {
         const r = await send(wanted ? { op: "shape", shape: wanted } : { op: "shape" });
         if (!r.ok) fail(p, describeError(r));
         return out(p, `parley: shape ${(r as unknown as { shape: string }).shape}`, r);
+      }
+
+      case "brain": {
+        const sub = p.positional[0];
+
+        if (sub === "disable") {
+          const r = await send({ op: "brain", disable: true });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, "parley: brain disabled", r);
+        }
+
+        if (sub === "enable") {
+          const name = p.positional[1];
+          if (!name) {
+            const rows = MODELS.map(
+              (m) => `  ${m.name}\n        ${m.languages} — ~${Math.round(m.bytes / (1024 * 1024))} MB`,
+            );
+            return out(
+              p,
+              `parley: no model named. Available:\n${rows.join("\n")}\n\n` +
+                `Choose one: parley brain enable <name>`,
+              { ok: true, models: MODELS.map((m) => ({ name: m.name, languages: m.languages, bytes: m.bytes })) },
+            );
+          }
+
+          const model = findModel(name);
+          if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
+
+          // The size is shown before anything is downloaded, unconditionally
+          // — even under --json, since this goes to stderr and never
+          // touches the JSON on stdout. A person agreeing to spend ~100MB of
+          // their own disk should see the number first, since that is the
+          // entire reason this is theirs to decide.
+          process.stderr.write(
+            `parley: downloading ${model.name} (~${Math.round(model.bytes / (1024 * 1024))} MB)...\n`,
+          );
+          const path = await ensureModel(model);
+          if (!path) fail(p, "download or checksum verification failed — the brain stays off");
+
+          const r = await send({ op: "brain", enable: model.name });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, `parley: brain enabled — ${model.name}`, r);
+        }
+
+        const r = await send({ op: "brain" });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as { active: boolean; model: string | null };
+        return out(p, d.active ? `parley: brain is on — ${d.model}` : "parley: brain is off", r);
       }
 
       case "work": {
