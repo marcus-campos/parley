@@ -11,6 +11,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build --compile --minify src/cli/main.ts --outfile dist/parley",
+    "docs:commands": "bun run scripts/gen-commands.ts > docs/reference/commands.md",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs"
