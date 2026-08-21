@@ -274,9 +274,10 @@ The owner is pushed the request. If nobody answers within five minutes it is
 granted to you and announced to everyone, naming who stayed silent. Waiting
 longer than that is not politeness, it is waste.
 
-Ask the **owner**, never a human. A human cannot grant or deny — the protocol
-refuses it — precisely so that a stalled request never becomes a request for a
-person's attention.
+Ask the **owner** — whoever holds the path, human or agent. A human answers
+for what they hold exactly like a front does, but has no standing over a
+dispute that is not theirs: you cannot ask a human to arbitrate someone
+else's territory, only the fronts settle that among themselves.
 
 ## Anchor knowledge to the files it is about
 

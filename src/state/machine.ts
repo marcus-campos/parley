@@ -15,14 +15,6 @@ import {
 
 export { emptyState } from "./types";
 
-/**
- * What a human is refused. A human has a voice — `say` reaches every front at
- * high priority — but does not settle permission. Territory disputes are for
- * the agents to resolve among themselves; a human is never the tiebreaker, so
- * a stalled request cannot become a request for a person's attention.
- */
-const AGENTS_ONLY_OPS = new Set(["grant", "deny"]);
-
 export function initialState(mode: Mode = "advisory"): State {
   return emptyState(mode);
 }
@@ -53,19 +45,6 @@ export function apply(
 
   const me = actorOf(state, actorId);
   if (me) me.lastSeenMs = ctx.nowMs;
-
-  // Enforced here rather than in the panel on purpose: otherwise the rule would
-  // only hold for as long as every interface behaved.
-  if (me?.kind === "human" && AGENTS_ONLY_OPS.has(String(frame.op))) {
-    return {
-      state,
-      response: err(
-        "OBSERVER_ONLY",
-        `a human has a voice, not a vote: ${String(frame.op)} is for the fronts to settle among themselves`,
-      ),
-      broadcast: [],
-    };
-  }
 
   switch (frame.op) {
     case "join": return join(state, frame, ctx);
@@ -154,13 +133,13 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
  * somebody's money, on somebody's machine, and an agent cannot answer the
  * interactive prompt that decision deserves on that person's behalf.
  *
- * This is the one op in the file where the asymmetry inverts: everywhere
- * else a human has a voice, not a vote (AGENTS_ONLY_OPS, above) — territory
- * is for the fronts to settle among themselves. Deliberately not folding
- * `enable`/`disable` into AGENTS_ONLY_OPS: that set fires on `kind ===
- * "human"`, i.e. it blocks humans and lets agents through — exactly
- * backwards for spending someone's disk. The check has to live here, gated
- * on the opposite kind.
+ * This is the one op in the file gated on `kind` at all, and it runs the
+ * opposite way from what a reader used to `grant`/`deny` might expect: it
+ * blocks an agent and lets only a human through. Every other op, including
+ * `grant` and `deny`, is open to a human the same as to an agent — ownership
+ * decides who may answer, not kind. Spending someone's disk and someone's
+ * money is the one decision that is never a front's to make, so the check
+ * has to live here, on the opposite kind, rather than anywhere ownership-based.
  */
 function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
   const acting = frame.enable !== undefined || frame.disable !== undefined;

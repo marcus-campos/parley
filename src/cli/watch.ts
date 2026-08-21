@@ -5,14 +5,15 @@ import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config"
 /**
  * `parley watch` — the panel.
  *
- * It opens **watching**: no input line, no buttons. The fronts settle territory
- * and permission among themselves; a stalled request must never quietly become
- * a request for a person's attention, and a panel with a prompt sitting in it
- * invites exactly that.
+ * It opens **watching**: no input line, no buttons. A stalled request must
+ * never quietly become a request for a person's attention — a dispute that
+ * is not the human's own is for the fronts to settle among themselves — and
+ * a panel with a prompt sitting in it invites exactly that.
  *
  * Three screens: the bus, the note list, and one note full screen. Everything
  * that writes is something you open on purpose — `i` to say, `m` to set your
- * name — because a human here has a voice and not a vote.
+ * name. The protocol lets a human answer for whatever territory is theirs,
+ * same as any front; the panel just never puts a button on it.
  */
 
 interface Front {

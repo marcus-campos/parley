@@ -686,20 +686,31 @@ closing.
 
 ### Why the panel is built for watching
 
-A person joins the room, and then mostly watches. That posture is deliberate, and
-it is enforced by the protocol rather than left to the interface:
+A person joins the room, and then mostly watches. That posture is deliberate,
+and what a human is allowed to do is enforced by the protocol rather than left
+to the interface:
 
-- **A human cannot grant or deny.** The daemon refuses it with `OBSERVER_ONLY`.
-  Territory disputes are for the fronts to settle among themselves, so a stalled
-  request can never turn into a request for a person's attention.
-- **A human does have a voice.** What you send arrives marked as human and at
-  high priority, and the agents are told to weigh it above a peer's opinion —
-  but never to wait for it, and never to ask a person to decide.
+- **A human answers for what they hold, exactly like a front does.** `grant`
+  and `deny` are open to a human the same as to an agent — the ownership check
+  that refuses an agent `NOT_OWNER` for someone else's territory refuses a
+  human too, so the only request a person can settle is one about a path they
+  hold themselves. That is the answer someone editing a file by hand actually
+  needs: "no, I am using this," not just `release` (hand it over) or silence
+  (grant it by timeout).
+- **What a human still cannot do is arbitrate someone else's dispute.** A
+  stalled request between two agents never becomes a request for a person's
+  attention — that is for the fronts to settle among themselves.
+- **A human does have a voice regardless of ownership.** What you send arrives
+  marked as human and at high priority, and the agents are told to weigh it
+  above a peer's opinion — but never to wait for it, and never to ask a
+  person to decide.
 - **Saying nothing is the normal case**, not a signal. Participation is optional;
   the bus does not stall because nobody is watching.
-- **So the composer is something you open, not something that waits for you.**
-  <kbd>i</kbd> in the terminal, <kbd>s</kbd> in the browser. A prompt sitting
-  there permanently invites exactly the behaviour the design tries to avoid.
+- **So the composer is something you open, not something that waits for you,**
+  and the panel only opens it for `say`. <kbd>i</kbd> in the terminal,
+  <kbd>s</kbd> in the browser — `grant`, `deny` and the rest are one `parley`
+  command away when you are holding the path, the same way `claim` is: the
+  panel puts a button on none of them.
 
 Prefer not to sit in a panel at all? `parley who`, `parley requests` and
 `parley drain` give you the same information from any terminal. The panel is a

@@ -248,25 +248,38 @@ describe("listing pending requests", () => {
   });
 });
 
-describe("a human has a voice, not a vote", () => {
-  test("a human cannot grant, however much they would like to", () => {
+describe("a human answers for what they hold", () => {
+  test("a human can grant a request for a path they hold", () => {
     const human = joined(state, "Marcus", 0, { kind: "human" });
-    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    apply(state, human, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
     const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
     const id = (asked.response as unknown as { request: string }).request;
 
     const out = apply(state, human, { v: 1, op: "grant", request: id }, at(200));
-    expect(out.response).toMatchObject({ error: { code: "OBSERVER_ONLY" } });
-    expect(Object.values(state.requests)[0]!.state).toBe("pending");
+    expect(out.response).toMatchObject({ ok: true, state: "granted" });
+    expect(state.claims.some((c) => c.pattern === "src/x.ts" && c.ownerId === campo)).toBe(true);
   });
 
-  test("a human cannot deny either", () => {
+  test("a human can deny one too — the answer the bus used to refuse them", () => {
+    const human = joined(state, "Marcus", 0, { kind: "human" });
+    apply(state, human, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+
+    const out = apply(state, human, { v: 1, op: "deny", request: id, reason: "estou usando isso agora" }, at(200));
+    expect(out.response).toMatchObject({ ok: true, state: "denied" });
+    expect(state.claims.some((c) => c.ownerId === campo)).toBe(false);
+  });
+
+  test("but only for what they hold: NOT_OWNER on a path held by another front", () => {
     const human = joined(state, "Marcus", 0, { kind: "human" });
     apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
     const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
     const id = (asked.response as unknown as { request: string }).request;
-    expect(apply(state, human, { v: 1, op: "deny", request: id }, at(200)).response)
-      .toMatchObject({ error: { code: "OBSERVER_ONLY" } });
+
+    expect(apply(state, human, { v: 1, op: "grant", request: id }, at(200)).response)
+      .toMatchObject({ error: { code: "NOT_OWNER" } });
+    expect(Object.values(state.requests)[0]!.state).toBe("pending");
   });
 
   test("but a human speaks, and it lands at high priority on every front", () => {

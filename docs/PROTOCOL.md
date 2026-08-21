@@ -145,7 +145,7 @@ A closed list. Anything outside it is a protocol violation.
 | `UNKNOWN_OP` | Unrecognised `op`, or a malformed frame. |
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
-| `OBSERVER_ONLY` | A participant with `kind: "human"` tried to `grant` or `deny`. A human has a voice, not a vote. |
+| `OBSERVER_ONLY` | An agent tried `brain enable`/`brain disable`. Spending somebody's disk and somebody's money is the person's call, not a front's. |
 
 Success is always `{"ok": true, ...}`. Failure is always
 `{"ok": false, "error": {"code": ..., "message"?: ...}, ...}`. Extra detail that
@@ -432,8 +432,10 @@ the reason, the request id and the remaining time.
   it to the requester.
 - `scope: "transfer"` moves the whole overlapping claim to the requester.
 - `deny` takes a `reason`, which is delivered to the requester.
-- **Only the owner may answer.** Not a human, not another front. A settled
-  request cannot be answered again.
+- **Only the owner may answer.** Ownership decides, not `kind` — a human
+  holding the path answers exactly like an agent holding it would; anyone
+  else, human or agent, is refused `NOT_OWNER`. A settled request cannot be
+  answered again.
 
 State machine: `pending → granted | denied | granted_by_timeout`.
 
@@ -567,18 +569,21 @@ otherwise they would hold only for as long as every client behaved.
 |---|---|
 | `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
 | `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
-| `grant`, `deny` | **refused** with `OBSERVER_ONLY` |
+| `claim`, `release`, `ask`, `grant`, `deny` | **allowed**, exactly like an agent — gated by ownership, not by `kind` |
 
-The reasoning: permission disputes are for the fronts to settle among
-themselves. If a human could arbitrate, an unanswered request would degrade into
-a request for a person's attention, and the autonomous flow would acquire a
-human-shaped bottleneck — which is the exact failure the five-minute expiry
-grant exists to prevent.
+`grant` and `deny` refuse with `NOT_OWNER` unless `request.ownerId === me.id`,
+for a human the same as for an agent. That check is what keeps this safe: a
+person can only ever settle a request for a path they themselves hold, never
+arbitrate a dispute between two fronts that has nothing to do with them. A
+human editing a file by hand needs exactly the answer this gives: `deny`, so
+that "no, I am using this" is something the bus can hear, instead of only
+`release` (hand it over) or silence (grant it by timeout).
 
-So a human is an observer with a voice. Participation is optional and silence is
-the expected state. An interface built on this protocol should reflect that
-posture: parley's own panels ship read-only, and only grow an input when the
-person explicitly asks for one.
+So a human is a participant with a voice, not a bystander with one — full
+standing over whatever territory is theirs, and none at all over anyone
+else's. Participation is optional and silence is the expected state: an
+interface built on this protocol should reflect that posture, growing an
+input only when the person explicitly asks for one.
 
 ### 6.8 Mode and status
 
