@@ -1,15 +1,17 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { basename, dirname, join } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
-import { apply, initialState, makeCtx, tick } from "../state/machine";
-import type { ConvEvent, State } from "../state/types";
+import { apply, initialState, makeCtx, tick, type BirthIntent } from "../state/machine";
+import { pushEvent, type ConvEvent, type Ctx, type State } from "../state/types";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
+import { readSpawnConfig, type SpawnConfig } from "../cli/spawn-config";
+import { bearFront } from "../spawn/birth";
 
 interface Conn {
   socket: Socket;
@@ -76,6 +78,10 @@ export class ParleyDaemon {
   private lastActivityMs: number;
   private readonly token: string | null;
   private readonly now: () => number;
+  /** Read once at boot, re-read whenever `parley/spawn.json` changes underneath us. */
+  private spawnConfig: SpawnConfig;
+  private spawnConfigWatcher: FSWatcher | null = null;
+  private nextFrontIndex = 1;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
@@ -83,6 +89,7 @@ export class ParleyDaemon {
     this.token = opts.address.kind === "tcp" ? randomBytes(24).toString("hex") : null;
     this.state = this.restore(opts.mode ?? "advisory");
     this.lastActivityMs = this.now();
+    this.spawnConfig = readSpawnConfig(opts.gitCommonDir);
   }
 
   /**
@@ -161,7 +168,30 @@ export class ParleyDaemon {
     this.timer = setInterval(() => this.onTick(), interval);
     if (typeof this.timer.unref === "function") this.timer.unref();
 
+    this.watchSpawnConfig();
+
     return endpoint;
+  }
+
+  /**
+   * A person changes their mind about `mode` or `maxFronts` without a daemon
+   * restart — the same reason `panel.json` is watched. Losing this watcher is
+   * a convenience lost, never a reason to stop: the config already read at
+   * boot keeps working exactly as it was.
+   */
+  private watchSpawnConfig(): void {
+    try {
+      const dir = join(this.opts.gitCommonDir, "parley");
+      mkdirSync(dir, { recursive: true });
+      const watcher = watchFs(dir, { persistent: false }, (_event, filename) => {
+        if (filename && filename !== "spawn.json") return;
+        this.spawnConfig = readSpawnConfig(this.opts.gitCommonDir);
+      });
+      if (typeof watcher.unref === "function") watcher.unref();
+      this.spawnConfigWatcher = watcher;
+    } catch {
+      // Watching is a convenience; the config already read at boot is enough.
+    }
   }
 
   private accept(socket: Socket): void {
@@ -221,8 +251,9 @@ export class ParleyDaemon {
 
     // Expire before deciding: a claim held by a front that died two minutes ago
     // must not win a conflict against the front asking right now.
-    const expired = tick(this.state, ctx, {});
+    const expired = tick(this.state, ctx, { maxFronts: this.spawnConfig.maxFronts });
     if (expired.broadcast.length) this.push(expired.broadcast, null);
+    this.bearFrontFor(expired.birth, ctx);
 
     // Journal BEFORE responding. This ordering is the entire crash story.
     const entry: JournalEntry = { at: ctx.now, actorId: conn.participantId, frame };
@@ -253,12 +284,44 @@ export class ParleyDaemon {
 
   private onTick(): void {
     const ctx = makeCtx(this.now(), this.counter);
-    const result = tick(this.state, ctx, {});
+    const result = tick(this.state, ctx, { maxFronts: this.spawnConfig.maxFronts });
     if (result.broadcast.length) this.push(result.broadcast, null);
+    this.bearFrontFor(result.birth, ctx);
 
     const idleFor = this.now() - this.lastActivityMs;
     const limit = this.opts.idleShutdownMs ?? DEFAULTS.IDLE_SHUTDOWN_MS;
     if (this.conns.size === 0 && idleFor > limit) void this.close();
+  }
+
+  /**
+   * Where a birth intent (Task 2) becomes a process (Task 4). `tick` never
+   * spawns — `src/state/` stays pure — so this is the only place that turns
+   * "capacity is missing" into an actual front. A repository with no worktree
+   * root (a bare repo) has nowhere to put one, so it is skipped exactly like
+   * `exportNotes` skips writing `.parley/notes.md` for the same reason.
+   */
+  private bearFrontFor(birth: BirthIntent | null, ctx: Ctx): void {
+    if (!birth) return;
+    const root = this.repoRootForExport();
+    if (!root) return;
+
+    const born = bearFront({
+      repoRoot: root,
+      config: this.spawnConfig,
+      intent: birth,
+      index: this.nextFrontIndex++,
+    });
+    if (born) return;
+
+    // A birth that fails leaves the pool exactly as open as it was; the
+    // cooldown in `tick` passes and the next tick asks again. Announcing it
+    // is the only thing that would otherwise be lost — the retry needs no
+    // help from us.
+    const event = pushEvent(this.state, ctx, {
+      kind: "system", from: null, to: null, priority: "high",
+      text: "a front could not be started — the pool is still open",
+    });
+    this.push([event], null);
   }
 
   /** Unsolicited frames on the same connection: inbox and territory events. */
@@ -290,6 +353,8 @@ export class ParleyDaemon {
   async close(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    this.spawnConfigWatcher?.close();
+    this.spawnConfigWatcher = null;
     for (const conn of [...this.conns]) {
       try { conn.socket.destroy(); } catch { /* already gone */ }
     }
