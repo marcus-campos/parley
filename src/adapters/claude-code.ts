@@ -218,8 +218,9 @@ hand and do not guess. Two tasks that touch the same file never open together.
 The first wave is published open, other fronts take it, and the next wave opens
 by itself once the current one is entirely done.
 
-A planned item is **dispatched, not offered**: \`drop\` refuses it. It does not
-arrive named in your footer either — it is open to everybody, so go and look:
+A planned **task** is **dispatched, not offered**: it is open to everybody, it
+does not arrive named in your footer, and once you take it \`drop\` refuses it.
+So go and look, and take what you can actually finish:
 
 \`\`\`
 parley works --state open
@@ -227,9 +228,12 @@ parley take w_0004
 parley done w_0004 --summary "..."
 \`\`\`
 
-Finishing a planned item publishes a **review** of it, offered to another front
-— never to you. The wave is not over until those reviews are done too, so
-review here is a state on the bus, not something two fronts agreed to do.
+Finishing a planned task publishes a **review** of it, offered to another front
+— never to you. A review is the one planned item that *is* an offer: it arrives
+named in your footer and \`drop\` accepts it — hand it back if you cannot review
+this one and it returns to the pool for somebody else. Taking one also hands
+you the item it reviews. The wave is not over until those reviews are done too,
+so review here is a state on the bus, not something two fronts agreed to do.
 
 The plan never takes a path a person's front already holds under an explicit
 claim: that task is published anyway and announced as waiting. And a task whose

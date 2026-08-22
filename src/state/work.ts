@@ -141,11 +141,16 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
     about: me.id,
   })];
 
-  broadcast.push(...openWave(state, state.plan.tasksByWave[0]!, ctx));
+  // `opened` comes back from `openWave` rather than being recomputed from the
+  // wave's task list: one task opens one item PER DECLARED PATH, so a task
+  // count is not an item count, and the caller prints this as "N item(s) open
+  // now" right above a `parley works --state open` that would then list more.
+  const wave0 = openWave(state, state.plan.tasksByWave[0]!, ctx);
+  broadcast.push(...wave0.events);
 
   return {
     state,
-    response: ok({ waves: computed.length, dispatched: state.plan.tasksByWave[0]!.length }),
+    response: ok({ waves: computed.length, opened: wave0.opened }),
     broadcast,
   };
 }
@@ -164,9 +169,10 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
  * is still published here, open, rather than taken from its holder — the
  * wait is announced instead of silently skipped.
  */
-function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): ConvEvent[] {
+function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): { events: ConvEvent[]; opened: number } {
   const plan = state.plan!;
   const events: ConvEvent[] = [];
+  let opened = 0;
   for (const task of waveTasks) {
     const label = task.title || `task ${task.n}`;
     const title = task.parseError ? `${label} — ${task.parseError}` : label;
@@ -200,6 +206,7 @@ function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): ConvEvent[] {
         at: ctx.now,
       };
       state.work.push(item);
+      opened += 1;
       (plan.itemsByTask[task.n] ??= []).push(item.id);
       if (holder) {
         const owner = state.participants[holder.ownerId];
@@ -210,7 +217,7 @@ function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): ConvEvent[] {
       }
     }
   }
-  return events;
+  return { events, opened };
 }
 
 /**
@@ -232,7 +239,7 @@ function advancePlanIfWaveDone(state: State, ctx: Ctx): ConvEvent[] {
   plan.waveIndex += 1;
   const nextTasks = plan.tasksByWave[plan.waveIndex];
   if (!nextTasks) return [];
-  return openWave(state, nextTasks, ctx);
+  return openWave(state, nextTasks, ctx).events;
 }
 
 /** Which task an item belongs to, or null for work published outside a plan. */
@@ -307,6 +314,14 @@ export function takeWork(state: State, actorId: string | null, frame: Record<str
     };
   }
 
+  // The item under review, resolved here for the same reason the evidence is:
+  // so the reviewer does not have to go and look it up. It travels on its own
+  // key rather than through `evidenceIds`, which is typed and documented as
+  // note and result ids — a `WorkItem` in there would resolve to nothing and
+  // widening `evidenceFor` would push one into a field both its consumers read
+  // as `{notes, results}`. Always present, `null` for anything but a review.
+  const reviewing = item.reviewOf ? state.work.find((w) => w.id === item.reviewOf) ?? null : null;
+
   item.state = "taken";
   item.takenById = me.id;
   item.offeredToId = null;
@@ -316,13 +331,33 @@ export function takeWork(state: State, actorId: string | null, frame: Record<str
 
   return {
     state,
-    response: ok({ id: item.id, title: item.title, paths: item.paths, evidence: evidenceFor(state, item) }),
+    response: ok({
+      id: item.id, title: item.title, paths: item.paths,
+      evidence: evidenceFor(state, item), reviewing,
+    }),
     broadcast: [pushEvent(state, ctx, {
       kind: "system", from: null, to: null, priority: "normal",
       text: `${me.name} took ${item.paths[0]} — ${item.title}`,
       about: me.id,
     })],
   };
+}
+
+/**
+ * Whether `drop` can be accepted for this item at all, independently of who is
+ * asking. Asked here and by `poolFooterFor`, so the footer can never name a
+ * command the reducer refuses.
+ *
+ * A planned **task** is a dispatch: the plan put it there and it stays there.
+ * A planned **review** is not. It is offered to one named front, exactly like
+ * a discovered item offered to the owner of a path, and the offer buys first
+ * refusal, not obedience — a front that cannot review this work has to be able
+ * to hand it back so it returns to the pool for somebody else. `tick` already
+ * does that for it when `OFFER_TTL_MS` runs out (machine.ts rule 5), so
+ * refusing the drop never kept the review; it only delayed it.
+ */
+function droppable(item: WorkItem): boolean {
+  return !(item.origin === "planned" && item.kind === "work");
 }
 
 /**
@@ -336,9 +371,10 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
   const item = findItem(state, frame);
   if (!item) return { state, response: err("UNKNOWN_OP", "no work item with that id"), broadcast: [] };
-  // Dispatch is not an offer. A planned item stays where the plan put it.
-  if (item.origin === "planned") {
-    return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+  // Dispatch is not an offer. A planned task stays where the plan put it — a
+  // planned review does not, because a review was offered to a named front.
+  if (!droppable(item)) {
+    return { state, response: err("NOT_OWNER", "a planned task is dispatched, not offered — it cannot be dropped"), broadcast: [] };
   }
   // done is terminal, same as takeWork and tick already treat it — a finisher
   // still holds takenById, so without this an already-delivered item could be
@@ -419,7 +455,14 @@ export function poolFooterFor(state: State, participantId: string): string {
 
   const lines: string[] = [];
   for (const item of mine.slice(0, MAX_NAMED_OFFERS)) {
-    lines.push(`  ${item.paths[0]} — ${item.title} (parley take ${item.id}, or parley drop ${item.id})`);
+    // The `drop` half is offered only where `drop` would be accepted. A footer
+    // that names a command the reducer then refuses is worse than a footer
+    // that says less: the front runs it, gets an error, and reads parley as
+    // broken.
+    const how = droppable(item)
+      ? `parley take ${item.id}, or parley drop ${item.id}`
+      : `parley take ${item.id}`;
+    lines.push(`  ${item.paths[0]} — ${item.title} (${how})`);
   }
   if (mine.length > MAX_NAMED_OFFERS) {
     lines.push(`  ${mine.length - MAX_NAMED_OFFERS} more offered to you — parley works --mine`);
@@ -464,7 +507,13 @@ export function finishWork(state: State, actorId: string | null, frame: Record<s
       id: ctx.nextId("w"),
       paths: [...item.paths],
       title: `review: ${item.title}`,
-      evidenceIds: [item.id, ...item.evidenceIds],
+      // NOT `item.id`: `evidenceIds` is documented (see WorkItem) as ids of a
+      // Note or a CommandResult, and `evidenceFor` resolves strictly against
+      // those two — a `w_*` id is neither, so it would sit here as a reference
+      // that can never resolve. That is the same defect `openWave` refuses
+      // above. What the reviewer actually needs is the item under review, and
+      // `reviewOf` already carries it: `takeWork` resolves it on its own key.
+      evidenceIds: [...item.evidenceIds],
       publishedById: me.id,
       publishedByName: me.name,
       kind: "review",

@@ -105,6 +105,79 @@ describe("review after every task", () => {
     expect(review.offeredToId).toBeNull();
   });
 
+  // C1: a review is `origin: "planned"`, and `drop` used to refuse every
+  // planned item — while `poolFooterFor` named this one in the offeree's
+  // footer with `parley drop <id>` appended, so the footer advertised a
+  // command that could only ever fail. A review really is an offer: it is made
+  // to one named front, and the offer buys first refusal, not obedience. `tick`
+  // already returns it to the pool when OFFER_TTL_MS runs out, so refusing the
+  // drop never kept the review — it only made the front wait for the timeout.
+  test("a review offered to a front can be handed back, and goes to the pool", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+
+    const review = state.work.find((w) => w.kind === "review")!;
+    const offeree = review.offeredToId!;
+    const dropped = apply(state, offeree, { v: 1, op: "drop", id: review.id, reason: "not my depth" }, at(400));
+
+    expect(dropped.response.ok).toBe(true);
+    expect(review.state).toBe("open");
+    expect(review.offeredToId).toBeNull();
+
+    // The hand-back is only worth anything if somebody else can then pick it
+    // up — the wave still does not advance until this review is done.
+    const other = [coord, auditor].find((p) => p !== offeree)!;
+    expect(apply(state, other, { v: 1, op: "take", id: review.id }, at(500)).response.ok).toBe(true);
+    expect(state.plan!.waveIndex).toBe(0);
+  });
+
+  // The other half of the same rule: a planned TASK is a dispatch, and stays
+  // one. Only `kind: "review"` earns the refusal exemption, so a fix that
+  // simply deleted the planned check would fail here.
+  test("a planned task is still refused, taken or offered", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+
+    const dropped = apply(state, worker, { v: 1, op: "drop", id: item.id }, at(300));
+    expect(dropped.response).toMatchObject({ ok: false, error: { code: "NOT_OWNER" } });
+    expect(item.state).toBe("taken");
+  });
+
+  // I1: `WorkItem.evidenceIds` is documented as ids of a Note and a
+  // CommandResult, and `evidenceFor` resolves strictly against `state.notes`
+  // and `state.results` — a `w_*` id is neither, so putting the reviewed
+  // item's id there made a reference that can never resolve. `openWave`
+  // carries a comment refusing exactly that for `plan.spec`. What the reviewer
+  // needs is the item under review, and `reviewOf` already holds it.
+  test("a review names no evidence id that cannot resolve; take returns the item under review", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+
+    const review = state.work.find((w) => w.kind === "review")!;
+    expect(review.evidenceIds).not.toContain(item.id);
+    for (const id of review.evidenceIds) expect(id.startsWith("w_")).toBe(false);
+
+    const took = apply(state, review.offeredToId!, { v: 1, op: "take", id: review.id }, at(400));
+    const d = took.response as unknown as { reviewing: { id: string; title: string; takenById: string } | null };
+    expect(d.reviewing?.id).toBe(item.id);
+    expect(d.reviewing?.title).toBe(item.title);
+    expect(d.reviewing?.takenById).toBe(worker);
+  });
+
+  // The key is always present, so a consumer never has to tell "no review
+  // here" apart from "this build does not send it".
+  test("taking something that is not a review reports no item under review", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    const took = apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    expect((took.response as unknown as { reviewing: unknown }).reviewing).toBeNull();
+  });
+
   // A review is `kind: "review"`, never `kind: "work"` — the guard in
   // finishWork checks exactly that. Without it, closing a review under
   // shape plan would spawn a review of the review, and so on forever.

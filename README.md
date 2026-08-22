@@ -511,7 +511,14 @@ check rather than new work to do.
 The third shape, on the same axis. `mode` is untouched by it: territory is
 still `off`, `advisory` or `enforced`, and it still means exactly what it means
 above. The two compose, and `plan` + `enforced` is the strongest pairing — the
-wave says what may be worked on, and territory blocks every edit outside it.
+wave decides what may be worked on, and territory keeps two fronts off the same
+file while they work it.
+
+They compose; neither enforces the other. **Taking a planned item claims
+nothing**, so nothing stops a front that took a wave-0 item from also editing a
+file that belongs to wave 2 — enforced mode refuses an edit that collides with
+a live claim, and a file nobody has claimed collides with nothing. The wave is
+the schedule; territory is the lock. Claim what you are editing, in any shape.
 
 **superpowers itself is not modified in any way.** You write the plan exactly
 as you write one today, with `superpowers:brainstorming` and
@@ -524,28 +531,33 @@ opening another window by hand and pasting a plan path.
 ```bash
 parley shape plan
 parley plan docs/superpowers/plans/2026-08-20-thing.md
-# parley: 6 task(s) in 3 wave(s) — 2 item(s) open now
+# parley: 6 task(s) in 3 wave(s) — 5 item(s) open now
 #   parley works --state open
 ```
 
-Every task in a `writing-plans` plan is required to state its exact paths, in a
-`**Files:**` block. parley parses those and computes the collision graph before
-anything is dispatched: tasks whose paths are disjoint open together, tasks that
-touch the same file are pushed into later waves. Other orchestrators ask a human
-to eyeball *"are these tasks independent?"* — they have to, because none of them
-keeps a territory map. Here it is computed from what the plan already declares,
-and it is a deterministic unit test.
+A `writing-plans` plan states each task's exact paths in a `**Files:**` block.
+That is the template's shape, not something anything validates — which is why a
+task whose block is missing or will not parse is still dispatched, carrying the
+reason as its title (below). parley parses those blocks and computes the
+collision graph before anything is dispatched: tasks whose paths are disjoint
+open together, tasks that touch the same file are pushed into later waves.
+Other orchestrators leave the question to a human — superpowers'
+`subagent-driven-development` branches on *"Tasks mostly independent?"* and you
+answer it. They have to, because none of them keeps a territory map. Here the
+answer is computed from what the plan already declares, and it is a
+deterministic unit test.
 
 | | |
 |---|---|
-| Dispatched, not offered | A planned item cannot be dropped. It is published **open**, owned by nobody, and any front takes it. |
+| Dispatched, not offered | A planned **task** is published **open**, owned by nobody, and any front takes it — but once taken it cannot be dropped. The plan put it there and it stays. |
 | A wave, not a queue | The next wave opens by itself, the moment every item of the current one is done. |
-| Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. |
+| Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. A review is the one planned item that really is an offer: it is named in that front's footer, `drop` hands it back to the pool, and `take` returns the item under review along with it. |
 | A person's front outranks the plan | A path held under an explicit claim is never taken from its holder. That task is published anyway and announced as waiting — you re-sequence, or the holder releases. |
 | No task disappears | A task whose `**Files:**` block is missing or unparseable is published with the parse failure as its title. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
 
-The coordinator is a front, never the daemon. The daemon stores state and
-expires things — it has no idea what a plan is.
+The coordinator is a front, never the daemon. The daemon holds the plan's state
+and advances its waves, but it never reads your plan file: `parley plan` parses
+the markdown on the CLI side, and only the parsed tasks cross the wire.
 
 ---
 
@@ -613,7 +625,7 @@ through the environment.
 | `parley work "<title>" <path…> [--evidence <id,...>] [--kind review --review-of <id>]` | Publish discovered work, one item per path. Routed on publish: offered to whoever already holds the path, open for anyone otherwise. |
 | `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. **Offers also ride the footer of every hook and MCP response** — this is for looking, not for polling. |
 | `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
-| `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. |
+| `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. A planned **task** refuses it — a review does not. |
 | `parley done <id> [--summary "..."]` | Mark it finished. |
 
 ### Knowledge that outlives the session
@@ -964,9 +976,13 @@ integration. Long-term search over history.
 still local-only and single-user: `parley watch --web` binds to `127.0.0.1`
 behind a token and is not a hosted interface.)*
 
-And above all: **parley does not assign work. It provides capacity.** It
-coordinates sessions someone already created. Orchestration — deciding what
-runs and dispatching it — is a different project.
+And above all: **parley does not decide what the work is. It provides
+capacity, and now a schedule.** `shape plan` dispatches a plan *you* wrote and
+computes, from the paths that plan already declares, which of its tasks can run
+at the same time — arithmetic over a territory map parley already keeps, not a
+judgement about the work. It does not write the plan, decide whether a task is
+worth doing, pick which front is competent to take one, or read the result. And
+it still creates no sessions: it coordinates sessions someone already started.
 
 ---
 

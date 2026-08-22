@@ -69,4 +69,51 @@ describe("the pool footer", () => {
     apply(state, core, { v: 1, op: "work", title: "x", paths: ["mine/a.html"] }, at(100));
     expect(poolFooterFor(state, responsivo)).toContain("parley take ");
   });
+
+  // C1: the footer appended `parley drop <id>` to every named offer, and
+  // `dropWork` refused every `origin: "planned"` item — so a front whose
+  // footer named a review ran the command the footer gave it and got
+  // NOT_OWNER. Naming a command the reducer refuses is worse than saying
+  // less: the front reads the error as parley being broken. This runs what
+  // the footer actually says rather than asserting a phrasing.
+  test("every `parley drop` the footer names is one the reducer accepts", () => {
+    const plan = initialState("advisory");
+    apply(plan, null, { v: 1, op: "shape", shape: "plan" }, at(200));
+    const coord = joined(plan, "COORD", 210);
+    const worker = joined(plan, "WORKER", 220);
+    apply(plan, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [{ n: 1, title: "Task 1", paths: ["a.ts"], parseError: null }],
+    }, at(300));
+    const item = plan.work[0]!;
+    apply(plan, worker, { v: 1, op: "take", id: item.id }, at(400));
+    apply(plan, worker, { v: 1, op: "done", id: item.id }, at(500));
+
+    const review = plan.work.find((w) => w.kind === "review")!;
+    const offeree = review.offeredToId!;
+    const named = [...poolFooterFor(plan, offeree).matchAll(/parley drop (w_\d+)/g)].map((m) => m[1]!);
+
+    expect(named).toEqual([review.id]);
+    for (const id of named) {
+      expect(apply(plan, offeree, { v: 1, op: "drop", id }, at(600)).response.ok).toBe(true);
+    }
+  });
+
+  // The other direction, so the invariant does not survive by accident of
+  // which code path happens to create offers. `openWave` publishes planned
+  // tasks `open` today, so this shapes an offered one by hand: the footer must
+  // decide from the same predicate `dropWork` decides from, not from a guess.
+  test("an offer the reducer would refuse to drop is named without the drop", () => {
+    apply(state, responsivo, { v: 1, op: "claim", paths: ["mine/**"] }, at(50));
+    apply(state, core, {
+      v: 1, op: "work", title: "task 1", paths: ["mine/a.ts"], origin: "planned",
+    }, at(100));
+
+    const footer = poolFooterFor(state, responsivo);
+    expect(footer).toContain("parley take ");
+    expect(footer).not.toContain("parley drop ");
+
+    const id = state.work[0]!.id;
+    expect(apply(state, responsivo, { v: 1, op: "drop", id }, at(200)).response.ok).toBe(false);
+  });
 });

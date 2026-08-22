@@ -40,7 +40,7 @@ describe("dispatching a plan", () => {
     expect(state.plan!.waves).toHaveLength(2);
   });
 
-  test("planned items are marked planned, so they cannot be dropped", () => {
+  test("planned items are marked planned, which is what makes a task undroppable", () => {
     apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
     expect(state.work[0]!.origin).toBe("planned");
   });
@@ -72,6 +72,30 @@ describe("dispatching a plan", () => {
     expect(state.work).toHaveLength(1);
     expect(state.work[0]!.title).toContain("no **Files:** block");
     expect(state.work[0]!.state).toBe("open");
+  });
+
+  // `openWave` publishes one item PER DECLARED PATH, so the number of tasks in
+  // wave 0 is not the number of items it opened. The CLI prints this number as
+  // "N item(s) open now" immediately above a `parley works --state open` that
+  // would then list more of them than the line just claimed — and `parley plan`
+  // is the first command the README and the skill both tell people to run.
+  test("the count the response reports is items opened, not tasks in the wave", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts", "b.ts", "c.ts"])],
+    }, at(100));
+
+    expect(out.response).toMatchObject({ ok: true, waves: 1, opened: 3 });
+    expect(state.work.filter((w) => w.state === "open")).toHaveLength(3);
+  });
+
+  // Same number for a wave whose tasks declare one path each — so the fix is
+  // "count the items", not "multiply by something".
+  test("one path per task still reports one item per task", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["b.ts"])],
+    }, at(100));
+
+    expect(out.response).toMatchObject({ ok: true, waves: 1, opened: 2 });
   });
 
   // Task 1's contract change: paths.length > 0 and parseError !== null can

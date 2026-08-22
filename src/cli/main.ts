@@ -918,10 +918,10 @@ async function main(): Promise<void> {
         const parsed = parsePlan(markdown);
         const r = await send({ op: "plan", goal: parsed.goal, spec: parsed.spec, tasks: parsed.tasks });
         if (!r.ok) fail(p, describeError(r));
-        const d = r as unknown as { waves: number; dispatched: number };
+        const d = r as unknown as { waves: number; opened: number };
         return out(
           p,
-          `parley: ${parsed.tasks.length} task(s) in ${d.waves} wave(s) — ${d.dispatched} item(s) open now\n` +
+          `parley: ${parsed.tasks.length} task(s) in ${d.waves} wave(s) — ${d.opened} item(s) open now\n` +
             `  parley works --state open`,
           r,
         );
@@ -974,11 +974,16 @@ async function main(): Promise<void> {
         }
         const d = r as unknown as {
           title: string; paths: string[]; evidence: { notes: unknown[]; results: unknown[] };
+          reviewing: { id: string; title: string } | null;
         };
         const evCount = d.evidence.notes.length + d.evidence.results.length;
         return out(
           p,
           `parley: took ${d.paths[0]} — ${d.title}` +
+            // A review names what it is a review OF. Without this the pointer
+            // exists only in --json, and the skill tells fronts to take items
+            // in plain text.
+            (d.reviewing ? `\n  reviewing ${d.reviewing.id} — ${d.reviewing.title}` : "") +
             (evCount ? `\n  ${evCount} piece(s) of evidence came with it — read --json, do not re-discover it` : ""),
           r,
         );
