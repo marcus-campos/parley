@@ -1,16 +1,16 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick, type BirthIntent } from "../state/machine";
-import { pushEvent, type ConvEvent, type Ctx, type State } from "../state/types";
+import { pushEvent, type ConvEvent, type Ctx, type Participant, type State } from "../state/types";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
-import { readSpawnConfig, type SpawnConfig } from "../cli/spawn-config";
+import { readSpawnConfigIn, type SpawnConfig } from "../cli/spawn-config";
 import { bearFront } from "../spawn/birth";
 import { removeWorktreeIfClean } from "../spawn/worktree";
 
@@ -92,7 +92,7 @@ export class ParleyDaemon {
     // same ceiling a live one would have been checked against (see `restore`
     // below) — a state reconstruction is only lossless if it re-derives what
     // happened, not what would happen under today's hardcoded default.
-    this.spawnConfig = readSpawnConfig(opts.gitCommonDir);
+    this.spawnConfig = readSpawnConfigIn(opts.gitCommonDir);
     this.state = this.restore(opts.mode ?? "advisory");
     this.lastActivityMs = this.now();
   }
@@ -193,11 +193,11 @@ export class ParleyDaemon {
    */
   private watchSpawnConfig(): void {
     try {
-      const dir = join(this.opts.gitCommonDir, "parley");
+      const dir = this.opts.gitCommonDir;
       mkdirSync(dir, { recursive: true });
       const watcher = watchFs(dir, { persistent: false }, (_event, filename) => {
         if (filename && filename !== "spawn.json") return;
-        this.spawnConfig = readSpawnConfig(this.opts.gitCommonDir);
+        this.spawnConfig = readSpawnConfigIn(this.opts.gitCommonDir);
       });
       if (typeof watcher.unref === "function") watcher.unref();
       this.spawnConfigWatcher = watcher;
@@ -287,7 +287,10 @@ export class ParleyDaemon {
       const p = this.state.participants[conn.participantId];
       if (p) p.connected = true;
     }
-    if (frame.op === "leave" && outcome.response.ok) conn.participantId = null;
+    if (frame.op === "leave" && outcome.response.ok) {
+      this.collectWorktree(conn.participantId ? this.state.participants[conn.participantId] : undefined);
+      conn.participantId = null;
+    }
 
     this.send(conn, outcome.response);
     if (outcome.broadcast.length) this.push(outcome.broadcast, conn);
@@ -359,29 +362,65 @@ export class ParleyDaemon {
   }
 
   /**
-   * Where `shouldRetire` (Task 5) becomes disk given back. `tick` only ever
-   * names who has no reason to exist any more — this is the only place
-   * allowed to touch the filesystem for it, same division as `bearFrontFor`.
+   * An invitation, and nothing else.
    *
-   * Told, not killed: parley did not spawn a promise to obey, and a broken
-   * parley must never stop the work. The message goes out on the bus exactly
-   * like any other system event, so the front reads it on its own next tool
-   * call and leaves by itself; `removeWorktreeIfClean` only ever collects
-   * what a front already walked away from clean.
+   * §4.5 of the design says a newborn with no taken item and an empty pool
+   * "says goodbye by itself", and `src/spawn/birth.ts`'s opening prompt
+   * already tells it to. The action belongs to the front. parley's part is to
+   * say so once, on the bus, exactly like any other system event — the front
+   * reads it on its own next tool call and runs `parley leave`.
+   *
+   * Nothing here touches the filesystem. It used to remove the front's
+   * worktree in this same loop iteration, on the tick that *first* named it —
+   * which is to say while the agent was still running inside that directory,
+   * and a newborn's worktree is clean by construction. One `parley who` was
+   * enough to delete a live front's working directory. Collection now happens
+   * in `collectWorktree`, on the front's own `leave`, which is the only
+   * evidence parley ever gets that it has actually gone.
    */
   private retireFronts(ids: string[], ctx: Ctx): void {
     if (ids.length === 0) return;
-    const root = this.repoRootForExport();
     for (const id of ids) {
       const p = this.state.participants[id];
       if (!p) continue;
       const event = pushEvent(this.state, ctx, {
         kind: "system", from: null, to: p.name, priority: "high",
-        text: `${p.name}: the pool is empty and you hold nothing — parley is retiring you. Leave, and let your worktree go.`,
+        text: `${p.name}: the pool is empty and you hold nothing — parley is retiring you. Say so and run \`parley leave\`; your worktree is collected once you have gone.`,
       });
       this.push([event], null);
-      if (root && p.cwd) removeWorktreeIfClean(root, p.cwd);
     }
+  }
+
+  /**
+   * The worktree comes back only after the front has left, and only if it is
+   * empty. Both halves matter.
+   *
+   * *After*: a front that has been named for retirement has not gone anywhere
+   * — it has been asked to. Until it says `leave` it is still running, still
+   * has that directory as its cwd, and may still be about to write a file
+   * into it. `leave` is the only thing parley ever hears that means "the
+   * process is done with this directory" (the SessionEnd hook sends it too,
+   * so a session closed from the harness side is covered).
+   *
+   * *Empty*: `removeWorktreeIfClean` refuses anything with changes in it.
+   *
+   * And only ever under `.parley/worktrees/`. `p.cwd` is whatever directory
+   * the front's process happened to be in; a parley-born front is spawned in
+   * its worktree, but nothing stops a later call arriving from somewhere else
+   * entirely. `git worktree remove` would refuse a path it does not manage,
+   * but "git would have refused" is not the guarantee to rely on when the
+   * failure mode is deleting somebody's checkout.
+   */
+  private collectWorktree(p: Participant | undefined): void {
+    if (!p || p.born !== "parley" || !p.cwd) return;
+    const root = this.repoRootForExport();
+    if (!root) return;
+    const home = join(root, ".parley", "worktrees");
+    if (p.cwd !== home && !p.cwd.startsWith(`${home}${sep}`)) return;
+    // Deliberately not awaited: two `git` subprocesses must never be something
+    // the daemon's event loop waits on. Failure is already the safe outcome —
+    // the worktree stays where it is.
+    void removeWorktreeIfClean(root, p.cwd).catch(() => { /* disk is cheap */ });
   }
 
   /** Unsolicited frames on the same connection: inbox and territory events. */
@@ -395,6 +434,16 @@ export class ParleyDaemon {
       );
       if (mine.length === 0) continue;
       this.send(conn, { v: PROTOCOL_VERSION, op: "push", events: mine });
+      // Moving the cursor is a claim that these events have been delivered,
+      // and only a front that reads unsolicited frames can honour it. A hook
+      // or CLI front holds this socket for the length of one command and
+      // drops every `push` on the floor (`src/client/client.ts` — no handler,
+      // no delivery); advancing its cursor marked those events read and
+      // `drain` never returned them again. That is why a retirement notice
+      // generated by the pre-command tick on the retiring front's *own*
+      // connection was emitted down the one channel it cannot read, and then
+      // erased from the one it can.
+      if (me.delivery !== "live") continue;
       const cursor = this.state.cursors[conn.participantId] ?? 0;
       const top = mine[mine.length - 1]!.seq;
       if (top > cursor) this.state.cursors[conn.participantId] = top;
@@ -440,12 +489,31 @@ export class ParleyDaemon {
   }
 
   /**
-   * The bus key is the git common dir, so for a normal checkout the worktree
-   * root is its parent. A bare repository has no worktree and gets no file.
+   * The working tree everything on disk hangs off: `.parley/notes.md`, and
+   * `.parley/worktrees/` for a newborn front.
+   *
+   * `opts.gitCommonDir` is not the git common dir despite its name — the
+   * spawner passes the *discovery* directory, which is
+   * `<git-common-dir>/parley` for a repository and `<workspace>/.parley` for a
+   * workspace (`src/cli/main.ts`, the `__daemon` branch). Matching `.git`
+   * against it therefore never matched, so in production this returned `null`
+   * for every repository that has ever run parley — which silently disabled
+   * both the notes export and, on this branch, the entire birth path:
+   * `bearFrontFor` returns before it spawns anything when there is no root.
+   * A bare repository still has no worktree and still gets no file.
    */
   private repoRootForExport(): string | null {
-    const common = this.opts.gitCommonDir;
-    return basename(common) === ".git" ? dirname(common) : null;
+    const discovery = this.opts.gitCommonDir;
+    const parent = dirname(discovery);
+    // <repo>/.git/parley  ->  <repo>. A linked worktree resolves to the main
+    // repository's .git, which is where .parley/worktrees/ belongs anyway.
+    if (basename(discovery) === "parley" && basename(parent) === ".git") return dirname(parent);
+    // <workspace>/.parley  ->  <workspace>.
+    if (basename(discovery) === ".parley") return parent;
+    // Handed the git directory itself: what this function used to expect, and
+    // what tests that construct a daemon by hand still pass.
+    if (basename(discovery) === ".git") return parent;
+    return null;
   }
 
   private exportNotes(): void {

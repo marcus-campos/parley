@@ -1,7 +1,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { DEFAULTS } from "../protocol/types";
 import { locateRepo } from "../repo/locate";
-import { resolveIdentity, wakeAddress } from "../cli/identity";
+import { joinFrame, resolveIdentity, wakeAddress } from "../cli/identity";
 import { relative, isAbsolute } from "node:path";
 import { rememberSession } from "../cli/session";
 import { isEnabledForRepo } from "./claude-code";
@@ -97,17 +97,13 @@ export async function runHook(event: string): Promise<void> {
   // The harness session id is what keeps this front the same front across
   // every tool call, and across the rename the agent is asked to do.
   const session = input.session_id ?? process.env.PARLEY_SESSION ?? "";
-  let joined = await client.request({
-    op: "join", name: identity.name, mission: identity.mission,
-    harness: "claude-code", cwd: repo.cwd, kind: "agent",
-    branch: identity.branch, wake: wakeAddress(), session,
+  const join = (name?: string) => joinFrame(identity, {
+    harness: "claude-code", cwd: repo.cwd, kind: "agent", wake: wakeAddress(), session,
+    ...(name ? { name } : {}),
   });
+  let joined = await client.request(join());
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
-    joined = await client.request({
-      op: "join", name: String(joined.error.suggestion), mission: identity.mission,
-      harness: "claude-code", cwd: repo.cwd, kind: "agent",
-      branch: identity.branch, wake: wakeAddress(), session,
-    });
+    joined = await client.request(join(String(joined.error.suggestion)));
   }
   if (!joined.ok) { clearTimeout(budget); client.close(); return emit({}); }
 

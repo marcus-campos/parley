@@ -80,6 +80,13 @@ export const DEFAULTS = {
   ORPHAN_POOL_MS: 10 * 60_000,
   /** At most one front is created per window, however large the pool is. */
   BIRTH_COOLDOWN_MS: 5 * 60_000,
+  /**
+   * How long a newborn front has before it can be invited to go home. It is
+   * born because the pool was stale; if another front empties the pool while
+   * it is still starting up, it must still get a chance to look before being
+   * told there is nothing to look at.
+   */
+  RETIRE_GRACE_MS: 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

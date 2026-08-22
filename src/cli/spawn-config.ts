@@ -30,7 +30,24 @@ function spawnConfigPath(gitCommonDir: string): string {
 }
 
 export function readSpawnConfig(gitCommonDir: string): SpawnConfig {
-  const path = spawnConfigPath(gitCommonDir);
+  return readSpawnConfigIn(join(gitCommonDir, "parley"));
+}
+
+/**
+ * The same file, addressed by the directory it is actually in rather than by
+ * the git directory above it.
+ *
+ * The daemon is handed the discovery directory — `<git-common-dir>/parley` for
+ * a repository, `<workspace>/.parley` for a workspace — under a parameter
+ * still named `gitCommonDir`. Calling `readSpawnConfig` with it therefore
+ * looked for `<git-common-dir>/parley/parley/spawn.json`, a path nothing
+ * writes, so every daemon in production silently ran on `SPAWN_DEFAULTS` and
+ * `maxFronts` in `spawn.json` was never read by the process that enforces it.
+ * `endpoint.json` and `panel.json` both live directly in the discovery
+ * directory; so does this.
+ */
+export function readSpawnConfigIn(discoveryDir: string): SpawnConfig {
+  const path = join(discoveryDir, "spawn.json");
   if (!existsSync(path)) return { ...SPAWN_DEFAULTS };
   try {
     const raw = JSON.parse(readFileSync(path, "utf8")) as Partial<SpawnConfig>;

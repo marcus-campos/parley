@@ -231,22 +231,15 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
 }
 
 /**
- * A front parley created, holding nothing, with an empty pool, has no reason to
- * exist. Without this you accumulate newborns occupying the ceiling while none
- * of them works — which is the failure that looks exactly like success.
+ * Is this front spare capacity right now?
  *
- * A front a person opened is never retired. Their session is theirs.
- */
-export function shouldRetire(state: State, p: Participant): boolean {
-  if (p.born !== "parley" || p.gone) return false;
-  if (state.work.some((w) => w.state === "taken" && w.takenById === p.id)) return false;
-  if (state.work.some((w) => w.state === "open" || w.state === "offered")) return false;
-  return true;
-}
-
-/**
- * Alive fronts holding no explicit claim and no taken item — spare capacity
- * the doorbell may address.
+ * One definition, because there were two and they disagreed: `idleFronts`
+ * treated a non-auto, non-orphaned claim as busy, and `shouldRetire` ignored
+ * claims entirely — so a parley-born front that had claimed `src/api/**` with
+ * a declared intent, provably mid-edit, was simultaneously "busy, do not ring
+ * it" and "idle, retire it". Whichever of the two is right, they cannot both
+ * be, and a front cannot be too busy to be offered work and idle enough to be
+ * sent home in the same tick.
  *
  * A human watching the panel is filtered out: they are not a front to
  * dispatch to, and counting them as idle capacity would ring the bell at
@@ -255,6 +248,36 @@ export function shouldRetire(state: State, p: Participant): boolean {
  * An auto-claim does not count as busy either: it is the footprint of an
  * edit, not a declaration of what a front is doing — a session that swept
  * the repository would otherwise look permanently occupied.
+ */
+function isIdleFront(state: State, p: Participant): boolean {
+  if (p.kind !== "agent") return false;
+  if (state.claims.some((c) => c.ownerId === p.id && !c.auto && c.orphanedAtMs === null)) return false;
+  if (state.work.some((w) => w.state === "taken" && w.takenById === p.id)) return false;
+  return true;
+}
+
+/**
+ * A front parley created, idle, with an empty pool, has no reason to exist —
+ * and every minute it stays is money. A front a person opened is never
+ * retired, however idle it is: their session is theirs.
+ *
+ * `graceMs` is what stops a newborn being named on its very first tool call.
+ * It is spawned because the pool was stale; between the intent and its first
+ * `parley works` another front may well have emptied the pool, and without a
+ * grace period the answer to "you were born ten seconds ago" would be "go
+ * home" before it had any chance to read what it was born for.
+ */
+export function shouldRetire(state: State, p: Participant, ctx: Ctx, graceMs: number): boolean {
+  if (p.born !== "parley" || p.gone) return false;
+  if (!isIdleFront(state, p)) return false;
+  const joinedMs = Date.parse(p.joinedAt);
+  if (!Number.isNaN(joinedMs) && ctx.nowMs - joinedMs < graceMs) return false;
+  if (state.work.some((w) => w.state === "open" || w.state === "offered")) return false;
+  return true;
+}
+
+/**
+ * Alive fronts that are spare capacity — what the doorbell may address.
  *
  * In practice this only ever names a front holding a live connection.
  * `ORPHAN_POOL_MS` is longer than `LEASE_TTL_MS` on purpose: a front that has
@@ -264,12 +287,7 @@ export function shouldRetire(state: State, p: Participant): boolean {
  * gone before the doorbell would get the chance to ring for it.
  */
 export function idleFronts(state: State): Participant[] {
-  return liveParticipants(state).filter((p) => {
-    if (p.kind !== "agent") return false;
-    if (state.claims.some((c) => c.ownerId === p.id && !c.auto && c.orphanedAtMs === null)) return false;
-    if (state.work.some((w) => w.state === "taken" && w.takenById === p.id)) return false;
-    return true;
-  });
+  return liveParticipants(state).filter((p) => isIdleFront(state, p));
 }
 
 const MAX_NAMED_OFFERS = 3;

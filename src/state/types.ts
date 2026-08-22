@@ -40,8 +40,24 @@ export interface Participant {
   /**
    * Who created this session. `parley` fronts are the only ones parley can
    * genuinely wake, because it owns their process — see §4.6 of the spec.
+   *
+   * Written from `PARLEY_BORN`, which `bearFront` puts in the newborn's
+   * environment and `resolveIdentity` reads back. Set once, at the join that
+   * created this participant, and never revised: the only direction a later
+   * revision could take is `person` -> `parley`, and that is the direction
+   * that makes a person's session retirable by a frame anybody can send.
    */
   born: "person" | "parley";
+  /**
+   * When this front was last invited to retire, or `null` when it has no
+   * standing invitation.
+   *
+   * Rung once per episode — the same discipline as `nudgedAtMs` on a work
+   * item and `ownerNudgedAtMs` on a permission request. Without it the daemon
+   * re-sent the notice and re-attempted the cleanup on every tick and before
+   * every command, for as long as the front stayed on the bus.
+   */
+  retireNudgedAtMs: number | null;
 }
 
 export interface Claim {

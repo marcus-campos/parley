@@ -165,8 +165,7 @@ describe("only one daemon may serve a repository", () => {
     // maxFronts: 1 from boot — the one participant that is about to join
     // already fills that ceiling, so a stale, nobody-idle pool must stay
     // silent no matter how many ticks run.
-    mkdirSync(join(dir, "parley"), { recursive: true });
-    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 1 }));
+    writeFileSync(join(dir, "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 1 }));
 
     // The clock is injected so the pool can age past ORPHAN_POOL_MS (10
     // minutes) without the test actually waiting ten minutes — only the real
@@ -198,7 +197,7 @@ describe("only one daemon may serve a repository", () => {
     // Raise the ceiling on disk while the daemon is already running and
     // already past the cooldown-free first attempt — this is the one write
     // the watcher, not the boot-time read, is responsible for picking up.
-    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 6 }));
+    writeFileSync(join(dir, "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 6 }));
 
     const deadline = Date.now() + 3_000;
     let sawBirth = false;
@@ -214,8 +213,7 @@ describe("only one daemon may serve a repository", () => {
   test("summon honors the repository's configured ceiling, not a hardcoded default", async () => {
     async function summonAtCeiling(maxFronts: number) {
       const dir = tempRepo();
-      mkdirSync(join(dir, "parley"), { recursive: true });
-      writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts }));
+      writeFileSync(join(dir, "spawn.json"), JSON.stringify({ mode: "panel", maxFronts }));
       const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));
 
       const a = await RawClient.connect(endpoint.address);
@@ -247,8 +245,7 @@ describe("only one daemon may serve a repository", () => {
     // way a real restart on a real repository keeps its config and its
     // journal but cannot reuse a socket a dead process still holds.
     const dir = tempRepo();
-    mkdirSync(join(dir, "parley"), { recursive: true });
-    writeFileSync(join(dir, "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 2 }));
+    writeFileSync(join(dir, "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 2 }));
     const journalPath = join(dir, "journal.ndjson");
 
     const first = new ParleyDaemon({

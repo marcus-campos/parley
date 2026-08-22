@@ -144,6 +144,7 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     delivery: frame.connected === true ? "live" : frame.harness === "shell" ? "manual" : "hooks",
     wake: str(frame.wake) || null,
     born: frame.born === "parley" ? "parley" : "person",
+    retireNudgedAtMs: null,
   };
   state.participants[id] = participant;
 

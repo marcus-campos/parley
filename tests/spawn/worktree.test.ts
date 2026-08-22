@@ -33,17 +33,48 @@ describe("a worktree for a newborn front", () => {
     expect(a.branch).not.toBe(b.branch);
   });
 
-  test("an unchanged worktree is removed", () => {
+  test("an unchanged worktree is removed", async () => {
     const wt = addWorktree(repo, "pool-1");
-    expect(removeWorktreeIfClean(repo, wt.path)).toBe(true);
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(true);
     expect(existsSync(wt.path)).toBe(false);
   });
 
-  test("a worktree with work in it is kept — nobody's changes are thrown away", () => {
+  test("a worktree with work in it is kept — nobody's changes are thrown away", async () => {
     const wt = addWorktree(repo, "pool-1");
     writeFileSync(join(wt.path, "b.txt"), "work happened\n");
-    expect(removeWorktreeIfClean(repo, wt.path)).toBe(false);
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(false);
     expect(existsSync(wt.path)).toBe(true);
+  });
+
+  test("a committed worktree is clean again, and still is not thrown away while its front is live", async () => {
+    // The case that makes "clean" a dangerous proxy for "abandoned": a front
+    // that committed its work has a clean tree and is still sitting in it.
+    // Cleanliness is only ever the second half of the test — `leave` is the
+    // first (see src/daemon/server.ts, collectWorktree).
+    const wt = addWorktree(repo, "pool-1");
+    writeFileSync(join(wt.path, "b.txt"), "work happened\n");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: wt.path, stdio: "ignore" });
+    git("add", "-A");
+    git("commit", "-qm", "the front's work");
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(true);
+  });
+
+  test("removal never blocks the caller: git runs off the event loop", async () => {
+    // The daemon serves every front on one loop, from `handle()` — the path
+    // every hook frame takes, against a 30ms budget. Two synchronous `git`
+    // subprocesses there are tens of milliseconds of dead air for every other
+    // front on the bus.
+    //
+    // Measured, not asserted by inspection: a 1ms interval running across the
+    // call. With `execFileSync` the whole body runs before any timer can fire
+    // and the count is exactly 0; with `execFile` it is ~20 on this repository
+    // for the same ~25ms of git. The threshold is deliberately far from both.
+    const wt = addWorktree(repo, "pool-1");
+    let ticks = 0;
+    const interval = setInterval(() => { ticks++; }, 1);
+    await removeWorktreeIfClean(repo, wt.path);
+    clearInterval(interval);
+    expect(ticks).toBeGreaterThan(3);
   });
 
   test("the bus key is unchanged: every worktree shares one git-common-dir", () => {

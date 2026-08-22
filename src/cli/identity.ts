@@ -8,6 +8,16 @@ export interface Identity {
   provisional: boolean;
   mission: string;
   harness: string;
+  /**
+   * Who started this session, read from the environment `bearFront` writes.
+   *
+   * This is the consuming half of `PARLEY_BORN`. Without it the variable was
+   * written into every newborn's environment and read by nobody, so every
+   * participant arrived on the bus as `person` and `shouldRetire` — whose
+   * first line is `p.born !== "parley"` — was false for every front that has
+   * ever existed. Both ends were tested; the wire between them was not.
+   */
+  born: "person" | "parley";
 }
 
 /**
@@ -49,6 +59,35 @@ export function resolveIdentity(root: string, cwd: string, explicitName?: string
     provisional: !chosen,
     mission: process.env.PARLEY_MISSION?.trim() ?? "",
     harness: process.env.PARLEY_HARNESS?.trim() ?? detectHarness(),
+    // Set by `bearFront` and inherited by everything the newborn runs, which
+    // is exactly the scope wanted: every `parley` call a spawned front makes,
+    // through the hook or through its shell, is a call by a parley-born front.
+    born: process.env.PARLEY_BORN?.trim() === "parley" ? "parley" : "person",
+  };
+}
+
+/**
+ * The one place a `join` frame is built.
+ *
+ * There were four of them before, in three files, and `born` was in none —
+ * which is how a field the state machine gates a whole feature on could be
+ * produced by `bearFront`, consumed by `shouldRetire`, and never once travel
+ * between the two. A single producer is what makes "every join carries it" a
+ * property of the code rather than of four people remembering.
+ *
+ * `extra` carries what only the caller knows — `cwd`, `kind`, `session`,
+ * `wake`, `connected` — and may override any derived field (the NAME_TAKEN
+ * retry re-sends the same frame under the suggested name).
+ */
+export function joinFrame(identity: Identity, extra: Record<string, unknown>): Record<string, unknown> {
+  return {
+    op: "join",
+    name: identity.name,
+    mission: identity.mission,
+    harness: identity.harness,
+    branch: identity.branch,
+    born: identity.born,
+    ...extra,
   };
 }
 

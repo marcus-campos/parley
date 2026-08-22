@@ -177,6 +177,8 @@ export interface TickOptions {
   maxFronts?: number;
   /** At most one birth intent per window, regardless of pool size. */
   birthCooldownMs?: number;
+  /** How long a newborn is left alone before it can be invited to go home. */
+  retireGraceMs?: number;
 }
 
 /**
@@ -348,11 +350,29 @@ export function tick(
     }
   }
 
-  // 7. A newborn parley bore, holding nothing, beside a pool that has gone
-  //    empty, is not spare capacity waiting for work — it is the ceiling
-  //    quietly filled with nobody working. A front a person opened never
-  //    qualifies; `shouldRetire` is the line that keeps it that way.
-  const retire = liveParticipants(state).filter((p) => shouldRetire(state, p)).map((p) => p.id);
+  // 7. A newborn parley bore, idle, beside a pool that has gone empty, is not
+  //    spare capacity waiting for work — it is money being spent on nobody
+  //    working. A front a person opened never qualifies; `shouldRetire` is the
+  //    line that keeps it that way.
+  //
+  //    Invited once, not once per tick. The discipline is stated ten lines
+  //    above for the doorbell and it applies here for the same reason and one
+  //    more: an invitation the front has already read, re-sent every five
+  //    seconds and before every command it makes, is not a stronger
+  //    invitation. `retireNudgedAtMs` clears the moment the front stops
+  //    qualifying, so a pool that refills and empties again rings a second
+  //    time — one ring per episode, not one per lifetime.
+  const retireGrace = opts.retireGraceMs ?? DEFAULTS.RETIRE_GRACE_MS;
+  const retire: string[] = [];
+  for (const p of liveParticipants(state)) {
+    if (!shouldRetire(state, p, ctx, retireGrace)) {
+      p.retireNudgedAtMs = null;
+      continue;
+    }
+    if (p.retireNudgedAtMs !== null) continue;
+    p.retireNudgedAtMs = ctx.nowMs;
+    retire.push(p.id);
+  }
 
   return { state, broadcast, birth, retire };
 }
