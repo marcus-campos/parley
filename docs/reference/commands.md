@@ -68,10 +68,12 @@ Flags: `--global`, `--yes`
 ### `parley uninit`
 
 ```
-parley uninit
+parley uninit [--global]
 ```
 
-remove what init wrote
+remove what init wrote, --global included
+
+Flags: `--global`
 
 ### `parley doctor`
 
@@ -113,6 +115,8 @@ which front you are, and where
 parley join --as NAME [--mission "..."]
 ```
 
+announce yourself on the bus; the hooks already do this for you
+
 Flags: `--as`, `--mission`
 
 ### `parley rename`
@@ -120,6 +124,8 @@ Flags: `--as`, `--mission`
 ```
 parley rename --as NAME [--mission "..."]
 ```
+
+change the name and mission everyone else sees
 
 Flags: `--as`, `--mission`
 
@@ -129,11 +135,15 @@ Flags: `--as`, `--mission`
 parley leave
 ```
 
+step off the bus, releasing every path you hold
+
 ### `parley who`
 
 ```
 parley who
 ```
+
+everyone here: name, mission, branch, idle time and what each one holds
 
 ## Talking
 
@@ -143,6 +153,8 @@ parley who
 parley say [--to NAME] [--priority high] "text"
 ```
 
+tell everyone, or one front with --to
+
 Flags: `--priority`, `--to`
 
 ### `parley question`
@@ -151,19 +163,27 @@ Flags: `--priority`, `--to`
 parley question --to NAME "..." [--wait 60] [--ttl 600]
 ```
 
+ask when you need an answer back: they cannot go idle while it is open
+
 Flags: `--to`, `--ttl`, `--wait`
 
 ### `parley reply`
 
 ```
-parley reply <id> "answer"
+parley reply <id> "answer" [--text "..."]
 ```
+
+answer a question somebody is blocked on
+
+Flags: `--text`
 
 ### `parley ack`
 
 ```
 parley ack <id> ["got it, doing X"]
 ```
+
+close the loop, so the front that answered knows it landed
 
 ### `parley nudged`
 
@@ -179,17 +199,23 @@ record that you woke them, so parley stops asking
 parley questions
 ```
 
+what you owe an answer to, and what you are waiting on
+
 ### `parley drain`
 
 ```
 parley drain
 ```
 
+your unread messages, and only the unread ones
+
 ### `parley history`
 
 ```
 parley history [--limit 200]
 ```
+
+re-read the backlog without moving your read cursor
 
 Flags: `--limit`
 
@@ -201,6 +227,8 @@ Flags: `--limit`
 parley claim <paths...> [--intent "..."] [--auto]
 ```
 
+take files or globs; the answer carries the notes and the recent edits on them
+
 Flags: `--auto`, `--intent`
 
 ### `parley release`
@@ -209,6 +237,8 @@ Flags: `--auto`, `--intent`
 parley release [<paths...>] [--all]
 ```
 
+give them back — letting go is the answer to whoever was waiting
+
 Flags: `--all`
 
 ## Watching
@@ -216,12 +246,12 @@ Flags: `--all`
 ### `parley watch`
 
 ```
-parley watch [--web] [--port N] [--detach] [--stop]
+parley watch [--web] [--port N] [--detach] [--stop] [--no-open]
 ```
 
-live panel: fronts, feed and pending requests. Opens watching; press i (or s on the web) to speak. --detach keeps the web panel up after you close the terminal; --stop shuts that one down. Each repository gets its own port, so panels for several projects run side by side.
+live panel: fronts, feed and pending requests. Opens watching; press i (or s on the web) to speak. --detach keeps the web panel up after you close the terminal; --stop shuts that one down; --no-open leaves your browser alone. Each repository gets its own port, so panels for several projects run side by side.
 
-Flags: `--detach`, `--port`, `--stop`, `--web`
+Flags: `--detach`, `--no-open`, `--port`, `--stop`, `--web`
 
 ## Permission
 
@@ -231,6 +261,8 @@ Flags: `--detach`, `--port`, `--stop`, `--web`
 parley ask <path> --reason "..." [--ttl 300]
 ```
 
+ask the owner for a path that is theirs; silence until the ttl grants it, and says so by name
+
 Flags: `--reason`, `--ttl`
 
 ### `parley requests`
@@ -238,6 +270,8 @@ Flags: `--reason`, `--ttl`
 ```
 parley requests [--all]
 ```
+
+permission requests waiting, with the clock on each
 
 Flags: `--all`
 
@@ -247,6 +281,8 @@ Flags: `--all`
 parley grant <request> [--scope once|transfer]
 ```
 
+hand over a path you own
+
 Flags: `--scope`
 
 ### `parley deny`
@@ -254,6 +290,8 @@ Flags: `--scope`
 ```
 parley deny <request> --reason "..."
 ```
+
+refuse, with a reason the requester sees
 
 Flags: `--reason`
 
@@ -265,15 +303,19 @@ Flags: `--reason`
 parley note --title "..." [--body "..."] [--tags a,b] [--paths a,b]
 ```
 
+write down what the code does not say about itself; --paths is what hands it to whoever edits those files next
+
 Flags: `--body`, `--paths`, `--tags`, `--title`
 
 ### `parley decide`
 
 ```
-parley decide --title "..." [--body "..."] [--paths a,b]
+parley decide --title "..." [--body "..."] [--tags a,b] [--paths a,b]
 ```
 
-Flags: `--body`, `--paths`, `--title`
+record something binding: announced to everyone, and it stands until reversed
+
+Flags: `--body`, `--paths`, `--tags`, `--title`
 
 ### `parley reverse`
 
@@ -281,15 +323,19 @@ Flags: `--body`, `--paths`, `--title`
 parley reverse <id> [--reason "..."]
 ```
 
+un-bind a decision, keeping it on the record
+
 Flags: `--reason`
 
 ### `parley notes`
 
 ```
-parley notes [--tag x] [--path p] [--kind decision] [--export] [--import] [--query "..." [--k N]]
+parley notes [--tag x] [--path p] [--kind decision] [--active] [--export] [--import] [--query "..." [--k N]]
 ```
 
-Flags: `--export`, `--import`, `--k`, `--kind`, `--path`, `--query`, `--tag`
+read them back; --active drops the decisions that were reversed, --query ranks by relevance
+
+Flags: `--active`, `--export`, `--import`, `--k`, `--kind`, `--path`, `--query`, `--tag`
 
 ## Command results
 
@@ -299,6 +345,8 @@ Flags: `--export`, `--import`, `--k`, `--kind`, `--path`, `--query`, `--tag`
 parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
 ```
 
+record what a command produced, and the paths it depends on
+
 Flags: `--paths`, `--status`, `--summary`
 
 ### `parley results`
@@ -306,6 +354,8 @@ Flags: `--paths`, `--status`, `--summary`
 ```
 parley results [--fresh] [--key "..."] [--query "..." [--k N]]
 ```
+
+what is already known, and whether it still holds; --fresh hides anything a later edit invalidated
 
 Flags: `--fresh`, `--k`, `--key`, `--query`
 
@@ -317,11 +367,15 @@ Flags: `--fresh`, `--k`, `--key`, `--query`
 parley mode [off|advisory|enforced]
 ```
 
+how strict territory is; it belongs to the repository, not to a session
+
 ### `parley shape`
 
 ```
 parley shape [bus|pool|plan]
 ```
+
+where work comes from; read it back with no argument
 
 ## The work pool
 
@@ -331,6 +385,8 @@ parley shape [bus|pool|plan]
 parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
 ```
 
+publish discovered work, one item per path, offered first to whoever already holds it
+
 Flags: `--evidence`, `--kind`, `--review-of`
 
 ### `parley works`
@@ -338,6 +394,8 @@ Flags: `--evidence`, `--kind`, `--review-of`
 ```
 parley works [--state open|offered|taken|done] [--mine]
 ```
+
+what is in the pool, and who is holding what
 
 Flags: `--mine`, `--state`
 
@@ -347,11 +405,15 @@ Flags: `--mine`, `--state`
 parley take <id>
 ```
 
+take an open item or an offer made to you; the answer carries the evidence already gathered
+
 ### `parley drop`
 
 ```
 parley drop <id> [--reason "..."]
 ```
+
+hand it back to the pool, free
 
 Flags: `--reason`
 
@@ -361,6 +423,8 @@ Flags: `--reason`
 parley done <id> [--summary "..."]
 ```
 
+mark it finished
+
 Flags: `--summary`
 
 ## Global flags
@@ -369,5 +433,6 @@ Every command takes these.
 
 ```
 --json (machine output), --as NAME, --quiet
+--human (you are a person watching, not an agent)
 --help, --version
 ```

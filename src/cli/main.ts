@@ -33,61 +33,106 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              --global installs the Claude Code hooks once for
                              every project — the only way every worktree is
                              covered, since .claude/ is usually gitignored.
-  parley uninit              remove what init wrote
+  parley uninit [--global]   remove what init wrote, --global included
   parley doctor              diagnose transport, repo identity and the WSL boundary
   parley status              is a daemon up, and what does it hold
   parley stop                shut the daemon down
 
   parley whoami              which front you are, and where
   parley join --as NAME [--mission "..."]
+                             announce yourself on the bus; the hooks already do
+                             this for you
   parley rename --as NAME [--mission "..."]
-  parley leave
-  parley who
+                             change the name and mission everyone else sees
+  parley leave               step off the bus, releasing every path you hold
+  parley who                 everyone here: name, mission, branch, idle time
+                             and what each one holds
 
   parley say [--to NAME] [--priority high] "text"
+                             tell everyone, or one front with --to
   parley question --to NAME "..." [--wait 60] [--ttl 600]
-  parley reply <id> "answer"
+                             ask when you need an answer back: they cannot go
+                             idle while it is open
+  parley reply <id> "answer" [--text "..."]
+                             answer a question somebody is blocked on
   parley ack <id> ["got it, doing X"]
+                             close the loop, so the front that answered knows
+                             it landed
   parley nudged <id>         record that you woke them, so parley stops asking
-  parley questions
-  parley drain
+  parley questions           what you owe an answer to, and what you are
+                             waiting on
+  parley drain               your unread messages, and only the unread ones
   parley history [--limit 200]
+                             re-read the backlog without moving your read
+                             cursor
 
   parley claim <paths...> [--intent "..."] [--auto]
+                             take files or globs; the answer carries the notes
+                             and the recent edits on them
   parley release [<paths...>] [--all]
+                             give them back — letting go is the answer to
+                             whoever was waiting
 
-  parley watch [--web] [--port N] [--detach] [--stop]
+  parley watch [--web] [--port N] [--detach] [--stop] [--no-open]
                              live panel: fronts, feed and pending requests.
                              Opens watching; press i (or s on the web) to speak.
                              --detach keeps the web panel up after you close the
-                             terminal; --stop shuts that one down. Each
-                             repository gets its own port, so panels for several
-                             projects run side by side.
+                             terminal; --stop shuts that one down; --no-open
+                             leaves your browser alone. Each repository gets its
+                             own port, so panels for several projects run side
+                             by side.
 
   parley ask <path> --reason "..." [--ttl 300]
-  parley requests [--all]
+                             ask the owner for a path that is theirs; silence
+                             until the ttl grants it, and says so by name
+  parley requests [--all]    permission requests waiting, with the clock on each
   parley grant <request> [--scope once|transfer]
+                             hand over a path you own
   parley deny <request> --reason "..."
+                             refuse, with a reason the requester sees
 
   parley note --title "..." [--body "..."] [--tags a,b] [--paths a,b]
-  parley decide --title "..." [--body "..."] [--paths a,b]
+                             write down what the code does not say about
+                             itself; --paths is what hands it to whoever edits
+                             those files next
+  parley decide --title "..." [--body "..."] [--tags a,b] [--paths a,b]
+                             record something binding: announced to everyone,
+                             and it stands until reversed
   parley reverse <id> [--reason "..."]
-  parley notes [--tag x] [--path p] [--kind decision] [--export] [--import]
-                             [--query "..." [--k N]]
+                             un-bind a decision, keeping it on the record
+  parley notes [--tag x] [--path p] [--kind decision] [--active] [--export]
+                             [--import] [--query "..." [--k N]]
+                             read them back; --active drops the decisions that
+                             were reversed, --query ranks by relevance
 
   parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
+                             record what a command produced, and the paths it
+                             depends on
   parley results [--fresh] [--key "..."] [--query "..." [--k N]]
+                             what is already known, and whether it still holds;
+                             --fresh hides anything a later edit invalidated
 
   parley mode [off|advisory|enforced]
+                             how strict territory is; it belongs to the
+                             repository, not to a session
   parley shape [bus|pool|plan]
+                             where work comes from; read it back with no
+                             argument
 
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
+                             publish discovered work, one item per path,
+                             offered first to whoever already holds it
   parley works [--state open|offered|taken|done] [--mine]
-  parley take <id>
+                             what is in the pool, and who is holding what
+  parley take <id>           take an open item or an offer made to you; the
+                             answer carries the evidence already gathered
   parley drop <id> [--reason "..."]
+                             hand it back to the pool, free
   parley done <id> [--summary "..."]
+                             mark it finished
 
 Global flags: --json (machine output), --as NAME, --quiet
+              --human (you are a person watching, not an agent)
               --help, --version
 `;
 
@@ -531,7 +576,11 @@ async function main(): Promise<void> {
         return fail(parsed, "started the web panel but it never came up");
       }
 
-      return runWebPanel(repo, panelName, port, parsed.flags.open !== false, explicitPort !== "");
+      // `--no-open` is the spelling the help text offers, and it is the one the
+      // parser can actually produce: parseArgs only ever writes `true` or a
+      // string, so the old `parsed.flags.open !== false` was true for every
+      // input including `--no-open` — the browser opened regardless.
+      return runWebPanel(repo, panelName, port, parsed.flags["no-open"] !== true, explicitPort !== "");
     }
     return runWatch(repo, panelName);
   }
