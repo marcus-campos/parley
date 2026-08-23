@@ -51,9 +51,20 @@
 //      `186-191`, which are **comments**. A comment never executes and is
 //      never tested, so this ledger pins prose that the implementation can
 //      drift away from with nothing anywhere going red. That is not
-//      hypothetical on this repository: Task 3 of this branch found
-//      `src/hook.ts:89` describing behaviour the file does not have, and
-//      wrote the true behaviour over the comment rather than parroting it.
+//      hypothetical on this repository. This branch's own homepage promised
+//      that an unreachable daemon "degrades to advisory and says so"; the
+//      path that runs while you edit is `src/adapters/hook.ts:92`, which is
+//      `return emit({})` — it lets the edit through and says nothing. True of
+//      the CLI, false of the hook, and the page said it flat. Fixed at
+//      `docs/index.md:22`, which now separates the two.
+//
+//      (An earlier version of this note named `src/hook.ts` line 89 as the
+//      comment that lies. There is no such file — it is `src/adapters/hook.ts`
+//      — and the line 89 it meant is a comment that is **right**. A header
+//      arguing that prose drifts, sending the reader to a path that does not
+//      exist, on a branch whose thesis is "cite the line so the reader can
+//      check". `tests/docs/citations.test.ts` now resolves every `src/…:NN`
+//      this file writes, so the header is held to the rule it states.)
 //
 //      Do not read a green ledger as "the pages are right". Read it as "the
 //      pages still point where a human once looked".
@@ -72,7 +83,13 @@ const DOCS = join(ROOT, "docs");
 /** The ledger this generator owns. */
 export const LEDGER_PATH = join(ROOT, "tests", "docs", "citations.pinned");
 
-/** `src/path/file.ts:12` and `src/path/file.ts:12-34`, in backticks. */
+/**
+ * `src/state/work.ts:11` and `src/state/work.ts:11-15`, in backticks.
+ *
+ * Real paths on purpose: `tests/docs/citations.test.ts` resolves every
+ * citation-shaped token in this file, including the ones in its own comments,
+ * and an illustrative `src/path/file.ts` would have to be excused from that.
+ */
 export const CITATION = /`(src\/[A-Za-z0-9_./-]+\.ts):(\d+)(?:-(\d+))?`/g;
 
 export type Citation = {

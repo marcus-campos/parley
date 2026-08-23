@@ -89,6 +89,23 @@ describe("flagBool", () => {
  * The generator's fourth flag check cannot see any of this: it catches a flag
  * that is documented and never read, and all ten of these were read. It is the
  * layer below.
+ *
+ * WHAT THE TWO STRUCTURAL TESTS BELOW ARE. A lint on one file, bound to two
+ * identifier names — `parsed` and `p`, which are the idioms actually written
+ * in src/cli/main.ts. They are not a proof that the class cannot come back.
+ * Measured, not assumed; each of these passes both of them today:
+ *
+ *     const fl = parsed.flags;  if (fl.web)
+ *     const { flags } = parsed; if (flags.web)
+ *     const opts = parsed;      if (opts.flags.web)
+ *     parsed["flags"]!.web
+ *
+ * The yoda form `true === parsed.flags.web` is caught, by the bare-truthiness
+ * test rather than the one that looks like it should. Widening past two names
+ * means matching `.flags.` on any receiver, which starts matching protocol
+ * frames in src/state and stops being about this file at all. So: a lint that
+ * makes the wrong idiom inconvenient to reintroduce by copy-paste, which is
+ * how it would actually come back, and nothing stronger claimed.
  */
 describe("the boolean flags of the CLI", () => {
   const main = readFileSync(join(import.meta.dir, "..", "..", "src", "cli", "main.ts"), "utf8");
@@ -123,12 +140,40 @@ describe("the boolean flags of the CLI", () => {
   });
 
   test("every documented boolean flag reads a written value the same way", () => {
-    for (const flag of ["check", "yes", "json", "global", "all", "auto", "fresh", "mine", "active", "web", "detach", "stop", "export", "import", "quiet", "human", "workspace"]) {
+    for (const flag of ["check", "yes", "json", "global", "all", "auto", "fresh", "mine", "active", "web", "detach", "stop", "export", "import", "quiet", "human"]) {
       expect(flagBool(parseArgs(["x"]).flags, flag)).toBe(false);
       expect(flagBool(parseArgs(["x", `--${flag}`]).flags, flag)).toBe(true);
       expect(flagBool(parseArgs(["x", `--${flag}=true`]).flags, flag)).toBe(true);
       expect(flagBool(parseArgs(["x", `--${flag}=false`]).flags, flag)).toBe(false);
     }
+  });
+
+  test("the two raw-argv survivors are only ever handed bare flags", () => {
+    // `__refresh-adapters` reads `argv.includes("--yes")` and
+    // `argv.includes("--json")` — the exact-match assumption `--detach=true`
+    // broke, still standing in two places. It is unreachable there: the branch
+    // runs before parseArgs, the command is hidden, and the only caller spawns
+    // it with bare flags. That is what makes it safe, so that is what is
+    // pinned; if the caller ever passes `--yes=$X`, this goes red.
+    const update = readFileSync(join(import.meta.dir, "..", "..", "src", "cli", "update.ts"), "utf8");
+    expect(update).toContain('["__refresh-adapters", ...(opts.assumeYes ? ["--yes"] : []), ...(opts.json ? ["--json"] : [])]');
+    expect(code).toContain('argv.includes("--yes")');
+  });
+
+  test("--workspace is a valued flag and is gated on presence, not on truth", () => {
+    // The one hybrid in main.ts, and the one place the conversion to `flagBool`
+    // could make a flag the person typed disappear. `--workspace` bare means
+    // "find the workspace file here"; with a value it names the file. Gated
+    // through `flagBool`, a value the accessor reads as off makes the flag
+    // vanish — and `off` is an ordinary filename:
+    expect(flagBool(parseArgs(["init", "--workspace", "off"]).flags, "workspace")).toBe(false);
+    expect(flagString(parseArgs(["init", "--workspace", "off"]).flags, "workspace")).toBe("off");
+    // …so `parley init --workspace off` would skip the workspace branch and
+    // fall through to a normal `runInit`, writing adapter files into the
+    // current repository. Before the conversion it entered the branch and
+    // failed loudly on a file it could not read, which is the right answer.
+    expect(code).toContain('parsed.command === "init" && "workspace" in parsed.flags');
+    expect(code).not.toMatch(/flagBool\(\s*(?:parsed|p)\.flags\s*,\s*"workspace"/);
   });
 
   test("--detach=true does not detach forever, because the child no longer keeps it", () => {

@@ -150,6 +150,34 @@ describe("what the site cites", () => {
     expect(round.find((c) => digest(c.text) === digest(withBlank!.text))).toBeDefined();
   });
 
+  test("the generator's own comments cite paths that resolve", () => {
+    // The header of scripts/gen-citations.ts argues that prose drifts away
+    // from code, and its one concrete proof was `src/hook.ts:89` — a comment
+    // that lies. There is no such file (it is src/adapters/hook.ts), and the
+    // line 89 it meant is a comment that is correct. The sentence written to
+    // make the risk read as demonstrated sent the reader to a path that does
+    // not exist, at a line that disproved it, in a file outside `sitePages`
+    // that this ledger therefore does not pin.
+    //
+    // So the rule the header states now applies to the header. Existence and
+    // range only, never content: line numbers are deliberately not pinned
+    // anywhere in this design, and pinning them here would make every edit to
+    // src/state/work.ts a failure in a comment about comments.
+    const source = readFileSync(join(root, "scripts", "gen-citations.ts"), "utf8");
+    const named = [...source.matchAll(CITATION)];
+    expect(named.length).toBeGreaterThanOrEqual(4);
+    const broken: string[] = [];
+    for (const [whole, file, from, to] of named) {
+      if (!existsSync(join(root, file!))) {
+        broken.push(`${whole} — no such file`);
+        continue;
+      }
+      const lines = readFileSync(join(root, file!), "utf8").split("\n").length;
+      if (Number(to ?? from) > lines) broken.push(`${whole} — that file has ${lines} lines`);
+    }
+    expect(broken).toEqual([]);
+  });
+
   const cited = (page: string) => [...readFileSync(join(root, page), "utf8").matchAll(CITATION)].length;
 
   test("every concept page carries its own citations, not the site's average", () => {
@@ -386,22 +414,39 @@ describe("the wiring that keeps the ledger honest", () => {
     // one of those regions renders on the published page and is pinned by
     // nothing. Latent today — the five included regions carry no citations —
     // and this is what keeps it latent rather than a comment hoping so.
+    //
+    // Its reach, measured rather than assumed. The first cut of this test
+    // matched `#([a-z-]+)` and found regions with `line.includes(...)`, so a
+    // region named `Setup2` was unscanned and a search for `#region one-rule`
+    // would have stopped on `#region one-rule-extra` had one come first. Both
+    // are closed below — the marker is matched whole, the name is matched in
+    // full — and a whole-file include, which has no fragment at all, is now
+    // scanned end to end instead of falling out of the regex.
     const readme = readFileSync(join(root, "README.md"), "utf8").split("\n");
-    const included = sitePages(join(root, "docs"))
-      .flatMap((page) => [...readFileSync(join(root, page), "utf8").matchAll(/<!--@include: [^#]*#([a-z-]+)-->/g)])
-      .map((m) => m[1]!);
-    expect(included.length).toBeGreaterThanOrEqual(5);
+    const includes = sitePages(join(root, "docs")).flatMap((page) =>
+      [...readFileSync(join(root, page), "utf8").matchAll(/<!--@include: ([^\s>]+?)(?:#([A-Za-z0-9_-]+))?-->/g)]
+        .map((m) => ({ page, target: m[1]!, region: m[2] })),
+    );
+    expect(includes.length).toBeGreaterThanOrEqual(5);
+    // Every include on this site pulls from the README. A second target would
+    // need reading too, so it fails here rather than being skipped in silence.
+    expect([...new Set(includes.map((i) => i.target))]).toEqual(["../../README.md"]);
 
     const offenders: string[] = [];
-    for (const region of included) {
-      const from = readme.findIndex((l) => l.includes(`#region ${region}`));
-      const to = readme.findIndex((l) => l.includes(`#endregion ${region}`));
-      expect(from).toBeGreaterThanOrEqual(0);
-      expect(to).toBeGreaterThan(from);
+    for (const { region } of includes) {
+      let from = 0;
+      let to = readme.length - 1;
+      if (region !== undefined) {
+        from = readme.findIndex((l) => l.trim() === `<!-- #region ${region} -->`);
+        to = readme.findIndex((l) => l.trim() === `<!-- #endregion ${region} -->`);
+        expect(from).toBeGreaterThanOrEqual(0);
+        expect(to).toBeGreaterThan(from);
+      }
+      const where = region === undefined ? "the whole file, included with no fragment" : `#region ${region}`;
       for (const [i, line] of readme.slice(from, to + 1).entries()) {
         for (const m of line.matchAll(CITATION)) {
           offenders.push(
-            `README.md:${from + i + 1} is inside #region ${region}, which the site includes, and it ` +
+            `README.md:${from + i + 1} is inside ${where}, which the site includes, and it ` +
               `cites \`${m[1]}:${m[2]}\`. The ledger reads raw markdown and never expands includes, so ` +
               `that citation is published and pinned by nothing. Expand the includes in ` +
               `collectCitations — do not move the citation out of the region to hide it.`,

@@ -226,6 +226,13 @@ async function main(): Promise<void> {
       const found = locateRepo();
       here = { gitCommonDir: found.gitCommonDir, root: found.root };
     } catch { /* run from outside a repository is fine */ }
+    // Deliberately `argv.includes` and not `flagBool`, which is the one
+    // accessor everywhere else in this file. This branch runs before
+    // `parseArgs` and reads raw argv, and it is not a command a person types:
+    // src/cli/update.ts spawns it with bare `--yes` / `--json` and nothing
+    // else. So the exact-match assumption that `--detach=true` broke cannot be
+    // reached here — there is no spelling to get wrong. A reader converging on
+    // "one accessor" will find these two survivors; they are on purpose.
     return refreshAllAdapters({
       assumeYes: argv.includes("--yes"),
       json: argv.includes("--json"),
@@ -291,7 +298,17 @@ async function main(): Promise<void> {
 
   // Marking a workspace happens before repository lookup, because the whole
   // point is that the directory is not itself a repository.
-  if (parsed.command === "init" && flagBool(parsed.flags, "workspace")) {
+  //
+  // Presence, not truth. `--workspace` is the one hybrid in this file: bare it
+  // means "find the workspace file here", with a value it names the file. Read
+  // through `flagBool`, `parley init --workspace off` — `off` being a
+  // perfectly ordinary filename — reads as *not given*, skips this branch and
+  // falls through to a normal `runInit` that writes adapter files into the
+  // current repository. Before, it entered here and failed loudly on a file it
+  // could not read, which is the right answer. A valued flag must never be
+  // routed through the boolean accessor; the value is read at `flagString`
+  // below.
+  if (parsed.command === "init" && "workspace" in parsed.flags) {
     const {
       findWorkspaceRoot, markAsWorkspace, membersOf, readWorkspaceFile, workspaceFilesIn,
     } = await import("../repo/workspace");

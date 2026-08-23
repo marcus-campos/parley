@@ -12,7 +12,7 @@ they have to answer (`src/state/permissions.ts:46-53`). Only the owner may
 answer, with `parley grant <id> --scope once|transfer` or
 `parley deny <id> --reason "..."`, and a request already settled cannot be
 answered again (`src/state/permissions.ts:99-139`, CLI at
-`src/cli/main.ts:822-834`). `scope: once` carves out just the requested
+`src/cli/main.ts:839-851`). `scope: once` carves out just the requested
 path; `scope: transfer` moves the whole overlapping claim to the requester
 (`src/state/permissions.ts:78-96`). A request's state machine is
 `pending → granted | denied | granted_by_timeout`.
