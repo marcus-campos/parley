@@ -58,18 +58,22 @@ want the panel on your local browser anyway, forward the port instead of
 changing the bind address:
 
 Start the panel on the remote box first and **read the port off the URL it
-prints** — do not guess it. `7717` is the base of a range, not the port: the
-panel listens on `7717 + (hash of the repository id % 200)`, so any port from
-`7717` to `7916` is normal and this repository, for instance, derives `7780`
-(`src/cli/web.ts:79-85`). Forward the port you actually saw:
+prints** — do not guess it, and do not copy one out of a document. `7717` is
+the base of a range, not the port: the panel listens on `7717 + (hash of the
+repository id % 200)`, so any port from `7717` to `7916` is normal
+(`src/cli/web.ts:79-85`). The repository id is a hash of the canonical path to
+the repository's git directory (`src/repo/canonical.ts:64-66`), not of its
+name, so the same project cloned into two directories derives two different
+ports and no page can tell you yours. Forward the one you actually saw:
 
 ```bash
 # on the remote box
 parley watch --web --detach --no-open
-# parley: web panel on http://127.0.0.1:7780/?t=<token>
+# parley: web panel on http://127.0.0.1:PORT/?t=<token>
+#   ^ PORT is whatever this line prints. Read it here.
 
-# on your local machine — 7780 here because that is what it printed
-ssh -L 7780:127.0.0.1:7780 you@remote-box
+# on your local machine, PORT on both sides of the -L
+ssh -L PORT:127.0.0.1:PORT you@remote-box
 ```
 
 Then open the printed URL unchanged in your local browser, token and all,

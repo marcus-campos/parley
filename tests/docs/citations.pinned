@@ -1008,6 +1008,10 @@
 |   for (const ch of repoId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
 |   return base + (hash % span);
 | }
+@ docs/guide/panel.md src/repo/canonical.ts 70fe9023e45d
+| /** sha256 of the canonical path, truncated to 16 lowercase hex characters. */
+| export function repoId(canonicalPath: string): string {
+|   return createHash("sha256").update(canonicalPath, "utf8").digest("hex").slice(0, 16);
 @ docs/guide/setup.md src/transport/address.ts 16f79399fa00
 | export function resolveAddress(repoId: string, env: AddrEnv): Address {
 |   if (env.platform === "win32") {
