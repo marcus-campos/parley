@@ -563,14 +563,18 @@ deliberately:
   texts are. So enabling a model does two things before it will answer
   anything. It subtracts the table's own centre of mass from every vector,
   document and query alike, which is what stops that drift — measured across
-  every text-length regime, the score of unrelated text goes from *"0.76 to
-  0.85, which is 5 to 12σ of movement from length alone"* to *"0.00, ±0.06 at
-  256 dimensions and ±0.09 at 128, with 0.1 to 0.35σ of residual drift left"*.
-  Not perfectly still, and worth saying so; still a different universe. Then
-  it measures what unrelated text actually scores on that table, over at least
-  256 disjoint slices of the model's own vocabulary — a table too small for
-  that many is refused rather than estimated from a handful — and keeps
-  `mean + 4σ` of that as an absolute floor. A hit clears that one number or it
+  every text-length regime from one token against one to eight against sixty,
+  the score of unrelated text goes from *"0.76 to 0.98, which is 11σ of
+  movement from length alone against the widest regime's own spread and over
+  100σ against the narrowest's"* to *"0.00, ±0.06 at 256 dimensions and ±0.09
+  at 128, with 0.02 to 0.06σ of residual drift for text that is about
+  nothing, and up to 0.5σ for text that is about one thing on a table with
+  only a dozen topic directions to spare"*. Not perfectly still, and worth
+  saying so; still a different universe. Then it measures what unrelated text
+  actually scores on that table, over 4,096 pairs drawn from a vocabulary big
+  enough to lay out at least 256 of them without repeating a word — a table
+  too small for that is refused rather than estimated from a handful — and
+  keeps `mean + 4σ` of that as an absolute floor. A hit clears that one number or it
   is not returned: the same verdict whether it is the only candidate or one of
   forty, and regardless of what anything else scored. Two notes that match
   equally well both come back; a corpus where everything is equally irrelevant

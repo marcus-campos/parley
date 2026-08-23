@@ -44,10 +44,13 @@ export interface Calibration {
  * The pseudo-documents the null is measured on: a few tokens on one side (a
  * query), a couple of dozen on the other (a note), pooled exactly the way
  * `embed` pools real text. Length matters enormously on the raw vectors — the
- * null cosine travels 5 to 12σ between the shortest and longest regimes,
- * measured — but after debiasing it is down to 0.07-0.35σ, which is the whole
- * reason the debias step exists and the reason one stored number can be
- * honest for every query. `debias` in embed.ts carries the table.
+ * null cosine travels 11σ between the shortest and longest regimes measured
+ * against the widest one's own spread, and over 100σ against the narrowest's
+ * — but after debiasing the drift is 0.02 to 0.06σ for pseudo-documents
+ * shaped like these, which is the whole reason the debias step exists and the
+ * reason one stored number can be honest for every query. `debias` in
+ * embed.ts carries both tables, including what changes when the pooled text
+ * is coherent rather than drawn from across the vocabulary.
  */
 const QUERY_TOKENS = 4;
 const DOC_TOKENS = 20;

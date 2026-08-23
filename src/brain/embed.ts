@@ -115,18 +115,48 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * direction, and with it almost all of the drift.
  *
  * Measured across every length regime from one token against one to eight
- * against sixty, on a 256-dimension table: raw, the null mean travels 0.758
- * to 0.854 against a σ of 0.011-0.020 — **5 to 9 σ of movement driven by
- * text length alone**, and 6 to 12 σ on a more anisotropic table, which is
- * why no single raw floor can be right for both short and long text.
+ * against sixty, on a 256-dimension table of 20,000 rows:
+ *
+ * ```
+ *   raw null mean       1x1      1x6     4x20     8x60    span
+ *   anisotropy 2.5   0.7583   0.8484   0.9549   0.9780   0.220
+ *                sd  0.0205   0.0121   0.0044   0.0021
+ *   anisotropy 5.0   0.9262   0.9561   0.9882   0.9944   0.068
+ *                sd  0.0061   0.0033   0.0012   0.0005
+ * ```
+ *
+ * That span is **11 σ of movement from text length alone measured against
+ * the widest regime's own spread, and 100 to 126 σ against the narrowest's**
+ * — on both tables. It is not a close thing, and no single raw floor can be
+ * right for both a three-word query and a four-hundred-word note. (Two
+ * earlier versions of this comment said 4 σ and then 5-12 σ. Both were
+ * measured on a truncated grid — the first missing the 1x1 end, the second
+ * missing the 8x60 end — and both understated the case for this function.)
+ *
  * Centered, the σ is what stops moving: 0.061-0.064 in every regime, and
  * 0.086-0.091 on a 128-dimension table (it is `1/sqrt(dims)`, not a
- * constant). The centered *mean* is not perfectly still — it carries a small
- * residual, measured between 0.07 σ and 0.35 σ depending on how many
- * independent topic directions the table has, and it moves toward zero from
- * below, which is toward silence. Not nothing, and stated rather than
- * rounded away; against raw's 5-12 σ it is a different universe, and that is
- * what lets one stored floor be honest for every query.
+ * constant). The centered *mean* is not perfectly still either, and what
+ * moves it is not text length but whether the pooled text is *about
+ * something*:
+ *
+ * ```
+ *   centered null mean, 1x1 -> 8x60      T=200    T=20    T=12
+ *   incoherent (words from anywhere)     0.06σ   0.03σ   0.02σ
+ *   coherent   (words from one topic)    0.12σ   0.39σ   0.53σ
+ * ```
+ *
+ * `T` is the number of independent topic directions the table has after the
+ * mean row is out. Two *different* topic residuals have expected cosine
+ * `-1/(T-1)`, and pooling more tokens converges each side onto its own topic
+ * residual — so a coherent pair walks toward that value, which is **away
+ * from zero and downward**, i.e. toward silence for long documents. An
+ * incoherent pair never converges on anything and stays put, which is why
+ * `calibrate` — whose pseudo-documents are incoherent — measures a null that
+ * barely drifts at all. The size of the coherent drift is set by `T`, and a
+ * table with a dozen effective directions is already close to the degeneracy
+ * `floor >= 1` refuses outright. Against raw's 11-126 σ, either column is a
+ * different universe, and that is what lets one stored floor be honest for
+ * every query.
  *
  * The zero vector stays the zero vector, deliberately. Text with no known
  * token has nothing to compare, and `-mean` would be a real direction
