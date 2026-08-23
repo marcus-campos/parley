@@ -1,9 +1,17 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, relative, sep } from "node:path";
 import { sitePages } from "../../scripts/gen-citations";
 
 const root = join(import.meta.dir, "..", "..");
+
+/** The exclusion list VitePress is actually given, read out of the config. */
+function srcExclude(): string[] {
+  const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
+  const literal = config.match(/srcExclude:\s*\[([^\]]*)\]/);
+  if (!literal) throw new Error("docs/.vitepress/config.ts declares no srcExclude");
+  return [...literal[1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+}
 
 describe("the documentation site", () => {
   test("it has a config that actually defines the VitePress site", () => {
@@ -28,9 +36,64 @@ describe("the documentation site", () => {
   });
 
   test("specs and plans are excluded from the build — they are working documents", () => {
-    const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
-    expect(config).toContain("srcExclude");
-    expect(config).toContain("superpowers/**");
+    expect(srcExclude()).toEqual(["superpowers/**", "**/README.md"]);
+  });
+
+  test("the set the scanners walk is the set the site publishes", () => {
+    // `srcExclude` had two independent implementations — `sitePages` in
+    // scripts/gen-citations.ts and a copy in tests/docs/no-duplication.test.ts
+    // — and the only test on either asserted that the config *string*
+    // contained "srcExclude" and "superpowers/**". Nothing checked that any of
+    // the three agreed. The copy is gone; this is what holds the survivor to
+    // the config.
+    //
+    // The direction that matters is narrowing, not widening. `sitePages`
+    // recurses, so a new page or subdirectory under docs/ is scanned the day
+    // it lands — that is the safe default and it is why this was never urgent.
+    // The blind spot has to be *created*: drop `superpowers/**` from
+    // `srcExclude` to publish the plans and seven working documents go live
+    // carrying `--as`, `--evidence`, `--kind`, `--query`, `--review-of`,
+    // `--summary`, `--permission-mode` and more, none of which the CLI reads —
+    // and neither the flag scan nor the citation ledger sees one of them,
+    // because both walk a list that hardcodes the skip. That is the `--speak`
+    // mechanism one level of indirection up, and this round is what made
+    // `sitePages` the source of truth for both scans.
+    const patterns = srcExclude();
+
+    // A glob translator for the two forms VitePress is actually given. Five
+    // lines, because the alternative — writing "skip superpowers/" down a
+    // third time — is the defect being closed.
+    const matches = (pattern: string, page: string): boolean => {
+      const rx = pattern
+        .split("**")
+        .map((part) => part.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*"))
+        .join(".*");
+      return new RegExp(`^${rx}$`).test(page);
+    };
+
+    // Every markdown file under docs/, including the ones srcExclude hides.
+    // `.vitepress` is skipped here and in `sitePages` and is *not* in
+    // srcExclude, which is correct rather than a mismatch: it holds the site's
+    // own config and its build output, which VitePress never treats as
+    // content, so there is nothing for srcExclude to exclude. Walking it would
+    // make this test depend on whether `docs:build` had been run.
+    const all = (dir: string, found: string[] = []): string[] => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== ".vitepress") all(full, found);
+        } else if (entry.name.endsWith(".md")) {
+          found.push(relative(join(root, "docs"), full).split(sep).join("/"));
+        }
+      }
+      return found;
+    };
+
+    const every = all(join(root, "docs"));
+    const published = every.filter((page) => !patterns.some((pat) => matches(pat, page)));
+    // Vacuity: if nothing were excluded the two sets would agree trivially.
+    expect(every.length).toBeGreaterThan(published.length);
+    expect(published.map((p) => `docs/${p}`).sort()).toEqual(sitePages(join(root, "docs")).sort());
   });
 
   test("vitepress is a devDependency and never a runtime one", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join } from "node:path";
+import { sitePages } from "../../scripts/gen-citations";
 
 const root = join(import.meta.dir, "..", "..");
 const docs = join(root, "docs");
@@ -17,24 +18,16 @@ function guidePages(): string[] {
  * This describe block is called "the site never becomes a second copy" and the
  * duplication checks only ever walked `docs/guide/`. Six concept pages and two
  * reference pages were outside it: an entire README region appended verbatim to
- * `docs/concepts/presence.md` passed the whole suite and built clean. The
- * exclusions below are exactly `srcExclude` in docs/.vitepress/config.ts — if a
- * file publishes, it is checked.
+ * `docs/concepts/presence.md` passed the whole suite and built clean.
+ *
+ * This *was* a second implementation of the walker, sitting beside the
+ * generator's and agreeing with it only by coincidence — the same shape of
+ * defect the block is named after. It is now the generator's, which is the one
+ * `docs:citations` and the flag scan already use, tied to `srcExclude` by a
+ * test in tests/docs/site-build.test.ts. The generator returns repo-relative
+ * paths (`docs/guide/panel.md`), so pages are read from `root`, not `docs`.
  */
-function sitePages(dir = docs, found: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    const rel = relative(docs, full);
-    if (entry.isDirectory()) {
-      // `superpowers/**` are working documents and `.vitepress` is the build.
-      if (entry.name === "superpowers" || entry.name === ".vitepress") continue;
-      sitePages(full, found);
-    } else if (entry.name.endsWith(".md") && entry.name !== "README.md") {
-      found.push(rel.split(sep).join("/"));
-    }
-  }
-  return found;
-}
+const pagesOfSite = (): string[] => sitePages(docs);
 
 function paragraphs(t: string): string[] {
   return t
@@ -143,17 +136,17 @@ describe("the site never becomes a second copy", () => {
     // The check below is a loop over this list. If the walker ever stopped
     // finding the concept and reference pages, every duplication assertion
     // would keep passing over a shrinking set and say nothing about it.
-    const pages = sitePages();
+    const pages = pagesOfSite();
     expect(pages.length).toBeGreaterThanOrEqual(14);
     for (const expected of [
-      "index.md",
-      "guide/what-it-is.md",
-      "concepts/presence.md",
-      "concepts/territory.md",
-      "reference/commands.md",
-      "reference/compatibility.md",
-      "ARCHITECTURE.md",
-      "PROTOCOL.md",
+      "docs/index.md",
+      "docs/guide/what-it-is.md",
+      "docs/concepts/presence.md",
+      "docs/concepts/territory.md",
+      "docs/reference/commands.md",
+      "docs/reference/compatibility.md",
+      "docs/ARCHITECTURE.md",
+      "docs/PROTOCOL.md",
     ]) {
       expect(pages).toContain(expected);
     }
@@ -161,8 +154,8 @@ describe("the site never becomes a second copy", () => {
 
   test("no long paragraph appears in both the README and a page of the site", () => {
     const readmeParas = new Set(paragraphs(readme));
-    for (const page of sitePages()) {
-      const text = readFileSync(join(docs, page), "utf8");
+    for (const page of pagesOfSite()) {
+      const text = readFileSync(join(root, page), "utf8");
       for (const para of paragraphs(text)) {
         expect(readmeParas.has(para)).toBe(false);
       }
@@ -177,8 +170,8 @@ describe("the site never becomes a second copy", () => {
     const readmeParas = paragraphs(readme);
     expect(readmeParas.length).toBeGreaterThanOrEqual(20);
     let compared = 0;
-    for (const page of sitePages()) {
-      const text = readFileSync(join(docs, page), "utf8");
+    for (const page of pagesOfSite()) {
+      const text = readFileSync(join(root, page), "utf8");
       for (const sitePara of paragraphs(text)) {
         for (const readmePara of readmeParas) {
           const overlap = shingleOverlap(sitePara, readmePara);
