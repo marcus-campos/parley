@@ -117,10 +117,14 @@ function ignoreNewbornWorktrees(repoRoot: string): void {
  * is what keeps "at most once per five minutes" from ever becoming "forever".
  */
 export function addWorktree(repoRoot: string, name: string): Worktree {
-  ignoreNewbornWorktrees(repoRoot);
   const dir = join(worktreeHome(repoRoot), name);
   const branch = `parley/${name}`;
   git(repoRoot, ["worktree", "add", "-b", branch, dir, "HEAD"]);
+  // After the checkout, never before: writing it first would create
+  // `<repoRoot>/.parley` for a `repoRoot` that does not exist, and a birth
+  // that should have failed outright would half-happen in a directory nobody
+  // asked for. `tests/spawn/birth.test.ts` says so.
+  ignoreNewbornWorktrees(repoRoot);
   return { path: dir, branch };
 }
 
