@@ -271,7 +271,6 @@ export class ParleyDaemon {
     if (expired.broadcast.length) this.push(expired.broadcast, null);
     this.bearFrontFor(expired.birth, ctx);
     this.retireFronts(expired.retire, ctx);
-    this.sweepCollections(ctx.nowMs);
 
     // Journal BEFORE responding. This ordering is the entire crash story.
     const entry: JournalEntry = { at: ctx.now, actorId: conn.participantId, frame };
@@ -296,6 +295,19 @@ export class ParleyDaemon {
       this.scheduleCollection(conn.participantId ? this.state.participants[conn.participantId] : undefined);
       conn.participantId = null;
     }
+
+    // After `apply`, never before. The sweep asks "is anybody still standing
+    // in there", and it can only see participants the state already has — so
+    // run before the frame is applied, the participant arriving *on this very
+    // frame* is invisible to it. A front that says `parley leave` and then
+    // makes one tool call longer than `COLLECT_AFTER_LEAVE_MS` — a full test
+    // run, a build — had its directory removed by the same hook frame that was
+    // supposed to cancel the collection, because the sweep decided first and
+    // the cancel landed one statement later. Same for a person opening a
+    // session inside `.parley/worktrees/pool-1` to read what a departed
+    // newborn did: their first hook frame deleted the checkout they had just
+    // opened.
+    this.sweepCollections(ctx.nowMs);
 
     this.send(conn, outcome.response);
     if (outcome.broadcast.length) this.push(outcome.broadcast, conn);

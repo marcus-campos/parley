@@ -273,6 +273,67 @@ describe("the newborn's worktree", () => {
     expect(existsSync(join(worktree, "a.txt"))).toBe(true);
   });
 
+  test("a front that says leave and then makes one *long* tool call keeps its directory", async () => {
+    // The same shape as above, with the clock crossing the deadline — which is
+    // the only version that could ever have failed. POOL-1 runs `parley leave`
+    // at 14:00 and then makes a single tool call that outlasts
+    // `COLLECT_AFTER_LEAVE_MS`: a full test run, a build. Its PostToolUse hook
+    // re-joins at 14:06, and that re-join must cancel the collection.
+    //
+    // It did not. `handle()` swept *before* it applied the frame, so the
+    // joining participant was invisible to the sweep that ran on its own join:
+    // the directory was removed first and the cancel arrived one statement
+    // later. The test above passes either way, because its clock never crosses
+    // the deadline and so nothing is ever collected in it.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+
+    clock += DEFAULTS.RETIRE_GRACE_MS + 1;
+    await front.send({ op: "drain" });
+    await front.send({ op: "leave" });
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    // And it stays cancelled: the schedule is gone, not merely postponed.
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
+  test("a person opening a session inside a departed newborn's worktree keeps it", async () => {
+    // The other half of the same defect, and a different branch of the sweep:
+    // not the front reattaching to its own participant, but somebody new
+    // standing in that directory. A person opens a session in
+    // `.parley/worktrees/pool-1` to read what POOL-1 did, long after POOL-1
+    // left. Their very first hook frame swept before it applied, and deleted
+    // the checkout they had just opened.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const pool = await connectTo(endpoint.address);
+    await pool.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    await pool.send({ op: "leave" });
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    delete process.env.PARLEY_BORN;
+    process.env.PARLEY_NAME = "DEVELOP";
+    const person = await connectTo(endpoint.address);
+    const frame = joinFrame(resolveIdentity(worktree, worktree), { cwd: worktree, kind: "agent", session: "s-person" });
+    expect(frame.born).toBe("person");
+    await person.send(frame);
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await person.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
   test("a front that leaves holding uncommitted work keeps its directory", async () => {
     const repo = gitRepo();
     const { env, worktree } = bearOne(repo);
