@@ -62,6 +62,26 @@ describe("territory", () => {
     expect(apply(state, campo, { v: 1, op: "claim", paths: ["src/app.ts"] }, at(300)).response.ok).toBe(true);
   });
 
+  test("release with no paths releases everything, whatever `all` says", () => {
+    // `all` is not consulted when `paths` is empty — territory.ts reads
+    // `frame.all === true || paths.length === 0`. Written down because a fix
+    // report recorded the opposite as a measurement: it claimed
+    // `parley release --all src/a.ts` was the one behaviour change the boolean
+    // flag conversion cost, on the reasoning that the greedy parser swallows
+    // the path as `--all`'s value, so `all` used to arrive false and now
+    // arrives true. Both arrive with `paths: []`, and both release everything.
+    // A wrong diagnosis recorded as fact is how the next person builds around
+    // a phantom, so the behaviour gets a test instead of a paragraph.
+    for (const all of [false, true, undefined]) {
+      const fresh = initialState();
+      const me = (apply(fresh, null, { v: 1, op: "join", name: "SOLO", mission: "m" }, at(0)).response as unknown as { id: string }).id;
+      apply(fresh, me, { v: 1, op: "claim", paths: ["src/a.ts", "src/b.ts", "src/c.ts"] }, at(100));
+      const out = apply(fresh, me, { v: 1, op: "release", paths: [], all }, at(200));
+      expect(out.response.ok).toBe(true);
+      expect(fresh.claims).toEqual([]);
+    }
+  });
+
   test("releasing someone else's claim is refused", () => {
     apply(state, fin, { v: 1, op: "claim", paths: ["src/app.ts"] }, at(100));
     expect(apply(state, campo, { v: 1, op: "release", paths: ["src/app.ts"] }, at(200)).response)
