@@ -200,17 +200,29 @@ export function tick(
   state: State,
   ctx: Ctx,
   opts: TickOptions = {},
-): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null; retire: string[] } {
+): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null; retire: string[]; died: string[] } {
   const autoTtl = opts.autoClaimTtlMs ?? DEFAULTS.AUTO_CLAIM_TTL_MS;
   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
   const broadcast: ConvEvent[] = [];
+  /**
+   * Who this tick just declared dead. §4.4 promises a newborn's worktree is
+   * removed on death, and the only thing that ever asked for one was `leave` —
+   * so a front killed by SIGKILL, by a crash, by a closed laptop, or by a
+   * harness that never fires `SessionEnd` was marked `gone` (freeing the
+   * ceiling, correctly) and kept its checkout and its branch for ever.
+   *
+   * Reported rather than acted on, for the same reason `birth` and `retire`
+   * are: what is on disk is the daemon's business and never this file's.
+   */
+  const died: string[] = [];
 
   // 1. A front that stopped renewing its lease is gone. A live connection is
   //    proof on its own, so only lease-only participants can expire this way.
   for (const p of liveParticipants(state)) {
     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
     p.gone = true;
+    died.push(p.id);
     const held = state.claims.filter((c) => c.ownerId === p.id);
     for (const c of held) c.orphanedAtMs = ctx.nowMs;
     broadcast.push(
@@ -387,7 +399,7 @@ export function tick(
     retire.push(p.id);
   }
 
-  return { state, broadcast, birth, retire };
+  return { state, broadcast, birth, retire, died };
 }
 
 /**

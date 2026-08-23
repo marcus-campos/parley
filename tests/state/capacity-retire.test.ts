@@ -148,3 +148,41 @@ describe("retiring a newborn", () => {
     expect(tick(state, at(LIVE + 5_000), { maxFronts: 6 }).retire).toEqual([pool1]);
   });
 });
+
+/**
+ * §4.4 promises a newborn's worktree is removed **on death**. The
+ * implementation delivered removal on *saying goodbye*: `scheduleCollection`
+ * had exactly one call site, the `leave` branch, and nothing in rule 1 — the
+ * rule that decides a front is dead — ever asked for one.
+ */
+describe("a newborn that dies without saying goodbye", () => {
+  test("rule 1 names it, so somebody downstream can collect it", () => {
+    // No `leave`, no SessionEnd: SIGKILL, a crash, a closed laptop, a harness
+    // that fires no end hook. The lease is the only thing that notices.
+    // CORE keeps its socket, so the assertions below are about POOL-1 alone.
+    state.participants[core]!.connected = true;
+    state.participants[pool1]!.connected = false;
+    state.participants[pool1]!.lastSeenMs = T0 + 20;
+
+    const out = tick(state, at(DEFAULTS.LEASE_TTL_MS + 1_000), { maxFronts: 6 });
+    expect(state.participants[pool1]!.gone).toBe(true);
+    expect(out.died).toEqual([pool1]);
+  });
+
+  test("said once, not once per tick — a corpse is not collected twice", () => {
+    state.participants[core]!.connected = true;
+    state.participants[pool1]!.connected = false;
+    state.participants[pool1]!.lastSeenMs = T0 + 20;
+    expect(tick(state, at(DEFAULTS.LEASE_TTL_MS + 1_000), { maxFronts: 6 }).died).toEqual([pool1]);
+    expect(tick(state, at(DEFAULTS.LEASE_TTL_MS + 2_000), { maxFronts: 6 }).died).toEqual([]);
+  });
+
+  test("a front still renewing its lease is not dead", () => {
+    // The control. Without it the two above pass on a `died` that is always
+    // everybody.
+    state.participants[core]!.connected = true;
+    state.participants[pool1]!.connected = false;
+    state.participants[pool1]!.lastSeenMs = T0 + 20;
+    expect(tick(state, at(DEFAULTS.LEASE_TTL_MS - 1_000), { maxFronts: 6 }).died).toEqual([]);
+  });
+});

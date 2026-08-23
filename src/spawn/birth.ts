@@ -32,6 +32,15 @@ type OpenTerminalFn = (cwd: string, bin: string, args: string[], env: Record<str
  * orchestrator, which decides *and* dispatches. The front joins the bus, reads
  * the pool with the map as it is right now, not as it was when this intent
  * was raised, and chooses for itself.
+ *
+ * `parley leave` is named here and not only in the retirement notice. A
+ * newborn that empties the pool and stops exactly as instructed used to depend
+ * entirely on `SessionEnd` firing to say goodbye — and a harness that does not
+ * fire it, or a window closed by hand, left a full checkout and a branch
+ * behind. The daemon now collects on death as well (§4.4), so this is no
+ * longer the only thing standing between a finished newborn and its worktree;
+ * it is still the difference between going home in seconds and going home a
+ * lease later.
  */
 function openingPrompt(reason: string): string {
   return [
@@ -40,7 +49,7 @@ function openingPrompt(reason: string): string {
     `Run \`parley works --state open\` to see what is in the pool, take what you can do with \`parley take <id>\`,`,
     `and \`parley done <id>\` when it is finished. Taking an item returns the evidence the front that found it left`,
     `behind — read it before you re-derive anything.`,
-    `When the pool is empty and you hold nothing, say so and stop.`,
+    `When the pool is empty and you hold nothing, say so, run \`parley leave\`, and stop.`,
   ].join(" ");
 }
 

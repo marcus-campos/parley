@@ -49,6 +49,39 @@ function fakeSpawn(calls: Call[], unreffed: { count: number } = { count: 0 }) {
 }
 
 describe("bearing a front", () => {
+  test("what a newborn is told, and what it is deliberately not told", () => {
+    // The whole prompt was untested. It is the only instruction a front parley
+    // bears ever receives, and it is what separates parley from an
+    // orchestrator: capacity, never assignments.
+    const calls: Call[] = [];
+    const { fn } = fakeSpawn(calls);
+    bearFront({
+      repoRoot: repo,
+      config: { mode: "panel", harness: "claude-code", maxFronts: 6 },
+      intent: { reason: "3 open item(s) and no idle front", forItemIds: ["w_1", "w_2"] },
+      index: 1,
+      spawnFn: fn,
+    });
+    const prompt = calls[0]!.args[calls[0]!.args.length - 1]!;
+
+    // Why it exists, how to find work, and — this is the part that was
+    // missing — how to say goodbye. A newborn that empties the pool and stops
+    // exactly as instructed used to depend entirely on `SessionEnd` firing to
+    // release its worktree, and only the retirement notice ever named the
+    // command.
+    expect(prompt).toContain("3 open item(s) and no idle front");
+    expect(prompt).toContain("parley works --state open");
+    expect(prompt).toContain("parley take");
+    expect(prompt).toContain("parley done");
+    expect(prompt).toContain("parley leave");
+
+    // And nothing that assigns. `forItemIds` travels in the intent so the
+    // daemon can say what the pool looked like; it must not reach the front,
+    // which reads the pool as it is now and chooses for itself.
+    expect(prompt).not.toContain("w_1");
+    expect(prompt).not.toContain("w_2");
+  });
+
   test("the process is detached, hidden on Windows, and unreferenced", () => {
     const calls: Call[] = [];
     const { fn, unreffed } = fakeSpawn(calls);

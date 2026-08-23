@@ -319,6 +319,76 @@ describe("the newborn's worktree", () => {
     expect(existsSync(worktree)).toBe(false);
   });
 
+  test("is collected when the front dies without ever saying goodbye", async () => {
+    // §4.4 says removed **on death**. What was implemented was removal on
+    // *saying goodbye*: `scheduleCollection` had one call site, the `leave`
+    // branch, and nothing in the rule that decides a front is dead ever asked
+    // for one. So a newborn killed by SIGKILL, by a crash, by a closed laptop,
+    // or by a harness that fires no `SessionEnd` was marked `gone` — freeing
+    // its slot under the ceiling, correctly — and kept a full checkout and a
+    // branch for ever, with `nextFrontIndexIn` reserving that index for ever
+    // with it. Two ends covered, the middle missing.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+
+    // The kill. No `leave`, no `SessionEnd`, no last frame of any kind: the
+    // socket simply goes away, which is all a daemon ever sees of a SIGKILL.
+    front.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Somebody else is still working, which is what drives the clock. The
+    // lease is now the only thing that can notice POOL-1 is not coming back.
+    const person = await connectTo(endpoint.address);
+    await person.send({ op: "join", name: "CORE", mission: "the work", cwd: repo });
+
+    clock += DEFAULTS.LEASE_TTL_MS + 1_000;
+    await person.send({ op: "who" });
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await person.send({ op: "who" });
+    await daemon.close();
+
+    expect(existsSync(worktree)).toBe(false);
+    // And the branch with it, or the index is reserved for ever — which was
+    // the phantom "a front could not be started" every restart used to pay.
+    const branches = execFileSync(
+      "git", ["branch", "--list", "--format=%(refname:short)", "parley/*"],
+      { cwd: repo, encoding: "utf8" },
+    );
+    expect(branches).not.toContain("parley/pool-1");
+  });
+
+  test("a front that dies and comes straight back keeps its directory", async () => {
+    // The control on the fix, and the reason death alone is not enough. A
+    // front that crashed and restarted re-joins from the same directory, and
+    // "is anybody in there" is asked before any deadline is looked at.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    front.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const person = await connectTo(endpoint.address);
+    await person.send({ op: "join", name: "CORE", mission: "the work", cwd: repo });
+    clock += DEFAULTS.LEASE_TTL_MS + 1_000;
+    await person.send({ op: "who" });
+
+    // It is back, in the same directory, before the collection deadline.
+    const again = await connectTo(endpoint.address);
+    await again.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await person.send({ op: "who" });
+    await daemon.close();
+
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
   test("a front that says leave and then makes one more tool call keeps its directory", async () => {
     // The notice itself asks for this: "Say so and run `parley leave`". So the
     // front runs it — and then makes one more tool call, because it is a

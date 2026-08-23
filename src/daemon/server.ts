@@ -331,6 +331,7 @@ export class ParleyDaemon {
     if (expired.broadcast.length) this.push(expired.broadcast, null);
     this.bearFrontFor(expired.birth, ctx);
     this.retireFronts(expired.retire, ctx);
+    this.collectDead(expired.died);
 
     // Journal BEFORE responding. This ordering is the entire crash story.
     const entry: JournalEntry = { at: ctx.now, actorId: conn.participantId, frame };
@@ -386,6 +387,7 @@ export class ParleyDaemon {
     if (result.broadcast.length) this.push(result.broadcast, null);
     this.bearFrontFor(result.birth, ctx);
     this.retireFronts(result.retire, ctx);
+    this.collectDead(result.died);
     this.sweepCollections(ctx.nowMs);
     this.sweepBirths(ctx.nowMs);
 
@@ -521,6 +523,26 @@ export class ParleyDaemon {
     // The name is copied rather than looked up later: by the time the removal
     // answers, this is the only thing left that can say whose worktree it was.
     this.pendingCollection.set(p.id, { name: p.name, cwd: p.cwd, sinceMs: this.now(), attempts: 0, collecting: false });
+  }
+
+  /**
+   * The other end of a life, and the one that was missing.
+   *
+   * `scheduleCollection` had exactly one call site — the `leave` branch — so
+   * §4.4's "removed on death" was in fact removed on *saying goodbye*. A
+   * newborn killed by SIGKILL, by a crash, by a closed laptop, or by a harness
+   * that never fires `SessionEnd` had its lease expire, was marked `gone`,
+   * freed its slot under the ceiling, and kept its full checkout and its
+   * branch for ever — and `nextFrontIndexIn` then reserved that index for ever
+   * too. Two ends covered, the middle missing, which is the same shape
+   * `PARLEY_BORN` had.
+   *
+   * A front that is merely restarting is safe: it re-joins from the same
+   * directory and the sweep cancels on "is anybody in there", which it asks
+   * before it looks at any deadline.
+   */
+  private collectDead(ids: string[]): void {
+    for (const id of ids) this.scheduleCollection(this.state.participants[id]);
   }
 
   /**
