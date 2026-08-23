@@ -243,6 +243,24 @@ export interface State {
   work: WorkItem[];
   /** When capacity was last asked for. The cooldown is what stops a big pool becoming six fronts in ten seconds. */
   lastBirthMs: number | null;
+  /**
+   * Whether parley may start any more fronts. A person's switch, and the only
+   * thing on this bus that is.
+   *
+   * §4.7 of the design: a human on this bus has a voice and not a vote —
+   * territory and permission are for the fronts to settle among themselves,
+   * because an unanswered request that degrades into a request for a person's
+   * attention is the failure the whole design avoids. Capacity is the one
+   * exception, and it is narrow: starting a front spends somebody's money on
+   * somebody's account, and no front is ever the right one to decide that.
+   *
+   * It is on the state and not in `spawn.json` because it is a decision, not a
+   * configuration: it is journalled, it survives a restart, and it appears in
+   * the panel of everyone watching the moment it is taken. A ceiling of six
+   * that a person has to edit a file to change is a different thing from a
+   * switch they can throw while they watch the bill.
+   */
+  birthsAllowed: boolean;
 }
 
 /**
@@ -267,7 +285,7 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
-    work: [], lastBirthMs: null,
+    work: [], lastBirthMs: null, birthsAllowed: true,
   };
 }
 

@@ -75,7 +75,7 @@ export function apply(
     case "join": return join(state, frame, ctx);
     case "rename": return rename(state, actorId, frame, ctx);
     case "leave": return leave(state, actorId, ctx);
-    case "who": return who(state, ctx);
+    case "who": return who(state, ctx, maxFronts);
     case "say": return say(state, actorId, frame, ctx);
     case "drain": return drain(state, actorId, ctx);
     case "history": return history(state, actorId, frame);
@@ -397,6 +397,11 @@ export function tick(
  * to ask.
  */
 function canBearFront(state: State, ctx: Ctx, opts: TickOptions): boolean {
+  // A person said no. Not a ceiling and not a cooldown — those bound how fast
+  // parley may spend; this settles whether it may at all. Checked first
+  // because it is the only one of the three that is somebody's decision rather
+  // than a number.
+  if (!state.birthsAllowed) return false;
   const ceiling = opts.maxFronts ?? 6;
   if (liveParticipants(state).filter((p) => p.kind === "agent").length >= ceiling) return false;
   const cooldown = opts.birthCooldownMs ?? DEFAULTS.BIRTH_COOLDOWN_MS;

@@ -200,6 +200,12 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
    * but a panel — so it has its own cursor rather than riding `drain`'s.
    */
   let lastTail = 0;
+  /**
+   * Whether parley may start fronts, the ceiling it stops at, and how much of
+   * it is in use. §4.7: a human here has a voice and not a vote — except on
+   * spending, which is the one decision that is never a front's.
+   */
+  let births = { allowed: true, max: 6, live: 0 };
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
@@ -225,9 +231,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       client.request({ op: "output", after: lastTail }),
     ]);
     if (whoR.ok) {
-      const d = whoR as unknown as { mode: string; participants: Front[] };
+      const d = whoR as unknown as {
+        mode: string; participants: Front[];
+        births?: { allowed: boolean; max: number; live: number };
+      };
       mode = d.mode;
       fronts = d.participants.filter((p) => p.name !== myName);
+      if (d.births) births = d.births;
     }
     if (reqR.ok) pending = (reqR as unknown as { requests: PendingRequest[] }).requests;
     if (notesR.ok) {
@@ -259,8 +269,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   function renderBus(): void {
     const w = width();
     const h = height();
+    const spending = births.allowed
+      ? dim(`${births.live}/${births.max} fronts`)
+      : red(`births off ${G.dot} ${births.live}/${births.max}`);
     const lines = header(
-      `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`,
+      `${spending} ${G.dot} ${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`,
     );
 
     if (fronts.length === 0) lines.push(dim("  nobody else on the bus yet"));
@@ -333,7 +346,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
         ? ` ${G.dot} ${bold("w")}${dim(workExpanded ? " collapse work" : " expand work")}`
         : "";
       lines.push(
-        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")}${workHint} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
+        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")}${workHint} ${G.dot} ${bold("b")}${dim(births.allowed ? " stop new fronts" : " allow new fronts")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
       );
     } else {
       const label = composer === "name" ? dim("your name: ") : "";
@@ -407,6 +420,21 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     if (view === "notes") return renderNotes();
     if (view === "reader") return renderReader();
     renderBus();
+  }
+
+  async function toggleBirths(): Promise<void> {
+    const wanted = !births.allowed;
+    const r = await client.request({ op: "summon", allow: wanted });
+    if (r.ok) {
+      const d = r as unknown as { birthsAllowed: boolean; maxFronts: number; live: number };
+      births = { allowed: d.birthsAllowed, max: d.maxFronts, live: d.live };
+      status = births.allowed
+        ? "parley may start fronts again"
+        : "parley will not start any more fronts — the pool stays open and the fronts here keep working";
+    } else {
+      status = `not changed: ${r.error.code}`;
+    }
+    render();
   }
 
   async function submit(kind: Composer, text: string): Promise<void> {
@@ -484,6 +512,9 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       if (ch === "m" || ch === "M") { composer = "name"; input = ""; status = ""; return true; }
       if (ch === "n" || ch === "N") { view = "notes"; selected = Math.max(0, notes.length - 1); return true; }
       if (ch === "w" || ch === "W") { workExpanded = !workExpanded; return true; }
+      // The one control on this panel that acts rather than speaks, and the
+      // only one there should ever be: it is somebody's money.
+      if (ch === "b" || ch === "B") { void toggleBirths(); return true; }
       if (ch === "q" || ch === "Q") { shutdown(); return false; }
       return false;
     }

@@ -601,12 +601,20 @@ otherwise they would hold only for as long as every client behaved.
 | `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
 | `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
 | `grant`, `deny` | **refused** with `OBSERVER_ONLY` |
+| `summon` with `allow` | **allowed, and refused for an agent** — see §6.9 |
 
 The reasoning: permission disputes are for the fronts to settle among
 themselves. If a human could arbitrate, an unanswered request would degrade into
 a request for a person's attention, and the autonomous flow would acquire a
 human-shaped bottleneck — which is the exact failure the five-minute expiry
 grant exists to prevent.
+
+**Spending is the one thing that runs the other way.** Starting a front spends
+somebody's money on somebody's account, and no front is ever the right one to
+decide that — so `summon` with an `allow` field is refused for an *agent* with
+the same `OBSERVER_ONLY`, in the opposite direction from every other use of that
+code in this document. It is the narrow exception §4.7 of the design describes:
+a human here has a voice and not a vote, except on the bill.
 
 So a human is an observer with a voice. Participation is optional and silence is
 the expected state. An interface built on this protocol should reflect that
@@ -630,6 +638,39 @@ broadcast at high priority, because it applies to every front on the bus.
 ```
 
 ### 6.9 Fronts parley started
+
+#### `summon`
+
+```json
+→ {"v":1,"op":"summon","reason":"three items in the pool and nobody free"}
+← {"ok":true,"summoned":true,"reason":"three items in the pool and nobody free"}
+```
+
+A front asking for capacity. Refused with `NO_CAPACITY` at the ceiling
+(`maxFronts` in `spawn.json`), and refused with `NO_CAPACITY` while a person has
+stopped parley starting fronts.
+
+```json
+→ {"v":1,"op":"summon","allow":false}
+← {"ok":true,"birthsAllowed":false,"maxFronts":6,"live":2}
+```
+
+The same op with an `allow` field is a **different frame with a different
+owner**: it settles whether parley may start fronts at all, and only a
+participant that joined as `kind: "human"` may send it. An agent gets
+`OBSERVER_ONLY`.
+
+The veto stops both routes to a birth — the automatic one in `tick`, and a
+front asking by name — and stops nothing else. The pool stays open, every front
+already on the bus keeps working, and nothing is retired. It is journalled, so
+it survives a restart: a person's decision about their own money is not
+something an unrelated daemon restart quietly reverses.
+
+The change is broadcast at high priority, once, on the change. Re-affirming a
+veto already in place is not a louder veto.
+
+`who` carries `births: {allowed, max, live}` so a panel can show what the switch
+is switching without a second round trip.
 
 #### `output`
 

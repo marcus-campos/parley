@@ -286,12 +286,22 @@ export function leave(state: State, actorId: string | null, ctx: Ctx): Outcome {
   return { state, response: ok({ released }), broadcast: [event, ...settled] };
 }
 
-export function who(state: State, ctx: Ctx): Outcome {
+export function who(state: State, ctx: Ctx, maxFronts = 6): Outcome {
+  const live = liveParticipants(state);
   return {
     state,
     response: ok({
       mode: state.mode,
-      participants: liveParticipants(state).map((p) => publicParticipant(p, state, ctx)),
+      participants: live.map((p) => publicParticipant(p, state, ctx)),
+      // Carried here rather than in `status` because this is the op a panel
+      // already asks on every refresh, and a switch a person can throw has to
+      // show what it is switching: whether parley may start fronts at all, the
+      // ceiling it would stop at, and how much of that ceiling is in use.
+      births: {
+        allowed: state.birthsAllowed,
+        max: maxFronts,
+        live: live.filter((p) => p.kind === "agent").length,
+      },
     }),
     broadcast: [],
   };

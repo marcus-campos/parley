@@ -583,6 +583,88 @@ describe("which index the daemon's next newborn gets", () => {
   });
 });
 
+describe("the human's voice on spending", () => {
+  test("a person's veto stops a birth that would otherwise have happened", async () => {
+    // Over a real socket, on the whole path: the pool goes stale, nobody is
+    // idle, `tick` would raise an intent and `bearFrontFor` would turn it into
+    // a worktree and a process. A person said no, so none of it happens — and
+    // the pool stays open and CORE keeps working, which is the point: the veto
+    // is on spending, not on the work.
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+
+    savedEnv = { ...process.env };
+    const binDir = mkdtempSync(join(tmpdir(), "parley-stub-bin-"));
+    dirs.push(binDir);
+    writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "claude"), 0o755);
+    process.env.PATH = `${binDir}:${process.env.PATH}`;
+
+    const { daemon, endpoint } = await daemonFor(repo, () => clock.ms);
+    const person = await connectTo(endpoint.address);
+    await person.send({ op: "join", name: "Marcus", kind: "human", cwd: repo });
+    const vetoed = await person.send({ op: "summon", allow: false });
+    expect(vetoed.ok).toBe(true);
+    expect(vetoed).toMatchObject({ birthsAllowed: false });
+
+    const front = await connectTo(endpoint.address);
+    await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
+    await front.send({ op: "shape", shape: "pool" });
+    await front.send({ op: "claim", paths: ["src/**"] });
+    await front.send({ op: "work", title: "the thing nobody picked up", paths: ["a.ts"] });
+
+    clock.ms += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await front.send({ op: "who" });
+
+    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).toContain("stopped parley starting");
+    expect(said).not.toContain("providing a front");
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-1"))).toBe(false);
+
+    // The work is untouched: the veto is about money, not about the pool.
+    const works = await front.send({ op: "works" });
+    expect((works.work as { state: string }[]).some((w) => w.state === "open")).toBe(true);
+
+    // A front asking for a hand by name is refused on the same grounds.
+    expect(await front.send({ op: "summon", reason: "need a hand" }))
+      .toMatchObject({ ok: false, error: { code: "NO_CAPACITY" } });
+
+    // Lifted, the same pool provides a front on the very next frame.
+    await person.send({ op: "summon", allow: true });
+    await front.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-1"))).toBe(true);
+  });
+
+  test("a front cannot lift or set the veto, however it asks", async () => {
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, endpoint } = await daemonFor(repo, () => clock.ms);
+    const front = await connectTo(endpoint.address);
+    await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
+
+    expect(await front.send({ op: "summon", allow: false }))
+      .toMatchObject({ ok: false, error: { code: "OBSERVER_ONLY" } });
+    expect(daemon.snapshot().birthsAllowed).toBe(true);
+    await daemon.close();
+  });
+
+  test("`who` carries the switch, so a panel can show what it is switching", async () => {
+    const repo = gitRepo();
+    mkdirSync(join(repo, ".git", "parley"), { recursive: true });
+    writeFileSync(join(repo, ".git", "parley", "spawn.json"), JSON.stringify({ mode: "panel", maxFronts: 2 }));
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, endpoint } = await daemonFor(repo, () => clock.ms);
+    const front = await connectTo(endpoint.address);
+    await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
+
+    // The repository's own ceiling, not the built-in 6 — the panel would
+    // otherwise show a number nobody configured.
+    expect((await front.send({ op: "who" })).births).toMatchObject({ allowed: true, max: 2, live: 1 });
+    await daemon.close();
+  });
+});
+
 describe("a front parley started that never reached the bus", () => {
   test("is said out loud, instead of being counted as a success forever", async () => {
     // `bearFront` returns as soon as it has a pid, and in terminal mode that

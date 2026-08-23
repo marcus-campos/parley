@@ -33,6 +33,8 @@ export interface Snapshot {
   notes: unknown[];
   work: unknown[];
   feed: unknown[];
+  /** Whether parley may start fronts, the ceiling, and how much is in use. */
+  births: { allowed: boolean; max: number; live: number };
 }
 
 /**
@@ -155,7 +157,13 @@ export async function runWebPanel(
       for (const event of tailToFeed(lines)) feed.push(event);
     }
     while (feed.length > 500) feed.shift();
-    const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { id: string; name: string }[] }) : null;
+    const who = whoR.ok
+      ? (whoR as unknown as {
+          mode: string;
+          participants: { id: string; name: string }[];
+          births?: { allowed: boolean; max: number; live: number };
+        })
+      : null;
     return {
       mode: who?.mode ?? me.mode,
       repo: repo.root,
@@ -165,6 +173,7 @@ export async function runWebPanel(
       notes: notesR.ok ? (notesR as unknown as { notes: unknown[] }).notes : [],
       work: worksR.ok ? (worksR as unknown as { work: unknown[] }).work : [],
       feed: feed.slice(-200),
+      births: who?.births ?? { allowed: true, max: 6, live: 0 },
     };
   }
 
@@ -232,8 +241,21 @@ export async function runWebPanel(
         });
       }
 
-      // The only write this server accepts. No grant, no deny, no mode: those
-      // are not a human's to make, so there is no route to make them through.
+      // Whether parley may start any more fronts. §4.7 — the one decision on
+      // this bus that is a person's and never a front's, because it spends
+      // their money. It is a route on this server for the same reason `grant`
+      // and `deny` are not: what belongs to the person is what the person's
+      // panel may send.
+      if (req.method === "POST" && url.pathname === "/births") {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        const r = await client.request({ op: "summon", allow: body.allow !== false });
+        await broadcast();
+        return json(r);
+      }
+
+      // The only write to the *conversation* this server accepts. No grant, no
+      // deny, no mode: those are not a human's to make, so there is no route
+      // to make them through.
       if (req.method === "POST" && url.pathname === "/say") {
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const r = await client.request({ op: "say", text: String(body.text ?? ""), to: body.to ?? null });

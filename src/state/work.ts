@@ -340,7 +340,59 @@ export function summonCapacity(
 ): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
-  if (liveParticipants(state).filter((p) => p.kind === "agent").length >= maxFronts) {
+
+  const live = liveParticipants(state).filter((p) => p.kind === "agent").length;
+
+  // The human's voice on spending (§4.7). `allow` present is a different frame
+  // from `summon` without it — one settles whether parley may spend at all,
+  // the other asks it to spend now — and only one of them is a person's.
+  //
+  // This carries its own `kind` check rather than joining a general observer
+  // guard, because there is no general guard left to join: `feat/human-vote`
+  // deleted the one that refused `grant`/`deny`, on the argument that
+  // ownership decides who may answer, not kind. Spending somebody's money is
+  // the one decision that runs the other way — it blocks an agent and lets
+  // only a person through, which is the shape `brain` uses on that branch for
+  // exactly the same reason.
+  if (frame.allow !== undefined) {
+    if (me.kind !== "human") {
+      return {
+        state,
+        response: err(
+          "OBSERVER_ONLY",
+          "whether parley may start more fronts is the person's call, not a front's — it is somebody's money",
+        ),
+        broadcast: [],
+      };
+    }
+    const allowed = frame.allow !== false;
+    const changed = state.birthsAllowed !== allowed;
+    state.birthsAllowed = allowed;
+    return {
+      state,
+      response: ok({ birthsAllowed: allowed, maxFronts, live }),
+      // Said once, on the change. Re-affirming a veto that is already in place
+      // is not a louder veto.
+      broadcast: changed
+        ? [pushEvent(state, ctx, {
+            kind: "system", from: null, to: null, priority: "high",
+            text: allowed
+              ? `${me.name} allowed parley to start fronts again`
+              : `${me.name} stopped parley starting any more fronts — the pool stays open and the fronts already here keep working`,
+            about: me.id,
+          })]
+        : [],
+    };
+  }
+
+  // A front asking for a hand cannot spend past a person who said no. The
+  // automatic path is refused in `canBearFront`; this is the same refusal on
+  // the path somebody asks for by name, and it has to be here too, or the
+  // veto would only hold for as long as nobody asked.
+  if (!state.birthsAllowed) {
+    return { state, response: err("NO_CAPACITY", "a person has stopped parley starting fronts"), broadcast: [] };
+  }
+  if (live >= maxFronts) {
     return { state, response: err("NO_CAPACITY", `already at ${maxFronts} front(s)`), broadcast: [] };
   }
   state.lastBirthMs = ctx.nowMs;
