@@ -243,7 +243,8 @@ export interface LedgerChange {
   now?: string;
 }
 
-const clip = (line: string): string => (line.length > 96 ? `${line.slice(0, 95)}…` : line);
+const WIDTH = 96;
+const clip = (line: string): string => (line.length > WIDTH ? `${line.slice(0, WIDTH - 1)}…` : line);
 
 /** First line with something on it — what a person recognises a block by. */
 const head = (text: string): string => clip((text.split("\n").find((l) => l.trim()) ?? "(blank)").trim());
@@ -261,9 +262,48 @@ export function firstDifference(was: string, now: string): { at: number; of: num
   const b = now.split("\n");
   for (let i = 0; i < Math.max(a.length, b.length); i++) {
     if ((a[i] ?? "") === (b[i] ?? "")) continue;
-    return { at: i + 1, of: a.length, was: clip((a[i] ?? "(nothing — the block got longer)").trim()), now: clip((b[i] ?? "(nothing — the block got shorter)").trim()) };
+    if (a[i] === undefined) return { at: i + 1, of: a.length, was: "(nothing — the block got longer)", now: clip(b[i]!.trim()) };
+    if (b[i] === undefined) return { at: i + 1, of: a.length, was: clip(a[i]!.trim()), now: "(nothing — the block got shorter)" };
+    return { at: i + 1, of: a.length, ...sideBySide(a[i]!, b[i]!) };
   }
   return { at: 1, of: a.length, was: head(was), now: head(now) };
+}
+
+/** Leading spaces and tabs, made visible. A gap is not a difference a reader can see. */
+const showIndent = (line: string): string =>
+  line.replace(/^[ \t]+/, (ws) => ws.replace(/ /g, "·").replace(/\t/g, "→"));
+
+/**
+ * The two lines, shown so that what differs about them is on the screen.
+ *
+ * `9fce699` fixed the report pointing at the wrong *line*; both of the
+ * operations that used to render it could still erase the difference on the
+ * right one, printing the two identical lines that commit exists to end:
+ *
+ *   - `.trim()` erases a difference that IS the leading whitespace, and
+ *     re-indentation is among the commonest ways cited code changes — a block
+ *     moved into a new `if`/`try`, a `case` wrapped in braces, a formatter
+ *     pass. (`normalise` strips *trailing* whitespace before pinning, so a
+ *     trailing-only edit never reaches the ledger at all. Leading does.)
+ *   - clipping from the head hides any difference past column 95.
+ *
+ * So: trim only when trimming changes nothing that matters, and window both
+ * sides identically around the first column that actually differs.
+ */
+export function sideBySide(was: string, now: string): { was: string; now: string } {
+  const whitespaceOnly = was.trim() === now.trim();
+  const a = whitespaceOnly ? showIndent(was) : was.trim();
+  const b = whitespaceOnly ? showIndent(now) : now.trim();
+  let at = 0;
+  while (at < a.length && at < b.length && a[at] === b[at]) at++;
+  // One start for both sides, or the two lines stop being comparable by eye.
+  const start = at < WIDTH - 1 ? 0 : Math.max(0, Math.min(at - 24, Math.max(a.length, b.length) - WIDTH + 2));
+  const cut = (s: string): string => {
+    const lead = start > 0 ? "…" : "";
+    const body = s.slice(start, start + WIDTH - lead.length - 1);
+    return `${lead}${body}${start + body.length < s.length ? "…" : ""}`;
+  };
+  return { was: cut(a), now: cut(b) };
 }
 
 /**

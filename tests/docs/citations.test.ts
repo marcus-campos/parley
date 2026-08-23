@@ -13,6 +13,7 @@ import {
   needsAcceptance,
   parseLedger,
   renderLedger,
+  sideBySide,
   sitePages,
 } from "../../scripts/gen-citations";
 
@@ -243,6 +244,57 @@ describe("re-pinning has to be read, not merely run", () => {
     ));
     expect(report).toContain("(first change at line 2 of 4)");
     expect(report).toContain("was | if (parsed.flags.json) emit();");
+  });
+
+  test("a re-indented block does not report two identical lines", () => {
+    // The other half of the same defect `9fce699` closed. That commit made the
+    // report point at the line that changed; `.trim()` then erased the change
+    // on it whenever the change WAS the indentation — a block moved into a new
+    // `if`/`try`, a `case` wrapped in braces, a formatter pass. Depth down the
+    // block was covered and width across it was not.
+    //
+    // `normalise` strips *trailing* whitespace before pinning, so a
+    // trailing-only edit never reaches the ledger. Leading whitespace does.
+    const was = "const a = 1;\nconst b = 2;";
+    const now = "    const a = 1;\n    const b = 2;";
+    const d = firstDifference(was, now);
+    expect(d.at).toBe(1);
+    expect(d.was).not.toBe(d.now);
+    expect(d.now).toContain("·");
+    // A gap is not a difference a reader can see, so tabs and spaces have to
+    // render as different characters and not as different widths.
+    const tabbed = firstDifference("\treturn 1;", "    return 1;");
+    expect(tabbed.was).toBe("→return 1;");
+    expect(tabbed.now).toBe("····return 1;");
+  });
+
+  test("a difference past the clip is windowed into view, both sides alike", () => {
+    // 96 columns from the head hides everything after column 95, and the lines
+    // that get cited are real code: the report printed the same 95 characters
+    // twice and the edit was in the argument list past them.
+    const stem = "const veryLongIdentifierName = someFunctionCall(argumentOne, argumentTwo, argumentThree, argFour, ";
+    const d = firstDifference(`${stem}argFive);`, `${stem}argSix);`);
+    expect(d.was).not.toBe(d.now);
+    expect(d.was).toContain("argFive");
+    expect(d.now).toContain("argSix");
+    // Both sides windowed from the same column, or they stop being comparable
+    // by eye — which is the only way anybody reads this report.
+    expect(d.was.startsWith("…")).toBe(true);
+    expect(d.now.startsWith("…")).toBe(true);
+    expect(d.was.slice(0, 40)).toBe(d.now.slice(0, 40));
+    expect(d.was.length).toBeLessThanOrEqual(96);
+    expect(d.now.length).toBeLessThanOrEqual(96);
+  });
+
+  test("a short line is still printed whole, and long ones stay within a terminal", () => {
+    // The windowing must not cost the ordinary case its plain rendering.
+    const d = firstDifference("const a = 1;", "const a = 9;");
+    expect(d.was).toBe("const a = 1;");
+    expect(d.now).toBe("const a = 9;");
+    const long = "x".repeat(300);
+    const wide = sideBySide(`${long}A`, `${long}B`);
+    expect(wide.was.length).toBeLessThanOrEqual(96);
+    expect(wide.was).not.toBe(wide.now);
   });
 
   test("a transposition is reported, which is the case the buckets cannot see", () => {
