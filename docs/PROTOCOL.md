@@ -146,6 +146,8 @@ A closed list. Anything outside it is a protocol violation.
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
 | `OBSERVER_ONLY` | A participant with `kind: "human"` tried to `grant` or `deny`. A human has a voice, not a vote. |
+| `NOT_TAKEN` | A work item you are not holding: `done` on someone else's, `drop` on one neither offered to you nor taken by you, or either on one already `done`. |
+| `NO_CAPACITY` | Reserved for the front-birth ceiling. **No operation returns it yet**; it is in the closed list so a client written against this version already knows it. |
 
 Success is always `{"ok": true, ...}`. Failure is always
 `{"ok": false, "error": {"code": ..., "message"?: ...}, ...}`. Extra detail that
@@ -272,6 +274,15 @@ may be watching the whole session and say nothing. See §6.7.
 The read cursor is **per participant**, so each front drains only what it has not
 seen. A participant never receives its own messages. Directed messages reach only
 their addressee. `drain` advances the cursor to the current sequence number.
+
+Outside `shape: "bus"` the response also carries **`pool`**: a short plain-text
+footer naming the work items offered to this participant (at most three, then a
+count) and how many are open to anybody. It rides here rather than behind a
+second request because `drain` is already on the hottest path in the system, and
+a client that has nothing to show simply gets `""`. Every command a hook or an
+MCP tool answers appends it; the hook returns that do not drain — `SessionStart`,
+`Stop`, `SessionEnd`, and an edit denied under `enforced` — carry neither the
+inbox nor the pool.
 
 #### `history`
 
@@ -596,6 +607,139 @@ broadcast at high priority, because it applies to every front on the bus.
    "claims":4,"pending_requests":1,"notes":7}
 ```
 
+### 6.9 Shape, and where work comes from
+
+`shape` is a second repo-scoped axis, independent of `mode`. Neither enforces
+the other: `mode` says how strict territory is, `shape` says where work comes
+from.
+
+```json
+→ {"v":1,"op":"shape","shape":"pool"}
+← {"ok":true,"shape":"pool"}
+```
+
+Sending `shape` with no `shape` field reads the current value. `bus`, `pool` and
+`plan` are the only accepted values; anything else is `UNKNOWN_OP` and changes
+nothing. A change is broadcast at high priority; setting the shape to what it
+already is broadcasts nothing. `bus` is the default and the behaviour of every
+section above.
+
+#### 6.9.1 The pool
+
+A **work item** is one path. A front publishing three paths creates three items,
+because the path is the unit of territory: that is what lets an owner refuse two
+files and keep ten.
+
+```json
+→ {"v":1,"op":"work","title":"label sem for","paths":["a.html","b.html"],
+   "evidence":["n_0003"],"kind":"review","reviewOf":"w_0007"}
+← {"ok":true,"items":[
+     {"id":"w_0012","path":"a.html","state":"offered","offeredTo":"p_2"},
+     {"id":"w_0013","path":"b.html","state":"open","offeredTo":null}]}
+```
+
+`title` and at least one path are required; `evidence` is a list of `Note` and
+`CommandResult` ids, `kind` is `"work"` (default) or `"review"`, and `reviewOf`
+names the item being checked. Refused with `UNKNOWN_OP` in `shape: "bus"`.
+
+Each item is routed **on publish**, never by hand: a path a live participant
+already holds becomes `offered` to that participant, and a path owned by nobody
+is `open`. Where several live claims match one path, the pattern with more
+segments wins; on a tie a literal beats a wildcard; on a further tie the claim
+touched least recently. It is a routing hint, not a permission — the loser is
+never consulted. **`origin` is not a field a client may set** — see 6.9.3.
+
+```json
+→ {"v":1,"op":"works","state":"open","mine":true}
+← {"ok":true,"work":[{"id":"w_0013","paths":["b.html"],"title":"label sem for",
+     "evidenceIds":["n_0003"],"publishedById":"p_1","publishedByName":"CORE",
+     "kind":"work","origin":"discovered","state":"open",
+     "offeredToId":null,"offeredAtMs":null,"takenById":null,
+     "orphanedAtMs":null,"nudgedAtMs":null,"reviewOf":null,
+     "at":"2026-08-20T12:00:00Z"}]}
+```
+
+`state` filters to one of `open`, `offered`, `taken`, `done`; anything else is
+ignored rather than refused. `mine` returns what is offered to you **plus what
+you have taken**, `done` items included.
+
+```json
+→ {"v":1,"op":"take","id":"w_0013"}
+← {"ok":true,"id":"w_0013","title":"label sem for","paths":["b.html"],
+   "evidence":{"notes":[…],"results":[…]},"reviewing":null,"selfReview":false}
+```
+
+`take` resolves the item's evidence into the response, so the front that picks
+the work up does not repay the discovery. `CommandResult` staleness is
+recomputed at read time, exactly as `results` does — a stored result always
+claims `staleBecause: null`. `reviewing` is the whole `WorkItem` under review,
+or `null`; `selfReview` says whether this review was published by the front
+taking it, and is **always present** so `false` is never confused with a build
+that does not send it.
+
+An offer is exclusive while it stands: a `take` from anyone but the offeree is
+`CONFLICT`, and the response carries `offeredTo: {id, name, mission}` at the top
+level so the caller can act without a second round trip. An item already `taken`
+or `done` is `CONFLICT` too.
+
+```json
+→ {"v":1,"op":"drop","id":"w_0013","reason":"not my mission"}
+← {"ok":true,"id":"w_0013","state":"open"}
+
+→ {"v":1,"op":"done","id":"w_0013","summary":"3 labels removed"}
+← {"ok":true,"id":"w_0013","state":"done"}
+```
+
+`drop` returns the item to the pool and is free: possession bought first
+refusal, not obedience. It refuses with `NOT_TAKEN` when the item is neither
+offered to you nor taken by you, or is already `done`, and with `NOT_OWNER` for
+a planned **task** (6.9.3). `done` is only for the participant holding the item.
+Both are terminal in the sense that `done` is: no operation moves an item out of
+it.
+
+#### 6.9.2 Dispatching a plan
+
+`shape: "plan"` adds one operation. The daemon never reads a file: the client
+parses the markdown and only the parsed tasks cross the wire.
+
+```json
+→ {"v":1,"op":"plan","goal":"…","spec":"docs/…/plan.md","replace":false,
+   "tasks":[{"n":1,"title":"Task 1","paths":["a.ts"],"parseError":null},
+            {"n":2,"title":"Task 2","paths":["a.ts"],"parseError":null}]}
+← {"ok":true,"waves":2,"opened":1,"withdrawn":0}
+```
+
+The waves are computed from the paths each task declares: tasks whose paths are
+disjoint open together, tasks that touch the same file are serialised, and a
+task is seated no earlier than one wave past the latest wave holding a task it
+collides with. `opened` counts **items**, not tasks — one item per declared
+path.
+
+Only wave 0 is published. Each later wave opens by itself once every item of the
+current one is `done`, reviews included. Finishing a planned task publishes a
+`kind: "review"` item for it, offered to a live participant with `kind: "agent"`
+that is not the author, or `open` when there is none.
+
+Refused with `UNKNOWN_OP` outside `shape: "plan"` and for an empty `tasks` list.
+**One plan runs at a time:** a second `plan` while the running one still has an
+unfinished item is `CONFLICT`. `replace: true` is the way through — it withdraws
+every unfinished item of the running plan, reports how many in `withdrawn`, and
+dispatches the new plan from wave 0. What the old plan finished is kept.
+
+#### 6.9.3 `origin`, and what a client may not say
+
+Every work item carries `origin`, and it is the field that decides whether the
+item can be refused: a `discovered` item is an offer, a `planned` **task** is a
+dispatch and `drop` returns `NOT_OWNER` for it. A `planned` **review** is an
+offer like any other and can be dropped.
+
+**A client cannot set `origin`.** It appears in `works` output and nowhere in
+any request. Honouring it on `work` would let any front publish an item its
+offeree is forbidden to hand back, aimed by construction at whoever already
+holds the path — the front that discovered the work acquiring authority over the
+front that holds the file. `planned` items are created by `plan` and by the
+review a `done` spawns, and by nothing else.
+
 ---
 
 ## 7. Server-initiated frames
@@ -625,6 +769,14 @@ every command, so a bus nobody touches never invents events.
 | Orphan grace | 60 s | A dead front's claims are announced immediately, then released after the grace period. |
 | Permission TTL | 5 min | An unanswered request is granted and announced by name. |
 | Idle shutdown | 30 min | Zero connections for this long and the daemon exits, cleaning up its endpoint and socket. |
+| Offer TTL | 5 min | An `offered` work item nobody answered returns to the pool as `open` and is announced. Matches the permission TTL on purpose: both are a right of first refusal with a deadline. |
+| Work orphan grace | 60 s | A `taken` item whose holder is gone is stamped, then returned to the pool as `open` after the grace. Same constant as the claim orphan grace, and a holder that comes back before it elapses keeps the item. |
+| Pool doorbell | 10 min | With at least one idle agent front live, every `open` item older than this that has not rung yet is stamped, and **one** message addressed to that front names how many there are. Rung once per item, so nobody is pushed round in circles. Longer than the presence lease on purpose: a front that has not renewed for this long is gone, not idle. |
+
+"Idle" for the doorbell means an **agent** holding no explicit claim and no
+taken item. An auto-claim does not count as busy — it is the footprint of an
+edit, not a declaration — and a participant with `kind: "human"` is never rung,
+because a panel was never going to pick the item up.
 
 **Note on interaction:** with the defaults, the 5-minute presence lease fires
 before the 15-minute auto-claim TTL. For a CLI-only front, death by lease is what
