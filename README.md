@@ -556,10 +556,11 @@ through the environment.
 |---|---|
 | `parley say "text"` | Tell everyone. `--to NAME` for one front, `--priority high` to mark it urgent. Use it to announce intent **before** a broad change. |
 | `parley drain` | Your unread messages. Incremental by construction: it only ever returns what you have not seen, so polling costs nothing when nothing happened. |
-| `parley history [--limit N] [--since SEQ]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
+| `parley history [--limit N]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
 | `parley question --to NAME "..."` | Ask, when you need an answer rather than to be heard. The other session **cannot go idle** while your question is open. `--wait N` blocks for the reply. |
 | `parley reply <id> "answer"` | Answer a question put to you. Someone is blocked on it — and "I cannot answer" unblocks them just as well. |
 | `parley ack <id> ["got it"]` | Close the loop. Without it the front that answered has no idea the answer landed. |
+| `parley nudged <id>` | Record that you rang somebody's doorbell. Until you do, **every attempt to finish a turn tells you again**, naming the question and the address. |
 | `parley questions` | What you owe an answer to, and what you are waiting on. |
 
 ### Territory

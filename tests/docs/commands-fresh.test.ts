@@ -322,6 +322,61 @@ describe("a flag that only exists on one side is an error too", () => {
   });
 });
 
+// The generated page cannot go stale. The README's tables can, and had: `parley
+// nudged` was dispatched, in USAGE, and described in the README's own prose, and
+// missing from the "Talking" table. This is the third cross-check — README rows
+// against the dispatch — so the tables cannot drift again while the page holds
+// still.
+describe("the README's command tables agree with the CLI", () => {
+  /** The first cell of every `| `parley ...` |` row, prose column dropped. */
+  function commandCells(): string[] {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    return [...readme.matchAll(/^\| (`parley [^|]*?) *\|/gm)].map((m) => m[1]!);
+  }
+
+  test("every command the CLI dispatches has a row, and every row a command", () => {
+    const cells = commandCells();
+    // A regex that stopped matching would make both set comparisons trivially
+    // equal to each other and to nothing.
+    expect(cells.length).toBeGreaterThanOrEqual(40);
+
+    const inTables = new Set<string>();
+    for (const cell of cells) {
+      for (const m of cell.matchAll(/`parley ([a-z][a-z0-9-]*)/g)) inTables.add(m[1]!);
+    }
+    // Both directions: a row for a command nobody can run is the same defect
+    // pointing the other way.
+    expect([...inTables].sort()).toEqual(dispatchedCommands(mainSource).sort());
+  });
+
+  test("every flag the tables spell is a flag the help text offers", () => {
+    // `parley history [--limit N] [--since SEQ]` sat here while main.ts's
+    // history case sends only `limit` — the daemon op takes `since`, the
+    // command line never passes it, and the README promised it anyway.
+    const usage = parseUsage(mainSource);
+    const documented = new Set<string>();
+    for (const group of usage.groups) {
+      for (const command of group.commands) {
+        for (const variant of command.variants) for (const flag of variant.flags) documented.add(flag);
+      }
+    }
+    for (const line of usage.globalFlags) {
+      for (const m of line.matchAll(/--[a-z][a-z0-9-]*/g)) documented.add(m[0]);
+    }
+
+    let checked = 0;
+    const unknown: string[] = [];
+    for (const cell of commandCells()) {
+      for (const m of cell.matchAll(/--[a-z][a-z0-9-]*/g)) {
+        if (!documented.has(m[0])) unknown.push(`${m[0]} (in ${cell.trim()})`);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(20);
+    expect(unknown).toEqual([]);
+  });
+});
+
 describe("the generated file is byte-stable", () => {
   test("two runs produce the same bytes", () => {
     expect(renderCommandReference()).toBe(renderCommandReference());
