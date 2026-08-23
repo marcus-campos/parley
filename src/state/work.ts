@@ -119,6 +119,21 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
  *
  * This is the whole of what a second dispatch would have to answer for, and
  * the only thing that distinguishes "a plan is running" from "a plan ran".
+ *
+ * **Every wave, not only the current one, and that breadth is load-bearing.**
+ * The narrow form — the ids of `plan.waves[plan.waveIndex]` alone — was
+ * argued once as an equivalent no-op, on the grounds that a wave only advances
+ * when every one of its items is `done`, so a plan's unfinished items are
+ * always the current wave's. That invariant was reachable-FALSE, and the
+ * disagreement was not academic: a repeated `done` on a finished item of an
+ * EARLIER wave filed a fresh `offered` review under that earlier task while
+ * `waveIndex` had already moved on, and against that state the narrow form
+ * answered `ok` and stacked a second plan beside live work nothing tracked —
+ * the exact failure the refusal exists to prevent. `finishWork` now refuses
+ * the repeat, so nothing reachable produces that state today. This form does
+ * not depend on it staying that way, which is the whole reason it is the one
+ * kept, and the test builds the state by hand to say so out loud rather than
+ * leaving it as an assertion about the future.
  */
 function livePlanItems(state: State): WorkItem[] {
   const plan = state.plan;

@@ -443,3 +443,63 @@ describe("a plan frame is read, not cast", () => {
     expect(state.work[0]!.title).toBe("Refactor — capture is partial");
   });
 });
+
+/**
+ * `livePlanItems` looks at every wave the plan has opened, not only the
+ * current one. That breadth used to be defended as an inert no-op — a wave
+ * advances only when all of its items are `done`, so an unfinished item is
+ * always the current wave's — and a line documented as inert is a line the
+ * next person deletes.
+ *
+ * It is not inert. The state below was REACHABLE until `finishWork` learned to
+ * refuse a repeated `done`: a second `done` on a finished item of an earlier
+ * wave filed a fresh review under that earlier task after `waveIndex` had
+ * moved on. It is built by hand here for the same reason `work-footer.test.ts`
+ * hand-builds an offered planned task — the pairing is what has to be pinned,
+ * not the route that used to produce it.
+ */
+describe("a second dispatch answers for every wave, not only the current one", () => {
+  test("an unfinished item of an earlier wave still refuses the next plan", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["a.ts"])],
+    }, at(100));
+
+    // Both waves, all the way through, reviews included. `waveIndex` ends up
+    // past the last wave, so the CURRENT wave holds nothing at all — which is
+    // what makes this discriminating: a current-wave-only form sees an empty
+    // list here and says the plan is over.
+    let ms = 200;
+    for (const n of [1, 2]) {
+      const item = state.work.find((w) => w.title === `Task ${n}` && w.state === "open")!;
+      apply(state, worker, { v: 1, op: "take", id: item.id }, at(ms += 10));
+      apply(state, worker, { v: 1, op: "done", id: item.id }, at(ms += 10));
+      const review = state.work.find((w) => w.kind === "review" && w.reviewOf === item.id)!;
+      apply(state, coord, { v: 1, op: "take", id: review.id }, at(ms += 10));
+      apply(state, coord, { v: 1, op: "done", id: review.id }, at(ms += 10));
+    }
+    expect(state.plan!.waveIndex).toBe(2);
+    expect(state.plan!.waves[state.plan!.waveIndex]).toBeUndefined();
+
+    // A live review under TASK 1 — wave 0's task — after the plan has moved
+    // past every wave it had.
+    state.work.push({
+      id: "w_hand", paths: ["a.ts"], title: "review: Task 1", evidenceIds: [],
+      publishedById: worker, publishedByName: "WORKER", kind: "review", origin: "planned",
+      state: "offered", offeredToId: coord, offeredAtMs: T0 + 600,
+      takenById: null, orphanedAtMs: null, nudgedAtMs: null, reviewOf: null,
+      at: new Date(T0 + 600).toISOString(),
+    });
+    state.plan!.itemsByTask[1]!.push("w_hand");
+
+    const next = apply(state, coord, { v: 1, op: "plan", goal: "g2", spec: null, tasks: [task(9, ["z.ts"])] }, at(700));
+    expect(next.response.ok).toBe(false);
+    expect(next.response).toMatchObject({ error: { code: "CONFLICT" } });
+    // And it is withdrawn by `--replace`, which is the point of seeing it at
+    // all: an item no dispatch can see is an item no dispatch can clear.
+    const replaced = apply(state, coord, {
+      v: 1, op: "plan", goal: "g2", spec: null, replace: true, tasks: [task(9, ["z.ts"])],
+    }, at(800));
+    expect(replaced.response).toMatchObject({ ok: true, withdrawn: 1 });
+    expect(state.work.find((w) => w.id === "w_hand")).toBeUndefined();
+  });
+});
