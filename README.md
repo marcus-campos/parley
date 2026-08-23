@@ -552,6 +552,7 @@ deterministic unit test.
 | Dispatched, not offered | A planned **task** is published **open**, owned by nobody, and any front takes it — but once taken it cannot be dropped. The plan put it there and it stays. |
 | A wave, not a queue | The next wave opens by itself, the moment every item of the current one is done. |
 | Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. A review is the one planned item that really is an offer: it is named in that front's footer, `drop` hands it back to the pool, and `take` returns the item under review along with it. |
+| Self-review is stated, never blocked | A review is never **offered** to the front that did the work — but `take` does not refuse one. An offer buys first refusal, not obedience, and with one live front the review can only ever be open to its author, so a block would stall the plan at that wave with nothing to rescue it. parley says so instead, wherever the item is read: `parley take` prints it, the take event carries it, and `parley works` and both panels mark the row `(self-review)`. |
 | A person's front outranks the plan | A path held under an explicit claim is never taken from its holder. That task is published anyway and announced as waiting — you re-sequence, or the holder releases. |
 | No task disappears | A task whose `**Files:**` block is missing or unparseable is published with the parse failure as its title. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
 
@@ -979,10 +980,13 @@ behind a token and is not a hosted interface.)*
 And above all: **parley does not decide what the work is. It provides
 capacity, and now a schedule.** `shape plan` dispatches a plan *you* wrote and
 computes, from the paths that plan already declares, which of its tasks can run
-at the same time — arithmetic over a territory map parley already keeps, not a
-judgement about the work. It does not write the plan, decide whether a task is
-worth doing, pick which front is competent to take one, or read the result. And
-it still creates no sessions: it coordinates sessions someone already started.
+at the same time — arithmetic over the plan's own text, using the same
+path-overlap test territory uses, not a judgement about the work. The waves are
+computed before anything is claimed and never consult the territory map; the map
+is asked afterwards, when a wave opens, and only to announce that a path is
+already held. It does not write the plan, decide whether a task is worth doing,
+pick which front is competent to take one, or read the result. And it still
+creates no sessions: it coordinates sessions someone already started.
 
 ---
 
