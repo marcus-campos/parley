@@ -178,6 +178,77 @@ describe("review after every task", () => {
     expect((took.response as unknown as { reviewing: unknown }).reviewing).toBeNull();
   });
 
+  // Part 1. `take` is not gated on "never your own review" — an offer buys
+  // first refusal, not obedience, and a gate would deadlock the single-front
+  // case, where the review can only ever be open to its author. The fact is
+  // disclosed instead, which is the whole enforcement mechanism once
+  // compulsion is off the table: without it every surface reports a completed,
+  // reviewed wave and nothing anywhere says the review was self-administered.
+  test("a front taking the review of its own work is told so, and so is the bus", () => {
+    const solo = initialState("advisory");
+    apply(solo, null, { v: 1, op: "shape", shape: "plan" }, at(2000));
+    const only = joined(solo, "ONLY", 2010);
+    apply(solo, only, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["z.ts"])] }, at(2100));
+    const item = solo.work[0]!;
+    apply(solo, only, { v: 1, op: "take", id: item.id }, at(2200));
+    apply(solo, only, { v: 1, op: "done", id: item.id }, at(2300));
+
+    const review = solo.work.find((w) => w.kind === "review")!;
+    expect(review.state).toBe("open");   // the only path a single front has
+
+    const took = apply(solo, only, { v: 1, op: "take", id: review.id }, at(2400));
+    expect((took.response as unknown as { selfReview: boolean }).selfReview).toBe(true);
+    expect(took.broadcast.map((e) => e.text).join("\n")).toContain("self-review");
+  });
+
+  test("a review taken by anyone else is not reported as one", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+
+    const review = state.work.find((w) => w.kind === "review")!;
+    const took = apply(state, review.offeredToId!, { v: 1, op: "take", id: review.id }, at(400));
+    expect((took.response as unknown as { selfReview: boolean }).selfReview).toBe(false);
+    expect(took.broadcast.map((e) => e.text).join("\n")).not.toContain("self-review");
+  });
+
+  // The two-command shortcut a reviewer found: the offeree hands the review
+  // back, it goes to the pool open, and the author takes it. Nothing refuses
+  // that — so it has to be the case that says so, not only the solo one.
+  test("the author taking a review handed back to the pool is still reported as self-review", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+
+    const review = state.work.find((w) => w.kind === "review")!;
+    apply(state, review.offeredToId!, { v: 1, op: "drop", id: review.id }, at(400));
+    const took = apply(state, worker, { v: 1, op: "take", id: review.id }, at(500));
+    expect(took.response.ok).toBe(true);
+    expect((took.response as unknown as { selfReview: boolean }).selfReview).toBe(true);
+  });
+
+  // `kind` is half the predicate and the half a "publishedById === me" fix
+  // would drop. Taking back work you published yourself is ordinary — it is
+  // not a review of anything, and calling it one would be a false disclosure.
+  test("taking back work you published yourself is not a self-review", () => {
+    apply(state, null, { v: 1, op: "shape", shape: "pool" }, at(600));
+    apply(state, worker, { v: 1, op: "work", title: "x", paths: ["d.ts"] }, at(700));
+    const item = state.work.find((w) => w.paths[0] === "d.ts")!;
+    const took = apply(state, worker, { v: 1, op: "take", id: item.id }, at(800));
+    expect((took.response as unknown as { selfReview: boolean }).selfReview).toBe(false);
+  });
+
+  // The key is always present for the same reason `reviewing` is: a consumer
+  // must never have to tell "not a self-review" apart from "this build does
+  // not send it".
+  test("every take answers the question, including the ones that are not reviews", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const took = apply(state, worker, { v: 1, op: "take", id: state.work[0]!.id }, at(200));
+    expect((took.response as unknown as { selfReview: unknown }).selfReview).toBe(false);
+  });
+
   // A review is `kind: "review"`, never `kind: "work"` — the guard in
   // finishWork checks exactly that. Without it, closing a review under
   // shape plan would spawn a review of the review, and so on forever.

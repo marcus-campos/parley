@@ -286,6 +286,37 @@ function evidenceFor(state: State, item: { evidenceIds: string[] }) {
 }
 
 /**
+ * A review being done by the front that asked for it.
+ *
+ * On both paths that create a review, its publisher is the author of the work
+ * it reviews: `finishWork` stamps the front that finished the reviewed item,
+ * and `parley work --kind review` is a front asking for a check of its own
+ * pass. So one field on one record answers it — no join, no clock, no I/O.
+ *
+ * The rule is that the front that did the work is never *offered* its own
+ * review, and `take` is deliberately not gated on this. An offer buys first
+ * refusal, not obedience; and with one live front the review can only ever be
+ * open to its author, so a hard block would stall the plan at wave 0 forever —
+ * `advancePlanIfWaveDone` waits for every review to be done, and `tick`
+ * reclaims only a *taken* item whose holder died. parley states the fact and
+ * the reader decides. It is stated flatly on purpose: in a single-front
+ * repository self-review is the only path there is, so wording that implied
+ * wrongdoing would be wrong as often as it was right.
+ *
+ * Asked here and by every surface that shows an item, so `parley take`, the
+ * take event, `parley works` and both panels can never disagree about it — the
+ * same discipline `droppable` gives `drop` and the footer.
+ */
+export function isSelfReview(
+  item: { kind: string; publishedById: string },
+  frontId: string | null,
+): boolean {
+  // A planned task carries `publishedById: ""` (see `openWave`), so an
+  // unauthenticated caller passing null or "" can never match one.
+  return item.kind === "review" && item.publishedById !== "" && item.publishedById === frontId;
+}
+
+/**
  * Resolving the evidence here, on take, is why the front that picks the item
  * up does not repay the discovery. An item whose evidence does not travel is
  * a chat message that moved house.
@@ -322,6 +353,13 @@ export function takeWork(state: State, actorId: string | null, frame: Record<str
   // as `{notes, results}`. Always present, `null` for anything but a review.
   const reviewing = item.reviewOf ? state.work.find((w) => w.id === item.reviewOf) ?? null : null;
 
+  // Refusing to compel AND not stating the fact would not soften the
+  // never-your-own-review rule, it would delete it: every surface would report
+  // a reviewed wave and nothing would ever say who reviewed it. Always
+  // present, so `false` can never be confused with a build that does not send
+  // it. See `isSelfReview` for why this is a disclosure and not a gate.
+  const selfReview = isSelfReview(item, me.id);
+
   item.state = "taken";
   item.takenById = me.id;
   item.offeredToId = null;
@@ -333,11 +371,11 @@ export function takeWork(state: State, actorId: string | null, frame: Record<str
     state,
     response: ok({
       id: item.id, title: item.title, paths: item.paths,
-      evidence: evidenceFor(state, item), reviewing,
+      evidence: evidenceFor(state, item), reviewing, selfReview,
     }),
     broadcast: [pushEvent(state, ctx, {
       kind: "system", from: null, to: null, priority: "normal",
-      text: `${me.name} took ${item.paths[0]} — ${item.title}`,
+      text: `${me.name} took ${item.paths[0]} — ${item.title}${selfReview ? " — self-review: its own work" : ""}`,
       about: me.id,
     })],
   };
