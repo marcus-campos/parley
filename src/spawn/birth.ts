@@ -12,7 +12,10 @@ export interface BornFront {
 
 type SpawnFn = typeof nodeSpawn;
 
-/** Opens a real terminal running `bin args` in `cwd`, told `env`. Returns its pid, or throws. */
+/**
+ * Opens a real terminal running `bin args` in `cwd`, with `env` — the newborn's
+ * identity only, never the daemon's environment. Returns its pid, or throws.
+ */
 type OpenTerminalFn = (cwd: string, bin: string, args: string[], env: Record<string, string>) => number;
 
 /**
@@ -54,23 +57,57 @@ function appleScriptString(value: string): string {
 }
 
 /**
- * The one thing `spawnFn` alone cannot give a terminal-mode front: a headless
- * child inherits `env` for free, a brand-new terminal window does not — it
- * starts its own login shell with its own environment. So identity
- * (PARLEY_NAME, PARLEY_BORN, PARLEY_MISSION) is exported inside the command
- * line itself, the one thing every terminal on every platform runs verbatim.
+ * The command a terminal window is handed — and the only place a newborn's
+ * identity enters it.
  *
+ * `spawnFn` alone cannot deliver it: a headless child inherits `env` for free,
+ * a brand-new terminal window does not — it starts its own shell with its own
+ * environment. So identity travels inside the command line, the one thing
+ * every terminal on every platform runs verbatim.
+ *
+ * What it must never do is outlive the agent. `export PARLEY_BORN=parley && cd
+ * <worktree> && claude -p …` is typed into a **persistent interactive** shell
+ * — `do script` on macOS, `cmd /k` on Windows — so the moment `claude -p`
+ * exits, the window is back at a prompt still carrying `PARLEY_BORN=parley`
+ * and still sitting in the newborn's worktree. A person who then works in that
+ * window joins the bus as a parley-born front whose cwd is under
+ * `.parley/worktrees/`, which is exactly the pair `collectWorktree` deletes a
+ * directory for. They would be told "parley is retiring you" in their own
+ * session and lose the checkout on SessionEnd; the commits survive on the
+ * branch, the working tree does not.
+ *
+ * So nothing is exported and nothing is `cd`-ed. It is one `sh -c`: the
+ * variables are handed to the single process that needs them (`env K=V …
+ * claude`), and the working directory is that child's, not the window's. The
+ * shell left behind is exactly as it was.
+ *
+ * Two consequences worth naming:
+ *
+ *  - only the three `PARLEY_*` variables travel, not the daemon's whole
+ *    environment. A fresh window already has the person's own PATH and shell
+ *    configuration, and overwriting them with the daemon's was never wanted —
+ *    it was just what `{...process.env}` did on the way past.
+ *  - the old form was POSIX (`export`) even in the `cmd.exe` branch, which cmd
+ *    cannot run at all. A single `sh -c '…'` word is at least the shape cmd
+ *    hands straight to the `sh` that Git for Windows installs. Untested there;
+ *    it can only be less broken than `export`.
+ */
+export function terminalCommand(
+  cwd: string, bin: string, args: string[], env: Record<string, string>,
+): string {
+  const assignments = Object.entries(env).map(([k, v]) => `${k}=${shellQuote(v)}`);
+  const command = [...assignments, ...[bin, ...args].map(shellQuote)].join(" ");
+  return `sh -c ${shellQuote(`cd ${shellQuote(cwd)} && exec env ${command}`)}`;
+}
+
+/**
  * This is the default used in production — the daemon never injects
  * `openTerminalFn` of its own — so it is built on the same `spawnFn` a test
  * can fake, never on `node:child_process` directly.
  */
 function defaultOpenTerminal(spawnFn: SpawnFn): OpenTerminalFn {
   return (cwd, bin, args, env) => {
-    const exports = Object.entries(env)
-      .map(([k, v]) => `export ${k}=${shellQuote(v)}`)
-      .join(" && ");
-    const inner = [bin, ...args].map(shellQuote).join(" ");
-    const command = [exports, `cd ${shellQuote(cwd)}`, inner].filter(Boolean).join(" && ");
+    const command = terminalCommand(cwd, bin, args, env);
 
     const launch =
       process.platform === "darwin"
@@ -112,17 +149,20 @@ export function bearFront(opts: {
     const worktree = addWorktree(opts.repoRoot, name.toLowerCase());
     const command = harnessCommand(opts.config.harness);
     const args = [...command.args, openingPrompt(opts.intent.reason)];
-    const env: Record<string, string> = {
-      ...(process.env as Record<string, string>),
+    // Who the newborn is. A headless child gets this on top of the daemon's
+    // own environment; a terminal window gets only this, and keeps the
+    // person's shell otherwise untouched (see `terminalCommand`).
+    const identity: Record<string, string> = {
       PARLEY_NAME: name,
       PARLEY_MISSION: `pool: ${opts.intent.reason}`,
       PARLEY_BORN: "parley",
     };
+    const env: Record<string, string> = { ...(process.env as Record<string, string>), ...identity };
 
     if (opts.config.mode === "terminal") {
       const openTerminal = opts.openTerminalFn ?? defaultOpenTerminal(spawnFn);
       try {
-        const pid = openTerminal(worktree.path, command.bin, args, env);
+        const pid = openTerminal(worktree.path, command.bin, args, identity);
         return { name, pid, worktree: worktree.path, mode: "terminal" };
       } catch {
         // A terminal that will not open must not stop the front being born.

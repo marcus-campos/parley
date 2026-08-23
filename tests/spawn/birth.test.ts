@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bearFront } from "../../src/spawn/birth";
@@ -28,9 +28,17 @@ beforeEach(() => {
   git("add", "-A");
   git("commit", "-qm", "first");
 });
+const scratch: string[] = [];
 afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
+  for (const dir of scratch.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+function tempDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  scratch.push(dir);
+  return dir;
+}
 
 function fakeSpawn(calls: Call[], unreffed: { count: number } = { count: 0 }) {
   const fn = ((cmd: string, args: string[], opts: Record<string, unknown>) => {
@@ -145,5 +153,81 @@ describe("bearing a front", () => {
     });
     expect(born).toBeNull();
     expect(calls.length).toBe(0);
+  });
+});
+
+/**
+ * Terminal mode is the one path where identity does not travel in `env` but in
+ * a command line typed into somebody's shell — and `do script` (macOS) and
+ * `cmd /k` (Windows) hand that command to a shell that *stays alive*. The old
+ * form exported PARLEY_BORN and `cd`-ed into the newborn's worktree, so the
+ * window a person got back after the agent finished was a prompt that still
+ * claimed to be a parley-born front standing in `.parley/worktrees/pool-1`.
+ * Work there, close the session, and `collectWorktree` deletes the checkout.
+ *
+ * Nothing here is faked except the harness binary: the command asserted on is
+ * the one `bearFront` really builds for a real terminal, it is run by a real
+ * `sh`, and what it delivers is read back out of a real process's environment.
+ */
+describe.if(process.platform !== "win32")("terminal mode: what the window is told, and what it keeps", () => {
+  /** The command string production hands a terminal, out of whatever the platform wraps it in. */
+  function commandFromLaunch(args: string[]): string {
+    const arg = args.find((a) => a.includes("PARLEY_BORN"));
+    expect(arg).toBeDefined();
+    if (!arg!.startsWith("tell application")) return arg!;
+    const marker = "do script ";
+    const quoted = arg!.slice(arg!.indexOf(marker) + marker.length);
+    return quoted.slice(1, -1).replace(/\\(["\\])/g, "$1");
+  }
+
+  function launch(): { command: string; worktree: string } {
+    const calls: Call[] = [];
+    // No `openTerminalFn`: this is the default opener, the only one production
+    // ever uses.
+    const born = bearFront({
+      repoRoot: repo,
+      config: { mode: "terminal", harness: "claude-code", maxFronts: 6 },
+      intent: { reason: "2 open item(s) and no idle front", forItemIds: ["w_1"] },
+      index: 1,
+      spawnFn: fakeSpawn(calls).fn,
+    });
+    expect(born).not.toBeNull();
+    return { command: commandFromLaunch(calls[0]!.args), worktree: born!.worktree };
+  }
+
+  /** A `claude` on PATH that records what it was actually given. */
+  function stubHarness(): { path: string; seen: string } {
+    const dir = tempDir("parley-bin-");
+    const seen = join(dir, "seen");
+    writeFileSync(join(dir, "claude"), `#!/bin/sh\n{ printenv PARLEY_BORN; printenv PARLEY_NAME; pwd; } > '${seen}'\n`);
+    chmodSync(join(dir, "claude"), 0o755);
+    return { path: `${dir}:${process.env.PATH}`, seen };
+  }
+
+  test("the newborn's own process is told who it is, and starts in its worktree", () => {
+    const { command, worktree } = launch();
+    const harness = stubHarness();
+    execFileSync("sh", ["-c", command], { env: { PATH: harness.path }, encoding: "utf8" });
+    const [born, name, cwd] = readFileSync(harness.seen, "utf8").trim().split("\n");
+    expect(born).toBe("parley");
+    expect(name).toContain("POOL");
+    expect(realpathSync(cwd!)).toBe(realpathSync(worktree));
+  });
+
+  test("and the shell it was typed into keeps none of it — no identity, no worktree cwd", () => {
+    const { command } = launch();
+    const harness = stubHarness();
+    const window = tempDir("parley-window-");
+    // What the person gets back when `claude -p` exits: the same shell, still
+    // running, still theirs. Whatever it carries now, it carries into their
+    // next session.
+    const after = execFileSync(
+      "sh",
+      ["-c", `${command}\necho "born=[$PARLEY_BORN]"\necho "name=[$PARLEY_NAME]"\necho "cwd=[$(pwd)]"`],
+      { cwd: window, env: { PATH: harness.path }, encoding: "utf8" },
+    );
+    expect(after).toContain("born=[]");
+    expect(after).toContain("name=[]");
+    expect(after).toContain(`cwd=[${realpathSync(window)}]`);
   });
 });
