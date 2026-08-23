@@ -97,6 +97,19 @@ export const DEFAULTS = {
    * everywhere else, so it is what "actually gone" means here too.
    */
   COLLECT_AFTER_LEAVE_MS: 5 * 60_000,
+  /**
+   * How many times a collection that could not find out is retried before the
+   * daemon stops trying and says so.
+   *
+   * `dirty` is an answer and is never retried — somebody's changes are in
+   * there and that is a decision for a person. `unknown` (a `git status` that
+   * failed or timed out) and `failed` (git refused the removal) are the
+   * opposite: nothing is known and nothing happened, and a stale `index.lock`
+   * or a busy network filesystem clears on its own. So they come back to the
+   * sweep — bounded, because retrying forever with nobody told is the shape
+   * this codebase has already been burned by once.
+   */
+  COLLECT_MAX_ATTEMPTS: 3,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

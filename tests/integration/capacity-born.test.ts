@@ -351,6 +351,61 @@ describe("the newborn's worktree", () => {
     await front.send({ op: "who" });
     await daemon.close();
     expect(existsSync(join(worktree, "b.txt"))).toBe(true);
+
+    // And somebody is told. `removeWorktreeIfClean` answers with four distinct
+    // outcomes and the daemon threw all four away — `.then(() => {}).catch(()
+    // => {})` — so this, the case most worth hearing, was a silence: a full
+    // checkout left on disk holding half an hour of somebody's work, under a
+    // name nothing would ever mention again.
+    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).toContain("uncommitted changes");
+    expect(said).toContain(join(".parley", "worktrees", "pool-1"));
+    expect(said).toContain("nothing was thrown away");
+  });
+
+  test("a worktree that cannot be asked is retried, and then said out loud", async () => {
+    // The other two outcomes. A half-removed worktree — the directory is
+    // there, its `.git` points at nothing — makes `git status` fail outright
+    // rather than answer clean or dirty. That is `unknown`, and `unknown` is
+    // not an answer: nothing is known and nothing happened, so it must come
+    // back to the sweep rather than being dropped like a success or announced
+    // like a verdict. Bounded, because retrying forever with nobody told is
+    // the shape this codebase has been burned by before.
+    const repo = gitRepo();
+    const worktree = join(repo, ".parley", "worktrees", "pool-1");
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, ".git"), "gitdir: /nonexistent/nowhere\n");
+
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    const env = { PARLEY_NAME: "POOL-1", PARLEY_MISSION: "pool: x", PARLEY_BORN: "parley" };
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    await front.send({ op: "leave" });
+
+    // Three attempts are three subprocesses, and a removal never lands on the
+    // frame that started it — so this waits *for the thing*, with a ceiling,
+    // rather than sleeping a number somebody guessed. It leaves as soon as the
+    // daemon has spoken (~60ms here); it fails loudly if the retry is dropped,
+    // or never bounded, because then there is nothing to leave on.
+    const said = () => daemon.snapshot().events.map((e) => e.text).join("\n");
+    const ceiling = Date.now() + 4_000;
+    while (Date.now() < ceiling && !said().includes("could not be collected")) {
+      clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+      await front.send({ op: "who" });
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await daemon.close();
+
+    expect(said()).toContain("could not be collected");
+    // Said once the tries ran out, not on the first failure to find out. The
+    // count is read back out of the message rather than interpolated into it:
+    // asserting `after ${DEFAULTS.COLLECT_MAX_ATTEMPTS} tries` passed happily
+    // with the bound mutated to 1, because the assertion moved with it.
+    const tries = Number(said().match(/after (\d+) tries/)?.[1]);
+    expect(tries).toBeGreaterThan(1);
+    expect(tries).toBe(DEFAULTS.COLLECT_MAX_ATTEMPTS);
+    expect(existsSync(worktree)).toBe(true);
   });
 
   test("only what parley created: a newborn that left from a worktree a person made keeps it", async () => {

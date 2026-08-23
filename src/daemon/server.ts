@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
@@ -12,7 +12,7 @@ import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint
 import type { Address } from "../transport/address";
 import { readSpawnConfigIn, type SpawnConfig } from "../cli/spawn-config";
 import { bearFront } from "../spawn/birth";
-import { isNewbornWorktree, removeWorktreeIfClean } from "../spawn/worktree";
+import { isNewbornWorktree, removeWorktreeIfClean, type WorktreeRemoval } from "../spawn/worktree";
 
 interface Conn {
   socket: Socket;
@@ -78,7 +78,8 @@ export class ParleyDaemon {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastActivityMs: number;
   /** Fronts that said `leave` from a worktree parley made, waiting to be proven gone. */
-  private readonly pendingCollection = new Map<string, { cwd: string; sinceMs: number }>();
+  private readonly pendingCollection =
+    new Map<string, { name: string; cwd: string; sinceMs: number; attempts: number }>();
   /** Removals in flight. Nothing waits on these except `close`. */
   private readonly collecting = new Set<Promise<void>>();
   private readonly token: string | null;
@@ -444,7 +445,9 @@ export class ParleyDaemon {
     const root = this.repoRootForExport();
     if (!root) return;
     if (!isNewbornWorktree(root, p.cwd)) return;
-    this.pendingCollection.set(p.id, { cwd: p.cwd, sinceMs: this.now() });
+    // The name is copied rather than looked up later: by the time the removal
+    // answers, this is the only thing left that can say whose worktree it was.
+    this.pendingCollection.set(p.id, { name: p.name, cwd: p.cwd, sinceMs: this.now(), attempts: 0 });
   }
 
   /**
@@ -476,11 +479,70 @@ export class ParleyDaemon {
       // place that waits, so a daemon shutting down cannot leave a half-done
       // `git worktree remove` behind.
       const collecting = removeWorktreeIfClean(root, pending.cwd)
-        .then(() => { /* the outcome is the directory itself */ })
+        .then((outcome) => this.afterCollection(id, pending, outcome))
         .catch(() => { /* disk is cheap */ });
       this.collecting.add(collecting);
       void collecting.finally(() => this.collecting.delete(collecting));
     }
+  }
+
+  /**
+   * What became of it, said out loud.
+   *
+   * `removeWorktreeIfClean` answers with four distinct outcomes and every one
+   * of them was thrown away here — `.then(() => {}).catch(() => {})` — so the
+   * daemon could not tell "it holds somebody's work" from "git could not be
+   * asked". The consequence was a silence in the one case most worth hearing:
+   * **a front that leaves holding uncommitted changes has its worktree kept
+   * and nobody is told.** It leaves a full checkout on disk, under a name
+   * nothing else will ever mention again, with an hour of somebody's work in
+   * it. `bearFrontFor` announces both a failed birth and a degrade; this is
+   * the same obligation on the other end of the life.
+   *
+   * The three that are not `removed` divide cleanly:
+   *
+   *  - `dirty` is an **answer**. Nothing was lost, nothing will change on its
+   *    own, and what to do with those changes is a person's decision. Said
+   *    once, never retried.
+   *  - `unknown` and `failed` are **not answers**. A `git status` that timed
+   *    out behind a stale `index.lock`, a removal git refused for a reason
+   *    that clears — nothing is known and nothing happened. Those come back to
+   *    the sweep, bounded by `COLLECT_MAX_ATTEMPTS`, and are announced only
+   *    when the tries run out.
+   *
+   * Re-arming after a re-join is safe without a check here: the sweep cancels
+   * any pending collection whose directory has somebody live in it, and it
+   * does that before it looks at any deadline.
+   */
+  private afterCollection(
+    id: string,
+    pending: { name: string; cwd: string; sinceMs: number; attempts: number },
+    outcome: WorktreeRemoval,
+  ): void {
+    if (outcome === "removed") return;
+    const root = this.repoRootForExport();
+    const where = root ? relative(root, pending.cwd) : pending.cwd;
+    const ctx = makeCtx(this.now(), this.counter);
+
+    if (outcome === "dirty") {
+      this.announce(ctx, `${pending.name} left uncommitted changes in ${where} — its worktree is kept, nothing was thrown away`);
+      return;
+    }
+
+    const attempts = pending.attempts + 1;
+    if (attempts < DEFAULTS.COLLECT_MAX_ATTEMPTS) {
+      this.pendingCollection.set(id, { ...pending, sinceMs: this.now(), attempts });
+      return;
+    }
+    this.announce(ctx, `${pending.name}'s worktree at ${where} could not be collected after ${attempts} tries — it is still on disk`);
+  }
+
+  /** One system event, to everyone. Nothing else in here has a voice. */
+  private announce(ctx: Ctx, text: string): void {
+    const event = pushEvent(this.state, ctx, {
+      kind: "system", from: null, to: null, priority: "high", text,
+    });
+    this.push([event], null);
   }
 
   /** Unsolicited frames on the same connection: inbox and territory events. */
