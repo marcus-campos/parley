@@ -398,7 +398,7 @@ Flags: `--evidence`, `--kind`, `--review-of`
 parley works [--state open|offered|taken|done] [--mine]
 ```
 
-what is in the pool, and who is holding what
+what is in the pool: id, state, paths and title. The state is the only holder information it shows
 
 Flags: `--mine`, `--state`
 

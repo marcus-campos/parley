@@ -123,7 +123,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              publish discovered work, one item per path,
                              offered first to whoever already holds it
   parley works [--state open|offered|taken|done] [--mine]
-                             what is in the pool, and who is holding what
+                             what is in the pool: id, state, paths and title.
+                             The state is the only holder information it shows
   parley take <id>           take an open item or an offer made to you; the
                              answer carries the evidence already gathered
   parley drop <id> [--reason "..."]

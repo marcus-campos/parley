@@ -126,7 +126,7 @@ If the daemon cannot be reached at all, `work`, `works`, `take`, `drop` and
 `done` behave like every other direct CLI command: the problem is reported
 on stderr and the process exits clean rather than blocking —
 `parley: <reason> — continuing without coordination`
-(`src/cli/main.ts:165-171`). A broken parley never stops the fix the item
+(`src/cli/main.ts:166-172`). A broken parley never stops the fix the item
 describes; it only stops the bookkeeping around it.
 
 One guard exists that nothing on this branch can currently trigger: a
