@@ -40,6 +40,38 @@ describe("turning the brain on", () => {
     expect(JSON.stringify(out.response)).not.toContain("enable");
   });
 
+  /**
+   * `results --query` has been putting `semantic: true` on the wire since the
+   * flag existed, and `listResults` never read it — a field journaled forever
+   * and acted on by nobody, so a person whose fronts happened to ask through
+   * `results` was never told the brain exists at all.
+   */
+  test("asking through results earns the same notice asking through notes does", () => {
+    const out = apply(state, core, { v: 1, op: "results", q: "bun test", semantic: true }, at(100));
+    expect(out.response.ok).toBe(true);
+    expect(out.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(1);
+  });
+
+  test("and it is one notice for the bus, not one per op — notes after results says nothing more", () => {
+    const first = apply(state, core, { v: 1, op: "results", q: "bun test", semantic: true }, at(100));
+    expect(first.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(1);
+
+    const second = apply(state, core, { v: 1, op: "notes", q: "x", semantic: true }, at(200));
+    expect(second.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(0);
+  });
+
+  test("a plain listing is not asking, so it earns nothing — through either op", () => {
+    expect(apply(state, core, { v: 1, op: "results" }, at(100)).broadcast).toHaveLength(0);
+    expect(apply(state, core, { v: 1, op: "notes" }, at(110)).broadcast).toHaveLength(0);
+    expect(state.brain.askedAtMs).toBeNull();
+  });
+
+  test("with the brain on, asking earns no notice at all — there is nothing to discover", () => {
+    apply(state, human, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(50));
+    const out = apply(state, core, { v: 1, op: "results", q: "bun test", semantic: true }, at(100));
+    expect(out.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(0);
+  });
+
   test("but the panel is told, once", () => {
     const first = apply(state, core, { v: 1, op: "notes", q: "x", semantic: true }, at(100));
     expect(first.broadcast.filter((e) => e.text.includes("parley brain enable"))).toHaveLength(1);

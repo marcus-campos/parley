@@ -85,7 +85,7 @@ export function apply(
     case "notes": return listNotes(state, frame, ctx);
     case "reverse": return reverse(state, actorId, frame, ctx);
     case "result": return recordResult(state, actorId, frame, ctx);
-    case "results": return listResults(state, frame);
+    case "results": return listResults(state, frame, ctx);
     case "question": return askFront(state, actorId, frame, ctx);
     case "reply": return replyToQuestion(state, actorId, frame, ctx);
     case "questions": return listQuestions(state, actorId, frame, ctx);

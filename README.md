@@ -545,21 +545,37 @@ deliberately:
 
 - **Human-only.** An agent asking `parley brain enable` is refused — it is
   somebody's disk and somebody's ~100MB download, so it is the person's call.
-  An agent's query still answers from the lexical floor either way; the daemon
-  nudges the panel once — *"a front asked for semantic recall and the brain is
-  off — `parley brain enable` to pick a model"* — and never repeats itself for
-  the same asking front, and never makes that front wait on a person to
-  answer.
+  An agent's query still answers from the lexical floor either way, and never
+  waits on a person. What the asking costs is one notice — *"a front asked for
+  semantic recall and the brain is off — `parley brain enable` to pick a
+  model"* — pushed to every **other** front on the bus, the panel among them,
+  and never back to the front that asked. It is spent once for the whole bus,
+  not once per front: whoever asks second while the brain is still off gets
+  the floor and no notice at all. Turning the brain on or off arms it again.
 - **Static embeddings only.** A token-lookup-and-mean model, not a
   transformer: deterministic down to the bit, no GPU, no per-platform native
   runtime. Vectors persist beside the journal, int8-quantised, and are
   rebuilt from the notes and results already in `state` if that file ever
   goes missing — nothing here needs re-deriving from scratch.
-- **A relevance floor that is relative, not fixed.** Dense embedding tables
-  are anisotropic — arbitrary, unrelated text still lands at a high positive
-  cosine — so a hit must be distinctively similar to the rest of *this
-  query's* results, not merely similar at all. Same discipline the lexical
-  floor already applies to document frequency, aimed at cosine instead.
+- **A relevance floor measured from the model itself.** Dense embedding
+  tables are anisotropic: two texts about nothing in common still land at
+  cosine 0.85 or higher, and exactly where they land drifts with how long the
+  texts are. So enabling a model does two things before it will answer
+  anything. It subtracts the table's own centre of mass from every vector,
+  document and query alike, which is what stops that drift — measured, the
+  score of unrelated text goes from *"0.80 to 0.86, depending on length"* to
+  *"0.00 ± 0.06, regardless"*. Then it measures what unrelated text actually
+  scores on that table, over hundreds of disjoint slices of the model's own
+  vocabulary, and keeps `mean + 4σ` of that as an absolute floor. A hit clears
+  that one number or it is not returned — the same verdict whether it is the
+  only candidate or one of forty, and regardless of what anything else scored.
+  Two notes that match equally well both come back; a corpus where everything
+  is equally irrelevant returns none of it.
+- **A model that cannot be measured does not get a guessed floor.** If the
+  table is too small to measure a null distribution over, or the measurement
+  comes back degenerate, the brain does not come up: the lexical floor answers
+  and the bus is told. A wrong floor is worse than no floor, because nobody
+  can tell which direction it is wrong in.
 
 **Honestly, about this build:** the registry lists one model today,
 `potion-multilingual-128M-int8`, and it declares the `xlmr` tokenizer —
@@ -595,10 +611,17 @@ thirty of them. Either overflow count points at `parley notes --path <file>`
 
 | failure | behaviour |
 |---|---|
-| brain off | lexical floor answers |
-| model missing, corrupt, or fails its checksum | lexical floor answers, and says so once |
-| lexical index cold or broken | path-anchored delivery, i.e. today's behaviour |
+| brain off | the lexical floor answers |
+| model missing, corrupt, or too small to measure a floor from | the lexical floor answers, and the bus is told once |
+| model fails its checksum | the file is deleted, the brain is never switched on, and `parley brain enable` says so **to the person who ran it**. The bus hears nothing, because nothing about the bus changed |
+| the ranked query itself fails | the plain, unranked list `parley notes` / `parley results` would have returned with no `--query` at all |
+| nothing in the corpus clears the floor | an empty answer, marked ranked. Silence on purpose, never the least-bad note |
 | daemon unreachable | today's behaviour |
+
+`claim`'s path-anchored footer is underneath all of that and is not in the
+table, because no failure above can reach it: it reads the notes filed against
+the paths being claimed straight out of `state` and never consults either
+index.
 
 Nothing here can block an edit, delay a hook, or stop the work — [the one
 rule](#the-one-rule) applies to recall exactly as it applies to everything
@@ -680,7 +703,7 @@ through the environment.
 | `parley decide --title "..."` | Record something binding. Announced to everyone, stands until reversed — so the next front does not relitigate a settled question. |
 | `parley reverse <id> --reason "..."` | Un-bind a decision while keeping it on the record. |
 | `parley notes [--path p] [--tag t] [--kind decision] [--export] [--import]` | Read them. `--export` rewrites `.parley/notes.md` (it is written automatically on every note anyway); `--import` reads that file back onto the bus, which is what a fresh clone needs. |
-| `parley notes --query "..." [--k N]` | **Ask** instead of listing: ranked recall over every note and decision, top-`k` only (default 5). See [Recall](#recall-ask-dont-just-list) below. |
+| `parley notes --query "..." [--k N]` | **Ask** instead of listing: ranked recall over every note and decision, top-`k` only (default 5). See [Recall](#recall-ask-dont-just-list) above. |
 | `parley result "<cmd>" --status pass\|fail --paths <globs>` | Record what a command produced, and what it depends on. |
 | `parley results [--fresh]` | What is already known, and whether it still holds. **Check this before running a long suite** — if nothing it depends on changed, running it again buys nothing. |
 | `parley results --query "..." [--k N]` | Same idea, over recorded results instead of notes. |
@@ -693,7 +716,7 @@ through the environment.
 | `parley brain enable [<model>]` | **Human-only** — it is somebody's disk and somebody's download. With no model named, lists the registry — name, languages, size, and whether **this build** can actually load it — so you weigh it before anything downloads. |
 | `parley brain disable` | Back to the lexical floor, without losing the corpus. |
 
-See [Recall](#recall-ask-dont-just-list) below for what turning it on actually buys you, and the honest state of what this build can load today.
+See [Recall](#recall-ask-dont-just-list) above for what turning it on actually buys you, and the honest state of what this build can load today.
 
 ### Watching
 
