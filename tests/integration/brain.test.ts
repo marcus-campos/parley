@@ -176,6 +176,41 @@ describe("the brain, wired into a real daemon", () => {
   });
 
   /**
+   * The other half of the previous floor's collapse, and until now the only
+   * one of the two pinned at unit level alone. A per-query z-score asks "is
+   * this score unusual among the others?", so three genuine matches in a
+   * ten-note corpus hold each other's scores down and none of them stands
+   * out — all three rejected. An absolute floor judges each candidate on its
+   * own, so all three come back, through a real daemon, with no lexical
+   * overlap anywhere to prop the answer up.
+   */
+  test("on: three genuine matches among ten notes all come back — none of them masks the others", async () => {
+    const dir = tempRepo();
+    const modelsDir = tempRepo();
+    plantFixtureModel(modelsDir);
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+
+    const genuine = [NOTE_PT, "a barra lateral colapsada", "o drawer oculto do painel"];
+    const rest = [
+      "rollout do pod no namespace do cluster",
+      "a migration do schema no postgres com rollback",
+      "o gateway devolveu timeout no socket da requisicao",
+      "w0x2 w30x9", "w5x2 w35x9", "w10x2 w40x9", "w15x2 w45x9",
+    ];
+    for (const title of [...genuine, ...rest]) await human.send({ op: "note", title });
+    await human.send({ op: "brain", enable: REGISTERED.name });
+
+    const out = await human.send({ op: "notes", q: QUERY_EN });
+    const notes = (out as unknown as { notes: { title: string }[] }).notes;
+    expect(notes.map((n) => n.title).sort()).toEqual([...genuine].sort());
+
+    human.close();
+  });
+
+  /**
    * A model this build can parse but cannot measure a null distribution over
    * — too little vocabulary — must not get a guessed floor. It degrades to
    * the lexical floor and says so, exactly like a missing file.

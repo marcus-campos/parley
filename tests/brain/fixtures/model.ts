@@ -22,9 +22,16 @@ import type { StaticModel } from "../../../src/brain/embed";
  *   so a Portuguese note really is closer to its English paraphrase than to
  *   an unrelated note — the signal semantic recall is supposed to find, and
  *   the direction a floor can wrongly reject.
- * - **Big enough to calibrate.** Nearly a thousand rows, so `calibrate` can
- *   measure a null distribution over disjoint slices of it rather than
- *   refusing.
+ * - **Big enough that the floor is a property of the model.** Twelve thousand
+ *   rows, so `calibrate` measures its null over the full 512 disjoint slices
+ *   a real model gets — not the 41 a thousand-row table allowed. That is not
+ *   about calibrating rather than refusing; it is about the floor being
+ *   *stable*. Recalibrating the same table under a hundred different shuffle
+ *   seeds moves the floor by 1.94 nullSd at 41 pairs — wider than the entire
+ *   3σ-to-5σ band the design is pinned inside, so the seed alone could walk
+ *   out of the box that `FLOOR_SIGMAS` is supposed to bound. At 512 pairs the
+ *   same reshuffling moves it 0.65 nullSd, and the box holds. `MIN_PAIRS`
+ *   carries the same table.
  *
  * Deterministic: same seed, same table, every run, every machine.
  */
@@ -69,8 +76,18 @@ export const TOPICS: Record<string, string[]> = {
   http: ["request", "header", "cookie", "timeout", "retry", "socket", "porta", "requisicao", "gateway", "payload"],
 };
 
-const FILLER_TOPICS = 60;
-const FILLER_WORDS_PER_TOPIC = 16;
+/**
+ * Exported because the floor tests build their own unrelated corpora out of
+ * these words, and a corpus that guessed at the topic count would quietly
+ * stop being unrelated the day this table changed shape.
+ */
+export const FILLER_TOPICS = 800;
+export const FILLER_WORDS_PER_TOPIC = 16;
+
+/** The `t`-th filler topic's `w`-th word — the one place the naming lives. */
+export function fillerWord(topic: number, word: number): string {
+  return `w${topic}x${word}`;
+}
 
 export function buildFixtureModel(seed = 0x5eed1234): StaticModel {
   const next = xorshift32(seed);
@@ -92,7 +109,7 @@ export function buildFixtureModel(seed = 0x5eed1234): StaticModel {
 
   for (const words of Object.values(TOPICS)) addTopic(words);
   for (let t = 0; t < FILLER_TOPICS; t++) {
-    addTopic(Array.from({ length: FILLER_WORDS_PER_TOPIC }, (_, w) => `w${t}x${w}`));
+    addTopic(Array.from({ length: FILLER_WORDS_PER_TOPIC }, (_, w) => fillerWord(t, w)));
   }
 
   return { dims: DIMS, vocab };

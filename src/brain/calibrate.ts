@@ -52,8 +52,31 @@ const TOKENS_PER_PAIR = QUERY_TOKENS + DOC_TOKENS;
  * too small to reach `MIN_PAIRS` is a toy, not a model: it does not get a
  * guessed floor, it gets refused (`null`), and the daemon degrades to the
  * lexical floor and says so.
+ *
+ * 256 rather than a token handful, because the floor is an *estimate* and a
+ * small sample makes it an arbitrary one. Measured on a model-shaped table by
+ * recalibrating the same vocabulary under a hundred different shuffles and
+ * watching where the floor lands:
+ *
+ * ```
+ *   pairs   sd of the floor   range over 100 reshuffles
+ *      33      0.70 nullSd            3.64 nullSd
+ *      41      0.43 nullSd            1.94 nullSd
+ *     268      0.18 nullSd            0.92 nullSd
+ *     512      0.12 nullSd            0.65 nullSd
+ * ```
+ *
+ * At 33 pairs the shuffle alone moves the floor further than the whole
+ * 3σ-to-5σ band this design is pinned inside: a model could calibrate
+ * successfully, report `brain enabled` honestly, and land anywhere from
+ * returning junk to returning nothing, decided by nothing but which seed is
+ * compiled in. `floor <= 0 || floor >= 1` below catches neither end of that.
+ * At 256 the shuffle's leverage is ~0.18σ, comfortably inside the band.
+ *
+ * Refusing here is cheap: refusal degrades to the lexical floor, which is the
+ * behaviour this repository prefers over a confident guess anyway.
  */
-const MIN_PAIRS = 32;
+const MIN_PAIRS = 256;
 const MAX_PAIRS = 512;
 
 /**
@@ -73,8 +96,16 @@ const FLOOR_SIGMAS = 4;
  * repository can recall, which is worse than a floor that is merely
  * imperfect. `Math.random()` is banned under `src/state/` for exactly this
  * reason; nothing here needs it either.
+ *
+ * It is a parameter of `calibrate` and not only a hidden constant because it
+ * is the second free number in this file, and a free number nobody can vary
+ * is a free number nobody can measure the leverage of. Production never
+ * passes it. The tests do, so that "this floor is a property of the model and
+ * not of this seed" is an assertion rather than a hope — see `MIN_PAIRS`
+ * above for what that leverage actually is, and the fix-round-2 report for
+ * the measurement.
  */
-const SEED = 0x9e3779b9;
+export const SEED = 0x9e3779b9;
 
 function xorshift32(seed: number): () => number {
   let s = seed >>> 0 || 1;
@@ -153,7 +184,7 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * cannot say what unrelated looks like has not earned the right to say what
  * related looks like.
  */
-export function calibrate(model: StaticModel): Calibration | null {
+export function calibrate(model: StaticModel, seed: number = SEED): Calibration | null {
   const mean = meanRow(model);
 
   // An all-zero row carries no signal and would pool into a degenerate
@@ -162,7 +193,7 @@ export function calibrate(model: StaticModel): Calibration | null {
   const pairs = Math.min(MAX_PAIRS, Math.floor(usable.length / TOKENS_PER_PAIR));
   if (pairs < MIN_PAIRS) return null;
 
-  const next = xorshift32(SEED);
+  const next = xorshift32(seed);
   const deck = shuffled(usable.sort(), next);
 
   const scores: number[] = [];

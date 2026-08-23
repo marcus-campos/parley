@@ -136,7 +136,7 @@ describe("nothing here can stop the work", () => {
     // say nothing about what unrelated looks like, so it may not say what
     // related looks like either.
     const vocab: Record<string, number[]> = {};
-    for (let i = 0; i < 2000; i++) vocab[`t${i}`] = [1, 2, 3, 4];
+    for (let i = 0; i < 8000; i++) vocab[`t${i}`] = [1, 2, 3, 4];
     expect(calibrate({ dims: 4, vocab })).toBeNull();
   });
 
