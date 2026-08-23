@@ -5,8 +5,11 @@ import {
   CITATION,
   LEDGER_PATH,
   collectCitations,
+  describeChanges,
+  diffLedger,
   digest,
   locate,
+  needsAcceptance,
   parseLedger,
   renderLedger,
   sitePages,
@@ -162,6 +165,96 @@ describe("what the site cites", () => {
   });
 });
 
+/**
+ * The generator has to push back at the moment of the mistake.
+ *
+ * This suite exists because of a disclosed incident: the author of the ledger
+ * edited help text, went stale on six citations, ran `docs:citations` by
+ * reflex and watched the suite go green over six wrong citations. What caught
+ * it was `git diff --stat` — a second command nobody is obliged to run. The
+ * re-pin does land in a reviewable diff, but a diff only pushes back if
+ * somebody volunteers to read it, and the person least likely to is the one
+ * who just re-pinned by reflex.
+ */
+describe("re-pinning has to be read, not merely run", () => {
+  const entry = (page: string, file: string, text: string) => ({ page, file, text });
+
+  test("a rewritten block is reported with the page, the file and both texts", () => {
+    const before = [entry("docs/concepts/shapes.md", "src/state/work.ts", "const a = 1;\nconst b = 2;")];
+    const after = [entry("docs/concepts/shapes.md", "src/state/work.ts", "const a = 9;\nconst b = 2;")];
+    const changes = diffLedger(before, after);
+    expect(changes).toEqual([
+      {
+        kind: "changed",
+        page: "docs/concepts/shapes.md",
+        file: "src/state/work.ts",
+        was: "const a = 1;\nconst b = 2;",
+        now: "const a = 9;\nconst b = 2;",
+      },
+    ]);
+    const report = describeChanges(changes);
+    expect(report).toContain("docs/concepts/shapes.md → src/state/work.ts");
+    expect(report).toContain("was | const a = 1;");
+    expect(report).toContain("now | const a = 9;");
+  });
+
+  test("a transposition is reported, which is the case the buckets cannot see", () => {
+    // Same page, same file, same two blocks — only which citation points at
+    // which changed. Every multiset is identical, so nothing but the order
+    // says anything happened.
+    const a = entry("docs/concepts/work-pool.md", "src/state/work.ts", "first block");
+    const b = entry("docs/concepts/work-pool.md", "src/state/work.ts", "second block");
+    const changes = diffLedger([a, b], [b, a]);
+    expect(changes.map((c) => c.kind)).toEqual(["reordered"]);
+    expect(changes[0]!.page).toBe("docs/concepts/work-pool.md");
+    expect(describeChanges(changes)).toContain("swapping which lines they");
+  });
+
+  test("adding and dropping citations costs nothing, so the gate is not in the way", () => {
+    const kept = entry("docs/guide/panel.md", "src/cli/web.ts", "kept");
+    const changes = diffLedger(
+      [kept, entry("docs/guide/panel.md", "src/cli/web.ts", "gone")],
+      [kept, entry("docs/guide/setup.md", "src/cli/main.ts", "new")],
+    );
+    expect(changes.map((c) => c.kind).sort()).toEqual(["added", "dropped"]);
+    // The whole point of pinning text and not line numbers is that ordinary
+    // docs work is free. Only a rewrite has to be typed for.
+    expect(needsAcceptance(changes)).toEqual([]);
+  });
+
+  test("a block that only moved inside its file is not a change at all", () => {
+    // The ledger pins text. Code moving is exactly the case it was built to
+    // absorb without a re-bless, so it must not trip the gate either.
+    const same = entry("docs/concepts/territory.md", "src/cli/main.ts", "} catch (e) {");
+    expect(diffLedger([same], [same])).toEqual([]);
+    expect(describeChanges([])).toBe("");
+  });
+
+  test("only rewrites and transpositions need to be accepted", () => {
+    const changes = diffLedger(
+      [entry("p.md", "s.ts", "old"), entry("p.md", "s.ts", "kept")],
+      [entry("p.md", "s.ts", "new"), entry("p.md", "s.ts", "kept"), entry("q.md", "s.ts", "extra")],
+    );
+    expect(needsAcceptance(changes).map((c) => c.kind)).toEqual(["changed"]);
+  });
+
+  test("the script everybody runs cannot carry the flag that defeats the gate", () => {
+    // `bun run docs:citations` is the reflex. If it accepted changes for you,
+    // the gate would be decoration.
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["docs:citations"]).not.toContain("--accept-changes");
+  });
+
+  test("the generator refuses to write a rewrite, and says what it would have written", () => {
+    const source = readFileSync(join(root, "scripts", "gen-citations.ts"), "utf8");
+    // Report to stderr, never stdout: stdout is the ledger when --write is
+    // absent, and a report mixed into it would be pinned as a citation.
+    expect(source).toContain("process.stderr.write(describeChanges(changes))");
+    expect(source).not.toMatch(/process\.stdout\.write\(describeChanges/);
+    expect(source).toContain("process.exit(1)");
+  });
+});
+
 describe("the wiring that keeps the ledger honest", () => {
   test("package.json re-pins the file the test above compares against", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -174,7 +267,7 @@ describe("the wiring that keeps the ledger honest", () => {
 
   test("a failed run leaves the ledger alone instead of emptying it", () => {
     const generator = readFileSync(join(root, "scripts", "gen-citations.ts"), "utf8");
-    const render = generator.indexOf("const text = renderLedger(collectCitations());");
+    const render = generator.indexOf("const text = renderLedger(current);");
     const write = generator.indexOf("writeFileSync(LEDGER_PATH, text)");
     expect(render).toBeGreaterThan(0);
     expect(write).toBeGreaterThan(render);

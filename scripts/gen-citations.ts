@@ -195,10 +195,170 @@ export function locate(sourceLines: string[], text: string): { from: number; to:
   return null;
 }
 
+/** One thing a re-pin would do to the ledger, in the shape a person can check. */
+export interface LedgerChange {
+  /** `changed` is the only kind that needs a sentence re-read. */
+  kind: "changed" | "added" | "dropped" | "reordered";
+  page: string;
+  /** Empty for `reordered`, which is a property of the page, not of one file. */
+  file: string;
+  was?: string;
+  now?: string;
+}
+
+/** First line with something on it — what a person recognises a block by. */
+const head = (text: string): string => {
+  const line = (text.split("\n").find((l) => l.trim()) ?? "(blank)").trim();
+  return line.length > 96 ? `${line.slice(0, 95)}…` : line;
+};
+
+/**
+ * What re-pinning would do, compared against the ledger already on disk.
+ *
+ * Bucketed by (page, source file) and compared as multisets, the same way the
+ * test does it, so a block that merely moved inside its file is not reported —
+ * the ledger pins text, and that text did not change.
+ *
+ * `reordered` is the exception, and it is the one case the multisets cannot
+ * see: two citations on one page swapping which lines they point at leaves
+ * every bucket identical while sending both readers to the other one's
+ * evidence.
+ */
+export function diffLedger(
+  before: { page: string; file: string; text: string }[],
+  after: { page: string; file: string; text: string }[],
+): LedgerChange[] {
+  const changes: LedgerChange[] = [];
+  const bucket = (list: { page: string; file: string; text: string }[]) => {
+    const m = new Map<string, string[]>();
+    for (const c of list) m.set(`${c.page} ${c.file}`, [...(m.get(`${c.page} ${c.file}`) ?? []), c.text]);
+    return m;
+  };
+  const was = bucket(before);
+  const now = bucket(after);
+
+  for (const k of [...new Set([...was.keys(), ...now.keys()])].sort()) {
+    const gone = [...(was.get(k) ?? [])];
+    const fresh = [...(now.get(k) ?? [])];
+    for (const t of [...fresh]) {
+      const i = gone.indexOf(t);
+      if (i < 0) continue;
+      gone.splice(i, 1);
+      fresh.splice(fresh.indexOf(t), 1);
+    }
+    const [page = "", file = ""] = k.split(" ");
+    const paired = Math.min(gone.length, fresh.length);
+    for (let i = 0; i < paired; i++) changes.push({ kind: "changed", page, file, was: gone[i], now: fresh[i] });
+    for (const t of gone.slice(paired)) changes.push({ kind: "dropped", page, file, was: t });
+    for (const t of fresh.slice(paired)) changes.push({ kind: "added", page, file, now: t });
+  }
+
+  const perPage = (list: { page: string; file: string; text: string }[]) => {
+    const m = new Map<string, string[]>();
+    for (const c of list) m.set(c.page, [...(m.get(c.page) ?? []), `${c.file} ${digest(c.text)}`]);
+    return m;
+  };
+  const seqWas = perPage(before);
+  const seqNow = perPage(after);
+  for (const page of [...new Set([...seqWas.keys(), ...seqNow.keys()])].sort()) {
+    const a = seqWas.get(page) ?? [];
+    const b = seqNow.get(page) ?? [];
+    if (a.join("\n") === b.join("\n")) continue;
+    // Only a *pure* permutation is reported here. When entries were added or
+    // dropped the order shifts for a reason already on the report above, and
+    // gating that would fire on every ordinary docs edit.
+    if ([...a].sort().join("\n") !== [...b].sort().join("\n")) continue;
+    changes.push({ kind: "reordered", page, file: "" });
+  }
+
+  return changes;
+}
+
+/**
+ * The report `docs:citations` prints before it writes anything.
+ *
+ * This exists because of a real mistake, made by the author of the ledger, an
+ * hour after building it: help text was edited, six citations went stale,
+ * `docs:citations` was run reflexively, and the suite went green over six
+ * wrong citations. It was caught by `git diff --stat` — that is, by a second
+ * command nobody is obliged to run. The generator itself said nothing.
+ *
+ * A re-pin lands in a reviewable diff, but a diff only pushes back if somebody
+ * volunteers to read it, and the person most likely not to is the one who just
+ * re-pinned by reflex. So the pushback goes here, at the moment of the
+ * mistake, in the same terminal.
+ */
+export function describeChanges(changes: LedgerChange[]): string {
+  if (changes.length === 0) return "";
+  const of = (kind: LedgerChange["kind"]) => changes.filter((c) => c.kind === kind);
+  const lines: string[] = [];
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  const counts: string[] = [];
+  if (of("changed").length > 0) counts.push(`re-pinned ${plural(of("changed").length, "entry", "entries")}`);
+  if (of("added").length > 0) counts.push(`added ${plural(of("added").length, "entry", "entries")}`);
+  if (of("dropped").length > 0) counts.push(`dropped ${plural(of("dropped").length, "entry", "entries")}`);
+  if (of("reordered").length > 0) counts.push(`reordered ${plural(of("reordered").length, "page", "pages")}`);
+  lines.push(`docs:citations — ${counts.join(", ")}`);
+
+  if (of("changed").length > 0) {
+    lines.push("");
+    lines.push("re-pinned — the code under these citations was rewritten. Each one is a");
+    lines.push("question about the sentence that cites it, not a chore:");
+    for (const c of of("changed")) {
+      lines.push(`  ${c.page} → ${c.file}`);
+      lines.push(`    was | ${head(c.was!)}`);
+      lines.push(`    now | ${head(c.now!)}`);
+    }
+  }
+  for (const c of of("reordered")) {
+    lines.push("");
+    lines.push(`reordered — ${c.page} pins the same blocks in a different order, with nothing`);
+    lines.push("added or dropped. That is two citations on the page swapping which lines they");
+    lines.push("point at: both still resolve, both now send the reader to the other one's");
+    lines.push("evidence, and no bucket in the ledger changes. Open the page.");
+  }
+  const light = [...of("added"), ...of("dropped")];
+  if (light.length > 0) {
+    lines.push("");
+    for (const c of light) {
+      lines.push(`  ${c.kind === "added" ? "+" : "-"} ${c.page} → ${c.file}  ${head((c.now ?? c.was)!)}`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+/** Changes that must be typed for, rather than happening because a command was run. */
+export const needsAcceptance = (changes: LedgerChange[]): LedgerChange[] =>
+  changes.filter((c) => c.kind === "changed" || c.kind === "reordered");
+
 if (import.meta.main) {
   // Render first, write second: a run that throws leaves the ledger alone
   // rather than truncating the only record of what the pages used to cite.
-  const text = renderLedger(collectCitations());
-  if (process.argv.includes("--write")) writeFileSync(LEDGER_PATH, text);
-  else process.stdout.write(text);
+  const current = collectCitations();
+  const text = renderLedger(current);
+
+  let changes: LedgerChange[] = [];
+  try {
+    changes = diffLedger(parseLedger(readFileSync(LEDGER_PATH, "utf8")), current);
+  } catch {
+    // No ledger yet — the first run pins everything and there is nothing to
+    // compare against. Reporting 95 additions would be noise, not a signal.
+  }
+  if (changes.length > 0) process.stderr.write(describeChanges(changes));
+
+  if (!process.argv.includes("--write")) {
+    process.stdout.write(text);
+  } else if (needsAcceptance(changes).length > 0 && !process.argv.includes("--accept-changes")) {
+    // Adding and dropping citations is free. Changing what an existing one
+    // pins is the case where a person has to have read something, so it is the
+    // case that has to be typed rather than merely run.
+    process.stderr.write(
+      "\nNothing was written. If every line above is a rewrite you have opened the citing\n" +
+        "page for, re-run:  bun run scripts/gen-citations.ts --write --accept-changes\n",
+    );
+    process.exit(1);
+  } else {
+    writeFileSync(LEDGER_PATH, text);
+  }
 }
+
