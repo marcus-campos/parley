@@ -24,6 +24,13 @@ export interface Calibration {
   /** How many unrelated pairs the floor was measured over. Recorded so a reader can weigh it. */
   samples: number;
   /**
+   * How many *disjoint* slices this vocabulary could supply — `samples` is how
+   * many pairs were drawn, `slices` is how much independent vocabulary there
+   * was to draw them from. They are different numbers for a good reason
+   * (`SAMPLES` below), and the admission gate is this one, never that one.
+   */
+  slices: number;
+  /**
    * The null distribution the floor came from, kept rather than discarded:
    * `floor` is `nullMean + FLOOR_SIGMAS * nullSd`, and a number nobody can
    * inspect is a number nobody can argue with. Two constants have already
@@ -47,37 +54,71 @@ const DOC_TOKENS = 20;
 const TOKENS_PER_PAIR = QUERY_TOKENS + DOC_TOKENS;
 
 /**
- * Enough pairs for a mean and a standard deviation to mean something, and a
- * cap so an enormous vocabulary does not turn boot into a benchmark. A table
- * too small to reach `MIN_PAIRS` is a toy, not a model: it does not get a
- * guessed floor, it gets refused (`null`), and the daemon degrades to the
- * lexical floor and says so.
+ * How much independent vocabulary a table must have before it is allowed a
+ * floor at all. A table too small to reach `MIN_PAIRS` disjoint slices is a
+ * toy, not a model: it does not get a guessed floor, it gets refused
+ * (`null`), and the daemon degrades to the lexical floor and says so.
  *
- * 256 rather than a token handful, because the floor is an *estimate* and a
- * small sample makes it an arbitrary one. Measured on a model-shaped table by
- * recalibrating the same vocabulary under a hundred different shuffles and
- * watching where the floor lands:
+ * 256 rather than a token handful, because a floor measured over a handful of
+ * words is a floor decided by which words. Taking 400 independent samples of
+ * K pairs from a pool of 300,000 unrelated pairs, estimating `mean + 4σ` from
+ * each, and measuring what fraction of *fresh* unrelated pairs clears that
+ * estimate:
  *
  * ```
- *   pairs   sd of the floor   range over 100 reshuffles
- *      33      0.70 nullSd            3.64 nullSd
- *      41      0.43 nullSd            1.94 nullSd
- *     268      0.18 nullSd            0.92 nullSd
- *     512      0.12 nullSd            0.65 nullSd
+ *   slices   floor sd   mean junk leak   worst-case junk leak
+ *       33   0.54 nullSd        0.026%                 0.389%
+ *       41   0.52 nullSd        0.028%                 1.338%
+ *      128   0.28 nullSd        0.008%                 0.053%
+ *      256   0.18 nullSd        0.007%                 0.032%
  * ```
  *
- * At 33 pairs the shuffle alone moves the floor further than the whole
- * 3σ-to-5σ band this design is pinned inside: a model could calibrate
- * successfully, report `brain enabled` honestly, and land anywhere from
- * returning junk to returning nothing, decided by nothing but which seed is
- * compiled in. `floor <= 0 || floor >= 1` below catches neither end of that.
- * At 256 the shuffle's leverage is ~0.18σ, comfortably inside the band.
+ * A model that just cleared a 33-slice gate could leak a hundred times what
+ * the same floor leaks at 256, decided by nothing but which seed was compiled
+ * in — with no refusal, no warning, and `brain enabled` reported honestly.
  *
- * Refusing here is cheap: refusal degrades to the lexical floor, which is the
+ * Refusing is cheap here: refusal degrades to the lexical floor, which is the
  * behaviour this repository prefers over a confident guess anyway.
  */
 const MIN_PAIRS = 256;
-const MAX_PAIRS = 512;
+
+/**
+ * How many pairs to actually measure, which is deliberately not the same
+ * number as the slices available.
+ *
+ * The floor is `nullMean + 4 * nullSd`, so it is an estimate, and its own
+ * noise is `3 * nullSd / sqrt(samples)` — the `sd` term carries a factor of
+ * four and dominates. Drawing every pair from its own disjoint slice caps the
+ * sample count at `vocabulary / 24`, and that cap is what used to leave the
+ * shuffle seed with real leverage over the floor. Measured on the test
+ * fixture by recalibrating one table under 300 different seeds:
+ *
+ * ```
+ *   samples   range over 300 seeds   sd of the floor   one calibration
+ *       512             0.72 nullSd       0.135 nullSd            2.7ms
+ *      1024             0.52 nullSd       0.094 nullSd            5.5ms
+ *      2048             0.40 nullSd       0.071 nullSd           11.1ms
+ *      4096             0.32 nullSd       0.050 nullSd           23.1ms
+ *      8192             0.24 nullSd       0.032 nullSd           46.6ms
+ * ```
+ *
+ * So pairs are drawn from repeated shuffles instead: a token may appear in
+ * more than one pair, but never on both sides of the same one. The half of
+ * "disjoint" that makes a pair *unrelated* is kept exactly; the half that
+ * made the samples mutually independent is spent, and what it buys is an
+ * estimate four times less arbitrary. The samples are correlated, so the
+ * error falls slower than `1/sqrt(n)` would promise — the table above is the
+ * measured fall, not the theoretical one.
+ *
+ * It helps most exactly where it matters most. On a table sitting right on
+ * the `MIN_PAIRS` gate — 6,144 rows, 256 slices — 4,096 samples put the floor
+ * in a 0.285 nullSd band across 300 seeds, which is tighter than the old
+ * disjoint scheme managed on a table with fifty times the vocabulary.
+ *
+ * 4,096 and not 8,192 because the estimate is already well inside the band
+ * `FLOOR_SIGMAS` is pinned in and boot is not free.
+ */
+const SAMPLES = 4096;
 
 /**
  * How far above the null a hit has to land. Measured, not picked: at 4σ the
@@ -191,13 +232,15 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * raises the floor slightly, which errs toward silence — the direction this
  * repository already prefers everywhere else.
  *
- * Every pair uses its own disjoint slice of the shuffled vocabulary, so no
- * token appears on both sides of a comparison and no two samples share a
- * word. `null` — never a guess — whenever the table cannot support the
- * measurement: too few usable rows, or a result that is not a usable
- * boundary (not finite, at or below zero, at or above one). A model that
- * cannot say what unrelated looks like has not earned the right to say what
- * related looks like.
+ * No token ever appears on both sides of one comparison, which is what makes
+ * the pair unrelated by construction. Pairs are drawn from repeated shuffles
+ * of the whole vocabulary rather than from one pass over it, so a token may
+ * appear in more than one pair; `SAMPLES` carries the measurement of why that
+ * trade is worth making. `null` — never a guess — whenever the table cannot
+ * support the measurement: too little vocabulary to lay out `MIN_PAIRS`
+ * disjoint slices, or a result that is not a usable boundary (not finite, at
+ * or below zero, at or above one). A model that cannot say what unrelated
+ * looks like has not earned the right to say what related looks like.
  */
 export function calibrate(model: StaticModel, seed: number = SEED): Calibration | null {
   const mean = meanRow(model);
@@ -205,17 +248,28 @@ export function calibrate(model: StaticModel, seed: number = SEED): Calibration 
   // An all-zero row carries no signal and would pool into a degenerate
   // pseudo-document; it is part of the table's mean, but not part of its null.
   const usable = Object.keys(model.vocab).filter((token) => model.vocab[token]!.some((x) => x !== 0));
-  const pairs = Math.min(MAX_PAIRS, Math.floor(usable.length / TOKENS_PER_PAIR));
-  if (pairs < MIN_PAIRS) return null;
+  const slices = Math.floor(usable.length / TOKENS_PER_PAIR);
+  if (slices < MIN_PAIRS) return null;
 
   const next = xorshift32(seed);
-  const deck = shuffled(usable.sort(), next);
+  const sorted = usable.sort();
 
+  // Walk the shuffled deck a slice at a time, and reshuffle when it runs out.
+  // Within one pair the two sides never share a token, which is the half of
+  // "disjoint" that makes the pair unrelated. Across pairs a token may recur,
+  // which is the half spent to buy `SAMPLES` samples instead of `slices` of
+  // them — see `SAMPLES` for what that costs and what it buys.
   const scores: number[] = [];
-  for (let p = 0; p < pairs; p++) {
-    const base = p * TOKENS_PER_PAIR;
-    const query = deck.slice(base, base + QUERY_TOKENS);
-    const doc = deck.slice(base + QUERY_TOKENS, base + TOKENS_PER_PAIR);
+  let deck = shuffled(sorted, next);
+  let cursor = 0;
+  for (let p = 0; p < SAMPLES; p++) {
+    if (cursor + TOKENS_PER_PAIR > deck.length) {
+      deck = shuffled(sorted, next);
+      cursor = 0;
+    }
+    const query = deck.slice(cursor, cursor + QUERY_TOKENS);
+    const doc = deck.slice(cursor + QUERY_TOKENS, cursor + TOKENS_PER_PAIR);
+    cursor += TOKENS_PER_PAIR;
     scores.push(cosine(pooled(model, query, mean), pooled(model, doc, mean)));
   }
 
@@ -225,5 +279,5 @@ export function calibrate(model: StaticModel, seed: number = SEED): Calibration 
   const floor = nullMean + FLOOR_SIGMAS * nullSd;
 
   if (!Number.isFinite(floor) || floor <= 0 || floor >= 1) return null;
-  return { mean, floor, samples: scores.length, nullMean, nullSd };
+  return { mean, floor, samples: scores.length, slices, nullMean, nullSd };
 }

@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureModel, modelPath } from "../../src/brain/download";
-import { calibrate } from "../../src/brain/calibrate";
+import { calibrate, SEED } from "../../src/brain/calibrate";
 import { loadStaticModel } from "../../src/brain/embed";
 import { LexicalIndex } from "../../src/brain/lexical";
 import { FIXTURE_MODEL } from "./fixtures/model";
@@ -164,9 +164,62 @@ describe("nothing here can stop the work", () => {
       dims: FIXTURE_MODEL.dims,
       vocab: Object.fromEntries(rows.slice(0, n).map((w) => [w, FIXTURE_MODEL.vocab[w]!])),
     });
-    // 24 vocabulary rows make one pair: a 4-token query against a 20-token note.
+    // 24 vocabulary rows make one slice: a 4-token query against a 20-token
+    // note, with no word on both sides. `slices` is the vocabulary fact the
+    // gate is about; `samples` is how many pairs get drawn once the table is
+    // through it, and they are deliberately different numbers.
     expect(calibrate(slice(255 * 24))).toBeNull();
-    expect(calibrate(slice(256 * 24))?.samples).toBe(256);
+    expect(calibrate(slice(256 * 24))?.slices).toBe(256);
+    expect(calibrate(slice(256 * 24))?.samples).toBe(4096);
+  });
+
+  /**
+   * The floor has to come from the model, and nothing above proves it does.
+   *
+   * Every rate and every seed in `embed.test.ts` constrains the floor's
+   * *value* and none of them its *provenance*: replacing `nullMean +
+   * FLOOR_SIGMAS * nullSd` with the literal 0.3561 left 53 of 55 tests green,
+   * because a literal that happens to land in the right place on one fixture
+   * lands in the right place on every corpus measured against that fixture.
+   *
+   * Two tables whose nulls are nowhere near each other, then. A 64-dimension
+   * table's unrelated cosines spread about twice as wide as a 256-dimension
+   * table's, so its floor has to sit about twice as high — and each floor has
+   * to be exactly four sigmas above its own table's null, not four above some
+   * other table's.
+   */
+  test("the floor is four sigmas above THIS model's null, not a number that fits one model", () => {
+    const table = (dims: number, seed: number) => {
+      const next = seeded(seed);
+      const vocab: Record<string, number[]> = {};
+      for (let i = 0; i < 300 * 24; i++) {
+        vocab[`t${i}`] = Array.from({ length: dims }, () => Math.round((next() * 2 - 1) * 1e4) / 1e4);
+      }
+      return calibrate({ dims, vocab })!;
+    };
+    const narrow = table(256, 4242);
+    const wide = table(64, 4242);
+
+    expect(narrow.floor).toBeCloseTo(narrow.nullMean + 4 * narrow.nullSd, 12);
+    expect(wide.floor).toBeCloseTo(wide.nullMean + 4 * wide.nullSd, 12);
+    // Not a coincidence of rounding: the two floors are half an order apart,
+    // so no single literal can be both of them.
+    expect(wide.floor).toBeGreaterThan(narrow.floor * 1.5);
+  });
+
+  /**
+   * `calibrate(model, seed = SEED)` exposes the seed so the tests can measure
+   * its leverage, and production calls it with one argument. That is only safe
+   * while the default is the compiled-in constant — an unpinned default is a
+   * floor that could quietly stop being reproducible between builds.
+   *
+   * Both halves matter: the default must BE `SEED`, and the parameter must
+   * actually do something, or the first half is vacuous.
+   */
+  test("calling calibrate the way production calls it uses the compiled-in seed", () => {
+    const asProduction = calibrate(FIXTURE_MODEL)!;
+    expect(asProduction.floor).toBe(calibrate(FIXTURE_MODEL, SEED)!.floor);
+    expect(asProduction.floor).not.toBe(calibrate(FIXTURE_MODEL, SEED + 1)!.floor);
   });
 
   test("a model whose rows are all identical has no null to measure, so it calibrates to null too", () => {
