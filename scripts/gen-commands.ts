@@ -419,7 +419,7 @@ function documentedFlags(usage: Usage): { byCommand: Map<string, Set<string>>; g
 /**
  * The same contract as `reconcile`, one level down.
  *
- * Three checks, and the asymmetry between them is the honest part:
+ * Four checks, and the asymmetry between them is the honest part:
  *
  *  1. A flag read inside a command's own region and absent from that command's
  *     help-text line fails. This is the direction that produces a page which
@@ -431,12 +431,30 @@ function documentedFlags(usage: Usage): { byCommand: Map<string, Set<string>>; g
  *     without inventing a claim the source does not make.
  *  3. A flag USAGE documents that nothing in main.ts reads fails. That is the
  *     `--no-open` case: spelled in the help text, never read, silently inert.
+ *  4. A flag USAGE documents on a command that is read neither in that
+ *     command's own region, nor in shared code, nor listed among the global
+ *     flags, fails.
  *
- * What is deliberately NOT checked: "this command's line documents a flag its
- * own region never reads". `join`'s region reads nothing — `--as` and
- * `--mission` are read in `withSession`, two hundred lines above it — so that
- * check would fire on correct code. Catching it needs a call graph, and the
- * cost of that is a generator that stops being maintained.
+ * Check 3 only closed the lying direction for flags nothing anywhere reads.
+ * Moving an existing flag onto the wrong command passed it silently: spelling
+ * `parley leave [--intent "..."]` in USAGE regenerated cleanly and rendered a
+ * reference page — and a `parley --help` — offering a flag the `leave` op
+ * discards. Somebody will type it and believe it worked, which is check 3's
+ * own words for why it exists.
+ *
+ * Check 4 is the version that mirrors check 2's exemption rather than the
+ * naive one. The naive form ("read in its own region") fires on correct code:
+ * `join`'s region reads nothing, because `--as` and `--mission` are read in
+ * `withSession` two hundred lines above it. Allowing shared code and the
+ * global block as evidence costs no call graph and, measured on this tree,
+ * has no false positive at all.
+ *
+ * Its one assumption, and it is worth naming: every flag read on behalf of a
+ * command happens either in that command's dispatch region or in the prologue
+ * above the first dispatch marker. A shared helper written *below* that marker
+ * would be attributed to whatever region it textually lands in, and check 4
+ * would fire on correct code. The remedy is the one the error names — put the
+ * helper with the other shared code, or the flag in the global block.
  */
 function reconcileFlags(usage: Usage, source: string): void {
   const dispatched = dispatchedFlags(source);
@@ -468,6 +486,21 @@ function reconcileFlags(usage: Usage, source: string): void {
         `runs through, and USAGE in src/cli/main.ts never mentions it anywhere. Put it in the ` +
         `global flags block, or on the command that owns it.`,
     );
+  }
+
+  for (const [command, flags] of documented) {
+    const own = dispatched.byCommand.get(command) ?? new Set<string>();
+    const unread = [...flags].filter((f) => !own.has(f) && !dispatched.shared.has(f) && !global.has(f)).sort();
+    if (unread.length) {
+      throw new Error(
+        `USAGE in src/cli/main.ts spells ${unread.map((f) => `\`${f}\``).join(", ")} on ` +
+          `\`parley ${command}\`, and nothing the \`${command}\` case runs reads it — not its own ` +
+          `region, not the shared code above the dispatch, and it is not a global flag. Either ` +
+          `\`${command}\` really takes it and the read belongs in its region, or it belongs on ` +
+          `another command's line. If a helper below the dispatch reads it for several commands, ` +
+          `move the helper up with the other shared code, or put the flag in the global block.`,
+      );
+    }
   }
 
   const readAnywhere = new Set(dispatched.shared);

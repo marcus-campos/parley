@@ -272,6 +272,36 @@ describe("a flag that only exists on one side is an error too", () => {
     expect(() => renderCommandReference(cli(claim, [["claim", ["intent"]]], ["intent"]))).not.toThrow();
   });
 
+  test("a flag documented on the wrong command fails, even though something reads it", () => {
+    // The gap the inert check leaves open. `--intent` is a real flag with a
+    // real read, so "nothing in main.ts reads it" is false and check 3 stays
+    // quiet — while `parley leave [--intent "..."]` renders on the reference
+    // page and prints from `parley --help`, and the `leave` op discards it.
+    // Proven on the real CLI before this check existed: generator exit 0,
+    // 57 tests green, the page offering a flag that does nothing.
+    const usage = [
+      '  parley claim <paths...> [--intent "..."]    take files or globs',
+      '  parley leave [--intent "..."]               step off the bus',
+    ].join("\n");
+    expect(() =>
+      renderCommandReference(cli(usage, [["claim", ["intent"]], ["leave", []]])),
+    ).toThrow(/parley leave.*--intent|--intent.*parley leave/s);
+  });
+
+  test("but a command whose own region reads nothing is fine when shared code reads it", () => {
+    // The exemption that makes the check above usable rather than merely
+    // strict, and the reason the naive version was rejected: `join`'s region
+    // reads nothing at all, because `--as` and `--mission` are read in
+    // `withSession` two hundred lines above the dispatch.
+    const usage = [
+      '  parley claim <paths...> [--intent "..."]    take files or globs',
+      '  parley join [--mission "..."]               announce yourself',
+    ].join("\n");
+    expect(() =>
+      renderCommandReference(cli(usage, [["claim", ["intent"]], ["join", []]], ["mission"])),
+    ).not.toThrow();
+  });
+
   test("a fall-through case label carries the flags of the body it falls into", () => {
     // `case "note":` sits directly above `case "decide": {` and shares every
     // line of it. A checker that gave the label an empty flag set would let an
