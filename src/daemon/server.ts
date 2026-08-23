@@ -31,6 +31,35 @@ export interface DaemonOptions {
   /** Injected in tests so a whole lifetime runs in milliseconds. */
   now?: () => number;
   onListening?: (endpoint: Endpoint) => void;
+  /**
+   * How a worktree is collected. Production never sets this — the default is
+   * the real `removeWorktreeIfClean`.
+   *
+   * It exists because the one window this daemon has to get right is the one
+   * *inside* that call: between `git status` answering clean and `git worktree
+   * remove` being issued, the daemon keeps serving frames, and one of them can
+   * be the front walking back into the directory. Every other collection test
+   * asserts after `close()`, which awaits `this.collecting` — so the window is
+   * always fully drained before the assertion runs and no test could ever
+   * observe a frame landing inside it. This is what lets one hold the window
+   * open and send a real `join` through it.
+   */
+  removeWorktree?: typeof removeWorktreeIfClean;
+}
+
+/**
+ * A front that said `leave` from a worktree parley made, and what has happened
+ * to it since. It outlives the decision to collect: while `git` runs, this is
+ * the daemon's only record that a removal is in progress, and a removal with
+ * no record is a removal nothing can call off.
+ */
+interface PendingCollection {
+  name: string;
+  cwd: string;
+  sinceMs: number;
+  attempts: number;
+  /** A removal is in flight for this one. Do not start a second. */
+  collecting: boolean;
 }
 
 export class DaemonAlreadyRunning extends Error {
@@ -78,8 +107,7 @@ export class ParleyDaemon {
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastActivityMs: number;
   /** Fronts that said `leave` from a worktree parley made, waiting to be proven gone. */
-  private readonly pendingCollection =
-    new Map<string, { name: string; cwd: string; sinceMs: number; attempts: number }>();
+  private readonly pendingCollection = new Map<string, PendingCollection>();
   /**
    * The tail of what fronts parley bore have printed, for the panel and for
    * nobody else. Not in `State`: it is not a fact about the conversation, it
@@ -93,6 +121,7 @@ export class ParleyDaemon {
   private readonly pendingBirth = new Map<string, { atMs: number; mode: "panel" | "terminal" }>();
   /** Removals in flight. Nothing waits on these except `close`. */
   private readonly collecting = new Set<Promise<void>>();
+  private readonly removeWorktree: typeof removeWorktreeIfClean;
   private readonly token: string | null;
   private readonly now: () => number;
   /** Read once at boot, re-read whenever `parley/spawn.json` changes underneath us. */
@@ -102,6 +131,7 @@ export class ParleyDaemon {
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
+    this.removeWorktree = opts.removeWorktree ?? removeWorktreeIfClean;
     this.journal = new Journal(opts.journalPath);
     this.token = opts.address.kind === "tcp" ? randomBytes(24).toString("hex") : null;
     // Read before `restore()` runs: replaying a journaled `summon` needs the
@@ -490,7 +520,7 @@ export class ParleyDaemon {
     if (!isNewbornWorktree(root, p.cwd)) return;
     // The name is copied rather than looked up later: by the time the removal
     // answers, this is the only thing left that can say whose worktree it was.
-    this.pendingCollection.set(p.id, { name: p.name, cwd: p.cwd, sinceMs: this.now(), attempts: 0 });
+    this.pendingCollection.set(p.id, { name: p.name, cwd: p.cwd, sinceMs: this.now(), attempts: 0, collecting: false });
   }
 
   /**
@@ -548,22 +578,52 @@ export class ParleyDaemon {
         (p) => !p.gone && p.cwd && (p.cwd === pending.cwd || p.cwd.startsWith(`${pending.cwd}${sep}`)),
       );
       if (inThere || this.state.participants[id]?.gone === false) {
+        // Deleting the entry is also how a removal already in flight is
+        // called off: `stillEmpty` below asks this very map, and asks it at
+        // the last moment there is still something to call off.
         this.pendingCollection.delete(id);
         continue;
       }
+      // Already being removed. Nothing to decide — but the entry stays,
+      // because the entry *is* the record that a collection is happening, and
+      // the cancel above has nothing to find without it.
+      if (pending.collecting) continue;
       if (nowMs - pending.sinceMs < DEFAULTS.COLLECT_AFTER_LEAVE_MS) continue;
-      this.pendingCollection.delete(id);
+      pending.collecting = true;
       // Deliberately not awaited: two `git` subprocesses must never be
       // something the daemon's event loop waits on. Failure is already the
       // safe outcome — the worktree stays where it is. `close()` is the one
       // place that waits, so a daemon shutting down cannot leave a half-done
       // `git worktree remove` behind.
-      const collecting = removeWorktreeIfClean(root, pending.cwd)
+      //
+      // The entry used to be deleted right here, one line before the two
+      // subprocesses started. From that instant the daemon held no record
+      // that a collection was in progress, so `sweepCollections` returned at
+      // its first line — `size === 0` — and the re-join that should have
+      // cancelled it cancelled nothing. Moving the sweep after `apply()`
+      // fixed the frame that arrives *before* the decision; this is the frame
+      // that arrives *after* the decision and before `git` has finished, and
+      // on a real repository that window is tens of milliseconds wide.
+      const collecting = this.removeWorktree(root, pending.cwd, () => this.pendingCollection.get(id) === pending)
         .then((outcome) => this.afterCollection(id, pending, outcome))
-        .catch(() => { /* disk is cheap */ });
+        .catch(() => { this.forgetCollection(id, pending); });
       this.collecting.add(collecting);
       void collecting.finally(() => this.collecting.delete(collecting));
     }
+  }
+
+  /**
+   * Drop the record, but only if it is still the one this removal belongs to.
+   *
+   * Answers whether it was. A `false` means the sweep deleted it underneath —
+   * somebody is back in that directory, or a later `leave` replaced it — and
+   * every conclusion this removal reached is about a directory that is no
+   * longer nobody's.
+   */
+  private forgetCollection(id: string, pending: PendingCollection): boolean {
+    if (this.pendingCollection.get(id) !== pending) return false;
+    this.pendingCollection.delete(id);
+    return true;
   }
 
   /**
@@ -594,12 +654,15 @@ export class ParleyDaemon {
    * any pending collection whose directory has somebody live in it, and it
    * does that before it looks at any deadline.
    */
-  private afterCollection(
-    id: string,
-    pending: { name: string; cwd: string; sinceMs: number; attempts: number },
-    outcome: WorktreeRemoval,
-  ): void {
-    if (outcome === "removed") return;
+  private afterCollection(id: string, pending: PendingCollection, outcome: WorktreeRemoval): void {
+    // The entry outlived the removal on purpose, and this is where it stops.
+    // If it is no longer ours, the sweep deleted it while `git` was running —
+    // which is the sweep saying somebody is standing in that directory again.
+    // Then there is nothing to announce and nothing to retry, whatever git
+    // answered: `cancelled` is the outcome when the check caught it in time,
+    // and the others are a removal that raced past the check and lost anyway.
+    if (!this.forgetCollection(id, pending)) return;
+    if (outcome === "removed" || outcome === "cancelled") return;
     const root = this.repoRootForExport();
     const where = root ? relative(root, pending.cwd) : pending.cwd;
     const ctx = makeCtx(this.now(), this.counter);
@@ -611,7 +674,7 @@ export class ParleyDaemon {
 
     const attempts = pending.attempts + 1;
     if (attempts < DEFAULTS.COLLECT_MAX_ATTEMPTS) {
-      this.pendingCollection.set(id, { ...pending, sinceMs: this.now(), attempts });
+      this.pendingCollection.set(id, { ...pending, sinceMs: this.now(), attempts, collecting: false });
       return;
     }
     this.announce(ctx, `${pending.name}'s worktree at ${where} could not be collected after ${attempts} tries — it is still on disk`);
@@ -708,8 +771,12 @@ export class ParleyDaemon {
     // under it leaves a half-removed worktree and a stale entry in .git. Each
     // one is bounded by GIT_TIMEOUT_MS, and there is at most one per front
     // that has left.
-    this.pendingCollection.clear();
+    // Awaited *before* the map is cleared, never after. The map is the
+    // cancellation token every removal in flight reads, so clearing it first
+    // would make every shutdown cancel the collection it is standing here
+    // waiting for.
     await Promise.all([...this.collecting]);
+    this.pendingCollection.clear();
     if (
       this.opts.address.kind === "unix" &&
       existsSync(this.opts.address.address) &&

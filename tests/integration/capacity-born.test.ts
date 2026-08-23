@@ -7,6 +7,7 @@ import { ParleyDaemon } from "../../src/daemon/server";
 import { DEFAULTS } from "../../src/protocol/types";
 import { joinFrame, resolveIdentity } from "../../src/cli/identity";
 import { bearFront } from "../../src/spawn/birth";
+import { removeWorktreeIfClean, type WorktreeRemoval } from "../../src/spawn/worktree";
 import { RawClient } from "./harness";
 
 /**
@@ -73,7 +74,13 @@ function bearOne(repo: string): { env: Record<string, string>; worktree: string 
  * `<git-common-dir>/parley`, is what `src/cli/main.ts` passes as
  * `gitCommonDir` — not the git directory, and not a bare temp folder.
  */
-async function daemonFor(repo: string, now: () => number) {
+async function daemonFor(
+  repo: string,
+  now: () => number,
+  removeWorktree?: (
+    repoRoot: string, path: string, stillEmpty?: () => boolean,
+  ) => Promise<WorktreeRemoval>,
+) {
   const sockDir = mkdtempSync(join(tmpdir(), "parley-sock-"));
   dirs.push(sockDir);
   const daemon = new ParleyDaemon({
@@ -82,10 +89,56 @@ async function daemonFor(repo: string, now: () => number) {
     journalPath: join(sockDir, "journal.ndjson"),
     tickIntervalMs: 100_000, // ticks are driven by the commands the test sends
     now,
+    removeWorktree,
   });
   daemons.push(daemon);
   const endpoint = await daemon.listen();
   return { daemon, endpoint };
+}
+
+/**
+ * A collection paused in the one window that matters, so a test can put a real
+ * frame inside it.
+ *
+ * It stands exactly where the two real `git` calls stand: `git status` has
+ * answered clean, `git worktree remove` has not been issued. What the real
+ * function does at that point is pinned in tests/spawn/worktree.test.ts; this
+ * is what the *daemon* still knows at that point, which is the half no test
+ * could reach — every other collection test asserts after `await
+ * daemon.close()`, and `close()` awaits `this.collecting`, so the window is
+ * always fully drained before the assertion runs.
+ */
+function pausedCollector(pretend?: WorktreeRemoval) {
+  let entered!: () => void;
+  const inside = new Promise<void>((resolve) => { entered = resolve; });
+  let release!: () => void;
+  const released = new Promise<void>((resolve) => { release = resolve; });
+  /**
+   * What "is anybody in there" answers, asked twice per removal: once where
+   * `git status` has just come back clean, once where `git worktree remove` is
+   * about to be issued. Two readings and not one, because a single `false`
+   * cannot tell a re-join that landed in the window from a daemon that threw
+   * the record away before `git` even started — which is the bug.
+   */
+  const answers: boolean[] = [];
+
+  const collect = async (
+    repoRoot: string, path: string, stillEmpty?: () => boolean,
+  ): Promise<WorktreeRemoval> => {
+    const ask = () => (stillEmpty ? stillEmpty() : true);
+    answers.push(ask());
+    entered();
+    await released;
+    const empty = ask();
+    answers.push(empty);
+    // A removal whose `git` had already answered by the time the front came
+    // back: the losing side of the race, which the caller still has to handle.
+    if (pretend) return pretend;
+    if (!empty) return "cancelled";
+    return removeWorktreeIfClean(repoRoot, path);
+  };
+
+  return { collect, inside, answers, release: () => release() };
 }
 
 /** The real producer of a `join` frame, fed the real newborn environment. */
@@ -324,6 +377,135 @@ describe("the newborn's worktree", () => {
     await front.send({ op: "who" });
     await daemon.close();
     expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
+
+  test("a front that comes back while git is still running keeps its directory", async () => {
+    // The window nothing in this suite could see. Every other collection test
+    // asserts after `await daemon.close()`, and `close()` awaits
+    // `this.collecting` — so the in-flight window is always fully drained
+    // before any assertion runs, and a frame landing inside it was untestable
+    // by construction.
+    //
+    // The failure it hid: the pending entry was deleted one line *before* the
+    // two `git` subprocesses started, so from that instant the daemon held no
+    // record that a collection was happening and `sweepCollections` returned
+    // at `size === 0`. POOL-1 runs `parley leave` at 14:00 and makes one more
+    // tool call, as the retirement notice asks. At 14:05 the sweep starts
+    // `git status`. The PostToolUse hook re-joins at 14:05.001 — a socket
+    // round trip, ~1ms, far inside a window that is tens of milliseconds on a
+    // two-file repository and bounded only by GIT_TIMEOUT_MS behind a stale
+    // `index.lock`. The daemon accepted the join, the sweep found nothing
+    // pending, `git status` came back clean, and `git worktree remove` deleted
+    // a live front's checkout.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 14, 0, 0);
+
+    const paused = pausedCollector();
+    const { daemon, endpoint } = await daemonFor(repo, () => clock, paused.collect);
+
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    clock += DEFAULTS.RETIRE_GRACE_MS + 1;
+    await front.send({ op: "drain" });
+    await front.send({ op: "leave" });
+
+    // 14:05. This frame's sweep crosses the deadline and starts the removal,
+    // and the response only comes back after the sweep has run.
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await paused.inside;
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+
+    // 14:05.001, and this is the whole point: a real `join` frame over the
+    // real socket, answered by the real daemon, while the removal is in
+    // flight. Nothing here is faked but the clock and the pause.
+    const rejoin = await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    expect(rejoin.ok).toBe(true);
+
+    paused.release();
+    await daemon.close();
+
+    // Asked, and answered "somebody is in there". Before the fix there was
+    // nothing left to ask: the record had been deleted before `git` started.
+    expect(paused.answers).toEqual([true, false]);
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
+  test("a front that comes back one instant too late does not stop the removal", async () => {
+    // The other side of the same window, and the reason the check sits where
+    // it sits rather than being a promise the daemon cannot keep. Once `git
+    // worktree remove` is issued there is nothing to cancel, and the design
+    // says so out loud instead of pretending the race has no losing side. The
+    // front is `gone` and its work is on its branch; what it loses is a
+    // directory it had already said `leave` from.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 14, 0, 0);
+
+    const paused = pausedCollector();
+    const { daemon, endpoint } = await daemonFor(repo, () => clock, paused.collect);
+
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    clock += DEFAULTS.RETIRE_GRACE_MS + 1;
+    await front.send({ op: "drain" });
+    await front.send({ op: "leave" });
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await paused.inside;
+
+    // And every frame that arrives while it is in flight leaves it alone. The
+    // record is kept so the cancel above has something to find, which is also
+    // a record a second sweep could act on — it must not start a second
+    // removal of the same directory.
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+
+    // Nobody comes back. The record is still there — that is what makes the
+    // question answerable at all — and it answers the other way.
+    paused.release();
+    await daemon.close();
+
+    expect(paused.answers).toEqual([true, true]);
+    expect(existsSync(worktree)).toBe(false);
+  });
+
+  test("a collection nobody wants any more says nothing and retries nothing", async () => {
+    // The losing side of the same race, and the clause that handles it. The
+    // check catches the common case; it cannot catch a removal whose `git` had
+    // already answered by the instant the front walked back in. When that
+    // happens the record is gone — the sweep deleted it — and every conclusion
+    // the removal reached is about a directory that is somebody's again.
+    //
+    // Telling a front sitting in its worktree working that it "left
+    // uncommitted changes in .parley/worktrees/pool-1 — its worktree is kept"
+    // is a false statement about a live session, and the `unknown`/`failed`
+    // arm would put the same directory back in the sweep's queue.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    writeFileSync(join(worktree, "b.txt"), "half an hour of work\n");
+    let clock = Date.UTC(2026, 7, 20, 14, 0, 0);
+
+    const paused = pausedCollector("dirty");
+    const { daemon, endpoint } = await daemonFor(repo, () => clock, paused.collect);
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    await front.send({ op: "leave" });
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await paused.inside;
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    paused.release();
+    await daemon.close();
+
+    expect(paused.answers).toEqual([true, false]);
+    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).not.toContain("uncommitted changes");
+    expect(existsSync(join(worktree, "b.txt"))).toBe(true);
   });
 
   test("a person who walks into the worktree mid-session keeps it too", async () => {

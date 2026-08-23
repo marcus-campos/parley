@@ -139,6 +139,55 @@ describe("a worktree for a newborn front", () => {
     }
   });
 
+  test("somebody back inside is asked about at the last instant it can still be undone", async () => {
+    // Being asynchronous is what makes this necessary. `git status` is a
+    // subprocess; the daemon that called this keeps serving frames while it
+    // runs, and a hook round trip is ~1ms against a window that is tens of
+    // milliseconds on a two-file repository and bounded only by
+    // GIT_TIMEOUT_MS behind a stale index.lock. So the answer the caller had
+    // when it decided to collect is stale by the time removal is issued.
+    //
+    // Where the question is asked is the whole assertion: after `git status`
+    // says clean, before `git worktree remove` runs. Asked any earlier and it
+    // is an answer about a moment that has already passed; asked any later
+    // and the directory is already gone.
+    const wt = addWorktree(repo, "pool-1");
+    const onDiskWhenAsked: boolean[] = [];
+    const outcome = await removeWorktreeIfClean(repo, wt.path, () => {
+      onDiskWhenAsked.push(existsSync(join(wt.path, "a.txt")));
+      return false;
+    });
+
+    expect(onDiskWhenAsked).toEqual([true]);
+    expect(outcome).toBe("cancelled");
+    // Nothing was attempted: the checkout and the branch are exactly as they
+    // were. This is the front's live working directory — losing it loses
+    // whatever it has not committed.
+    expect(existsSync(join(wt.path, "a.txt"))).toBe(true);
+    expect(branches()).toContain("parley/pool-1");
+  });
+
+  test("nobody came back, so it goes — the same call, the other answer", async () => {
+    // The pair. Without it "cancelled" above could be a removal that stopped
+    // for some other reason, and the guard could be refusing everything.
+    const wt = addWorktree(repo, "pool-1");
+    let asked = 0;
+    const outcome = await removeWorktreeIfClean(repo, wt.path, () => { asked++; return true; });
+    expect(asked).toBe(1);
+    expect(outcome).toBe("removed");
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  test("a worktree with work in it is never even asked about", async () => {
+    // `dirty` is decided by `git status` and nothing after it runs. Asking
+    // there would invite a caller to read the answer as permission.
+    const wt = addWorktree(repo, "pool-1");
+    writeFileSync(join(wt.path, "b.txt"), "work happened\n");
+    let asked = 0;
+    expect(await removeWorktreeIfClean(repo, wt.path, () => { asked++; return true; })).toBe("dirty");
+    expect(asked).toBe(0);
+  });
+
   test("removal never blocks the caller: git runs off the event loop", async () => {
     // The daemon serves every front on one loop, from `handle()` — the path
     // every hook frame takes, against a 30ms budget. Two synchronous `git`

@@ -211,10 +211,27 @@ export type WorktreeRemoval =
   /** `git status` failed or timed out. Nothing was attempted, nothing is known. */
   | "unknown"
   /** Clean, and `git worktree remove` refused it anyway. */
-  | "failed";
+  | "failed"
+  /**
+   * Somebody was back in it by the time the removal was about to be issued.
+   * Nothing was attempted and nothing is on disk that was not there before.
+   */
+  | "cancelled";
 
 /**
  * Removed only when it holds nothing. A front's work is never thrown away.
+ *
+ * `stillEmpty` is re-asked at the one moment that matters. Being asynchronous
+ * is not free: `git status` is a subprocess, and while it runs the daemon that
+ * called this goes on serving every frame that arrives — a hook round trip is
+ * ~1ms and this window is tens of milliseconds on a small repository, up to
+ * `GIT_TIMEOUT_MS` behind a stale `index.lock`. So the front that left can
+ * come *back* inside it. Whatever the caller knew when it decided to collect
+ * is therefore stale by the time removal is issued, and the caller is asked
+ * again — after `git status` has answered clean, before `git worktree remove`
+ * is issued, which is the last instant at which there is still something to
+ * cancel. This module does not know what "empty" means; it only knows where
+ * the question has to be asked.
  *
  * Asynchronous on purpose. This is two subprocesses, and it is called from the
  * daemon on the same path every hook frame takes — a path with a 30ms budget
@@ -224,7 +241,11 @@ export type WorktreeRemoval =
  * — a front with uncommitted work, the case most worth being gentle about —
  * the full cost repeated on every tick forever.
  */
-export async function removeWorktreeIfClean(repoRoot: string, path: string): Promise<WorktreeRemoval> {
+export async function removeWorktreeIfClean(
+  repoRoot: string,
+  path: string,
+  stillEmpty: () => boolean = () => true,
+): Promise<WorktreeRemoval> {
   if (!existsSync(path)) return collectBranch(repoRoot, path);
   const status = await gitAsync(path, ["status", "--porcelain"]);
   // `null` is a git that failed or timed out — not proof the tree is clean,
@@ -232,6 +253,10 @@ export async function removeWorktreeIfClean(repoRoot: string, path: string): Pro
   // to attempt the removal to find out.
   if (status === null) return "unknown";
   if (status !== "") return "dirty";
+  // The point of no return, and so the point the question is asked at. Not at
+  // the top: an answer taken before `git status` is an answer about a moment
+  // that has already passed.
+  if (!stillEmpty()) return "cancelled";
   const removed = await gitAsync(repoRoot, ["worktree", "remove", path]);
   // A worktree that will not come off is left where it is. Losing disk is
   // cheaper than losing somebody's changes.
