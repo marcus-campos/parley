@@ -125,6 +125,24 @@ export const DEFAULTS = {
    * this codebase has already been burned by once.
    */
   COLLECT_MAX_ATTEMPTS: 3,
+  /**
+   * How much of a newborn's output the daemon keeps for the panel.
+   *
+   * §7 of the design says a newborn's output streams into the *panel* — not
+   * onto the bus. That distinction is the whole design of this buffer: bus
+   * events are journalled and drained into every other front's context, and a
+   * harness printing its answer would cost every agent on the repository the
+   * tokens to read it. So the lines live in the daemon, bounded, and only a
+   * panel ever asks for them.
+   *
+   * The bound is also what replaces the rate limit the plan asked for. That
+   * limit existed to protect the journal, and nothing here reaches the
+   * journal; what is left to protect is memory, and a ring does that without
+   * dropping the tail — which is the part somebody watching actually wants.
+   */
+  PANEL_TAIL_LINES: 300,
+  /** No single line of a newborn's output may fill a panel by itself. */
+  PANEL_TAIL_LINE_CHARS: 240,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /**

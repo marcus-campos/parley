@@ -229,6 +229,39 @@ this is a clean exit.
 
 This is the memory of "who touches what" that a markdown board never had.
 
+#### `wake`, and the one front parley may wake
+
+`join` may carry `wake`: **an address the front's own harness published for
+it**, and nothing else. Claude Code puts one in `CLAUDE_CODE_MESSAGING_SOCKET`;
+a front reads its own environment and reports what it finds. parley never
+writes this field and never uses it to act — it hands the address back to
+whoever asked that front a question and has been waiting, so *they* can wake it
+with the session tool their own harness gives them. It is kept to the shape of
+an address: one line, at most 512 characters. Anything else is not recorded.
+
+The reason parley does not do the waking is stated in `src/state/types.ts` and
+holds for every front a person opened: the format belongs to the harness, and
+guessing it means sending malformed bytes into somebody's live session.
+
+**A front parley started is the one place that reasoning does not apply**, and
+it is worth stating because it is the only exception in the protocol. parley is
+the parent of that process: it chose the command, it holds the pipes, and
+`born: "parley"` on the participant is what records it. That is what licenses
+the two things parley will do to such a front and to no other — invite it to
+retire when the pool is empty, and collect its worktree once it has gone — and
+neither of those is anything a person's session can be subjected to.
+
+What that exception does **not** license today is waking. A front parley bears
+is started as a one-shot run (`claude -p …`) with its standard input closed,
+and in `terminal` mode the process parley holds is the terminal launcher rather
+than the agent. So parley owns the newborn's *output*, not its attention: see
+`output` below, which is why the panel is a newborn's window.
+
+`born` is set once, from `PARLEY_BORN`, at the join that creates the
+participant, and is never revised by a later frame. The only direction a
+revision could take is `person` → `parley`, which would make somebody's own
+session retirable by a frame anyone can send.
+
 ### 6.2 Conversation
 
 #### `say`
@@ -595,6 +628,37 @@ broadcast at high priority, because it applies to every front on the bus.
 ← {"ok":true,"protocol":1,"mode":"advisory","seq":128,"participants":2,
    "claims":4,"pending_requests":1,"notes":7}
 ```
+
+### 6.9 Fronts parley started
+
+#### `output`
+
+```json
+→ {"v":1,"op":"output","after":41}
+← {"ok":true,"lines":[
+    {"n":42,"name":"POOL-1","text":"reading the pool","at":"2026-08-20T12:00:00Z"}]}
+```
+
+The tail of what fronts parley bore have printed — stdout and stderr, one line
+each, in the order they arrived. `after` is a cursor: pass the highest `n` you
+have already seen and only newer lines come back. Omit it for everything the
+daemon still holds.
+
+**This is not the bus, on purpose.** Bus events are journalled and drained into
+every other front's context; a harness printing its answer there would cost
+every agent on the repository the tokens to read it, which is the exact trade
+the pool footer exists to avoid. So these lines are held in the daemon, are
+never journalled, do not survive a restart, and reach nobody who does not ask.
+Panels ask.
+
+The buffer is a ring — the last 300 lines across all newborns, each truncated
+to 240 characters — so a runaway child overwrites its own oldest output rather
+than growing the daemon. Reading these pipes is also what keeps a newborn from
+wedging: a pipe nobody drains fills at 64KB and blocks the child on its next
+write, forever.
+
+Only `panel` mode produces any. A front started in `terminal` mode prints into
+its own window, which is where a person can already see it.
 
 ---
 

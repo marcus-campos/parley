@@ -8,6 +8,12 @@ export interface BornFront {
   pid: number;
   worktree: string;
   mode: "panel" | "terminal";
+  /**
+   * Stops reading the newborn's output, when there is any to read. The daemon
+   * calls it on `close()`: a pipe still being read holds the event loop open,
+   * and a test that closes a daemon would otherwise never finish.
+   */
+  stopOutput?: () => void;
 }
 
 type SpawnFn = typeof nodeSpawn;
@@ -150,6 +156,15 @@ export function bearFront(opts: {
   spawnFn?: SpawnFn;
   /** Test seam. Production never sets this — see `defaultOpenTerminal`. */
   openTerminalFn?: OpenTerminalFn;
+  /**
+   * Called once per line the newborn prints, stdout and stderr alike, in
+   * `panel` mode. This is what makes the panel the newborn's window rather
+   * than a black box (§7) — and it is also the only thing draining those
+   * pipes. `stdio` has always been `["ignore", "pipe", "pipe"]`, and a pipe
+   * nobody reads fills at 64KB and blocks the child on its next `write`
+   * forever, which is a newborn wedged mid-turn with no sign of why.
+   */
+  onOutput?: (line: string) => void;
 }): BornFront | null {
   const spawnFn = opts.spawnFn ?? nodeSpawn;
   const name = `POOL-${opts.index}`;
@@ -195,8 +210,43 @@ export function bearFront(opts: {
       windowsHide: true,
     });
     child.unref();
-    return { name, pid: child.pid ?? -1, worktree: worktree.path, mode: "panel" };
+    const stopOutput = opts.onOutput ? readLines(child, opts.onOutput) : undefined;
+    return { name, pid: child.pid ?? -1, worktree: worktree.path, mode: "panel", stopOutput };
   } catch {
     return null;
   }
+}
+
+/**
+ * Both pipes, one line at a time, with the tail of a chunk held back until the
+ * newline that completes it arrives. Returns the way to stop.
+ *
+ * Truncation belongs to the caller, not here: what a line is worth keeping at
+ * is a panel's question, and this end only has to make sure a line is a line.
+ */
+function readLines(
+  child: { stdout: NodeJS.ReadableStream | null; stderr: NodeJS.ReadableStream | null },
+  onLine: (line: string) => void,
+): () => void {
+  const streams = [child.stdout, child.stderr].filter((s): s is NodeJS.ReadableStream => s !== null);
+  for (const stream of streams) {
+    let rest = "";
+    stream.setEncoding("utf8");
+    stream.on("data", (chunk: string) => {
+      const parts = (rest + chunk).split("\n");
+      rest = parts.pop() ?? "";
+      for (const line of parts) onLine(line.replace(/\r$/, ""));
+    });
+    // A last line with no newline behind it is still something somebody
+    // printed, and for a process that dies mid-sentence it is usually the
+    // most interesting line there is.
+    stream.on("end", () => { if (rest) { onLine(rest); rest = ""; } });
+    stream.on("error", () => { /* a pipe that broke has nothing more to say */ });
+  }
+  return () => {
+    for (const stream of streams) {
+      stream.removeAllListeners("data");
+      (stream as unknown as { destroy?: () => void }).destroy?.();
+    }
+  };
 }

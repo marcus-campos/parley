@@ -98,6 +98,27 @@ function joinAsNewborn(env: Record<string, string>, worktree: string, session: s
   return joinFrame(identity, { cwd: worktree, kind: "agent", session });
 }
 
+/**
+ * A newborn's output arrives on its own schedule — it is a real process
+ * writing to a real pipe — so this waits for it, with a ceiling, instead of
+ * assuming it has landed by the next line of the test. Nothing here can pass
+ * by waiting long enough: the lines either arrive or they do not.
+ */
+async function untilLines(
+  daemon: ParleyDaemon, front: RawClient, wanted: number,
+): Promise<{ n: number; name: string; text: string; at: string }[]> {
+  const ceiling = Date.now() + 5_000;
+  let lines: { n: number; name: string; text: string; at: string }[] = [];
+  while (Date.now() < ceiling) {
+    const r = await front.send({ op: "output" });
+    lines = (r.lines ?? []) as typeof lines;
+    if (lines.length >= wanted) return lines;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  void daemon;
+  return lines;
+}
+
 async function connectTo(address: string): Promise<RawClient> {
   const client = await RawClient.connect(address);
   clients.push(client);
@@ -511,11 +532,11 @@ describe("the newborn's worktree", () => {
  * that exits immediately — which is also, conveniently, exactly what a harness
  * the person's shell cannot find looks like from the daemon's side.
  */
-async function bearThroughDaemon(repo: string, clockRef: { ms: number }) {
+async function bearThroughDaemon(repo: string, clockRef: { ms: number }, stub = "exit 0") {
   savedEnv = { ...process.env };
   const binDir = mkdtempSync(join(tmpdir(), "parley-stub-bin-"));
   dirs.push(binDir);
-  writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+  writeFileSync(join(binDir, "claude"), `#!/bin/sh\n${stub}\n`);
   chmodSync(join(binDir, "claude"), 0o755);
   process.env.PATH = `${binDir}:${process.env.PATH}`;
 
@@ -611,6 +632,73 @@ describe("a front parley started that never reached the bus", () => {
     await front.send({ op: "who" });
     await daemon.close();
     expect(said()).not.toContain("never joined");
+  });
+});
+
+describe("the panel is the newborn's window", () => {
+  test("what the newborn prints reaches the panel, and never the bus", async () => {
+    // §7 of the design: a newborn's output streams into the *panel*, which is
+    // what makes headless spawning legible instead of a black box. Into the
+    // panel — the plan's sketch pushed each line onto the bus as a `say`,
+    // which journals it and drains it into every other front's context. A
+    // harness printing its answer would cost every agent on the repository the
+    // tokens to read it, which is the exact trade the pool footer exists to
+    // avoid.
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, front, said } = await bearThroughDaemon(
+      repo, clock,
+      "echo 'reading the pool'\necho 'taking w_1' >&2\nprintf 'no newline at the end'",
+    );
+
+    const lines = await untilLines(daemon, front, 3);
+    expect(lines.map((l) => l.text)).toEqual(
+      expect.arrayContaining(["reading the pool", "taking w_1", "no newline at the end"]),
+    );
+    // Under the front's name, which is the only way a panel can tell two
+    // newborns apart.
+    expect(new Set(lines.map((l) => l.name))).toEqual(new Set(["POOL-1"]));
+
+    // stderr as well as stdout: a harness that fails says so on stderr, and
+    // that is the line somebody watching most needs.
+    expect(lines.some((l) => l.text === "taking w_1")).toBe(true);
+
+    // And not one word of it on the bus.
+    expect(said()).not.toContain("reading the pool");
+    const history = await front.send({ op: "history", limit: 200 });
+    expect(JSON.stringify(history.events)).not.toContain("reading the pool");
+    await daemon.close();
+  });
+
+  test("a cursor, so a panel polling every second does not re-render everything", async () => {
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, front } = await bearThroughDaemon(repo, clock, "echo one\necho two");
+
+    const lines = await untilLines(daemon, front, 2);
+    const after = Math.max(...lines.map((l) => l.n));
+    const again = await front.send({ op: "output", after });
+    expect(again.lines).toEqual([]);
+    await daemon.close();
+  });
+
+  test("a runaway newborn cannot grow the daemon without bound", async () => {
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const many = DEFAULTS.PANEL_TAIL_LINES + 50;
+    const { daemon, front } = await bearThroughDaemon(
+      repo, clock,
+      `i=0; while [ $i -lt ${many} ]; do echo "line $i"; i=$((i+1)); done; printf 'x%.0s' $(seq 1 400); echo`,
+    );
+
+    const lines = await untilLines(daemon, front, DEFAULTS.PANEL_TAIL_LINES);
+    expect(lines.length).toBe(DEFAULTS.PANEL_TAIL_LINES);
+    // A ring, so what survives is the tail — the part somebody watching wants.
+    expect(lines.some((l) => l.text === `line ${many - 1}`)).toBe(true);
+    expect(lines.some((l) => l.text === "line 0")).toBe(false);
+    // And no single line can fill a panel by itself.
+    for (const l of lines) expect(l.text.length).toBeLessThanOrEqual(DEFAULTS.PANEL_TAIL_LINE_CHARS + 1);
+    await daemon.close();
   });
 });
 

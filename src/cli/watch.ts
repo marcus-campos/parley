@@ -1,6 +1,7 @@
 import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
+import { tailCursor, tailToFeed, type TailLine } from "./panel-tail";
 
 /**
  * `parley watch` — the panel.
@@ -193,6 +194,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let closing = false;
   let workExpanded = false;
 
+  /**
+   * The last line of a newborn's output this panel has already shown. The
+   * output tail is not on the bus — it is journal-free, delivered to nobody
+   * but a panel — so it has its own cursor rather than riding `drain`'s.
+   */
+  let lastTail = 0;
+
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
       feed.push(e);
@@ -208,12 +216,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   }
 
   async function refresh(): Promise<void> {
-    const [whoR, reqR, notesR, drainR, worksR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR, tailR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
       client.request({ op: "works" }),
+      client.request({ op: "output", after: lastTail }),
     ]);
     if (whoR.ok) {
       const d = whoR as unknown as { mode: string; participants: Front[] };
@@ -227,6 +236,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     }
     if (drainR.ok) pushFeed((drainR as unknown as { events: FeedEvent[] }).events);
     if (worksR.ok) work = (worksR as unknown as { work: WorkRow[] }).work;
+    if (tailR.ok) {
+      const lines = (tailR as unknown as { lines: TailLine[] }).lines;
+      lastTail = tailCursor(lines, lastTail);
+      pushFeed(tailToFeed(lines));
+    }
     render();
   }
 

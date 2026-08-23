@@ -80,6 +80,15 @@ export class ParleyDaemon {
   /** Fronts that said `leave` from a worktree parley made, waiting to be proven gone. */
   private readonly pendingCollection =
     new Map<string, { name: string; cwd: string; sinceMs: number; attempts: number }>();
+  /**
+   * The tail of what fronts parley bore have printed, for the panel and for
+   * nobody else. Not in `State`: it is not a fact about the conversation, it
+   * never arrives as a frame, and a journal replay could not reconstruct it.
+   */
+  private readonly tail: { n: number; name: string; text: string; at: string }[] = [];
+  private tailSeq = 0;
+  /** How to stop reading each newborn's pipes. Called on `close()`. */
+  private readonly outputReaders: (() => void)[] = [];
   /** Fronts parley started that have not reached the bus yet. */
   private readonly pendingBirth = new Map<string, { atMs: number; mode: "panel" | "terminal" }>();
   /** Removals in flight. Nothing waits on these except `close`. */
@@ -274,6 +283,16 @@ export class ParleyDaemon {
       return;
     }
 
+    // A daemon-local read, answered before anything else happens to it: the
+    // tail of a newborn's output is not a fact about the conversation, so it
+    // is neither applied to the state nor written to the journal. Only a panel
+    // ever asks.
+    if (frame.op === "output") {
+      const after = typeof frame.after === "number" ? frame.after : 0;
+      this.send(conn, { ok: true, lines: this.tail.filter((l) => l.n > after) });
+      return;
+    }
+
     const ctx = makeCtx(this.now(), this.counter);
 
     // Expire before deciding: a claim held by a front that died two minutes ago
@@ -358,11 +377,16 @@ export class ParleyDaemon {
     if (!root) return;
 
     const wanted = this.spawnConfig.mode;
+    // Fixed before the call, because the callback that reads the newborn's
+    // output has to know whose output it is and `bearFront` has not returned
+    // yet when the first line arrives.
+    const name = `POOL-${this.nextFrontIndex}`;
     const born = bearFront({
       repoRoot: root,
       config: this.spawnConfig,
       intent: birth,
       index: this.nextFrontIndex++,
+      onOutput: (line) => this.recordTail(name, line),
     });
 
     if (!born) {
@@ -383,6 +407,7 @@ export class ParleyDaemon {
     // PATH the daemon cannot see. `sweepBirths` is what turns silence into a
     // sentence.
     this.pendingBirth.set(born.name, { atMs: ctx.nowMs, mode: born.mode });
+    if (born.stopOutput) this.outputReaders.push(born.stopOutput);
 
     if (born.mode !== wanted) {
       // Same discipline as `enforced` degrading to `advisory` (`setMode`) or a
@@ -592,6 +617,25 @@ export class ParleyDaemon {
     this.announce(ctx, `${pending.name}'s worktree at ${where} could not be collected after ${attempts} tries — it is still on disk`);
   }
 
+  /**
+   * A line a newborn printed, kept where a panel can ask for it.
+   *
+   * §7 of the design: *"a newborn front's output streams into the panel —
+   * which is what makes headless spawning legible rather than a black box"*.
+   * Into the panel, and the word matters. The plan's sketch pushed each line
+   * onto the bus as a `say`, which would journal it and drain it into every
+   * other front's context — a harness printing its answer would cost every
+   * agent on the repository the tokens to read it, and the pool footer exists
+   * precisely because that trade is not worth making.
+   */
+  private recordTail(name: string, line: string): void {
+    const text = line.length > DEFAULTS.PANEL_TAIL_LINE_CHARS
+      ? `${line.slice(0, DEFAULTS.PANEL_TAIL_LINE_CHARS)}…`
+      : line;
+    this.tail.push({ n: ++this.tailSeq, name, text, at: new Date(this.now()).toISOString() });
+    while (this.tail.length > DEFAULTS.PANEL_TAIL_LINES) this.tail.shift();
+  }
+
   /** One system event, to everyone. Nothing else in here has a voice. */
   private announce(ctx: Ctx, text: string): void {
     const event = pushEvent(this.state, ctx, {
@@ -641,6 +685,11 @@ export class ParleyDaemon {
     this.timer = null;
     this.spawnConfigWatcher?.close();
     this.spawnConfigWatcher = null;
+    // A pipe still being read keeps the event loop open. The newborn itself is
+    // detached and unref'd and outlives this.
+    for (const stop of this.outputReaders.splice(0)) {
+      try { stop(); } catch { /* already gone */ }
+    }
     for (const conn of [...this.conns]) {
       try { conn.socket.destroy(); } catch { /* already gone */ }
     }

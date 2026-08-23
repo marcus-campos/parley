@@ -5,6 +5,7 @@ import { ParleyClient } from "../client/client";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
+import { tailCursor, tailToFeed, type TailLine } from "./panel-tail";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -116,6 +117,8 @@ export async function runWebPanel(
 
   const token = randomBytes(16).toString("hex");
   const feed: unknown[] = [];
+  /** This panel's own cursor into the newborn output tail, which is not the bus. */
+  let lastTail = 0;
   let seeded = false;
   const subscribers = new Set<(chunk: string) => void>();
 
@@ -134,17 +137,24 @@ export async function runWebPanel(
         for (const e of (past as unknown as { events: unknown[] }).events) feed.push(e);
       }
     }
-    const [whoR, reqR, notesR, drainR, worksR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR, tailR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
       client.request({ op: "works" }),
+      client.request({ op: "output", after: lastTail }),
     ]);
     if (drainR.ok) {
       for (const e of (drainR as unknown as { events: unknown[] }).events) feed.push(e);
-      while (feed.length > 500) feed.shift();
     }
+    if (tailR.ok) {
+      // A newborn's output is not on the bus and has its own cursor.
+      const lines = (tailR as unknown as { lines: TailLine[] }).lines;
+      lastTail = tailCursor(lines, lastTail);
+      for (const event of tailToFeed(lines)) feed.push(event);
+    }
+    while (feed.length > 500) feed.shift();
     const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { id: string; name: string }[] }) : null;
     return {
       mode: who?.mode ?? me.mode,
