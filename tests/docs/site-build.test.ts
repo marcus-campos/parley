@@ -161,6 +161,25 @@ describe("the documentation site", () => {
     }
   });
 
+  test("no page promises a warning the hook path never emits", () => {
+    // `docs/concepts/territory.md` gets this right and the landing page got it
+    // wrong, so the site asserted it twice and refuted it once. An unreachable
+    // daemon is loud on the CLI path (`src/cli/main.ts`, "continuing without
+    // coordination") and silent on the hook path — which is the one that runs
+    // while somebody is actually editing.
+    const hook = readFileSync(join(root, "src", "adapters", "hook.ts"), "utf8");
+    // Pinned against the source, not against a memory of it: if the hook ever
+    // starts warning, this test should be the thing that says so.
+    expect(hook).toContain("return emit({})");
+
+    for (const page of ["docs/index.md", "README.md", "docs/guide/what-it-is.md"]) {
+      const text = readFileSync(join(root, page), "utf8");
+      expect(text).not.toMatch(/degrades to .?advisory.? and says so/i);
+    }
+    // And the correction has to actually say what happens instead.
+    expect(readFileSync(join(root, "README.md"), "utf8")).toContain("unclaimed");
+  });
+
   test("every source citation on the site points at a line that exists", () => {
     // The discipline this branch was built on, made mechanical: the pages cite
     // `src/...:NN` and `src/...:NN-MM` constantly, and a citation nobody can

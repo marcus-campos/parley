@@ -57,15 +57,31 @@ reachable from the network. If you are working on a remote box over SSH and
 want the panel on your local browser anyway, forward the port instead of
 changing the bind address:
 
+Start the panel on the remote box first and **read the port off the URL it
+prints** — do not guess it. `7717` is the base of a range, not the port: the
+panel listens on `7717 + (hash of the repository id % 200)`, so any port from
+`7717` to `7916` is normal and this repository, for instance, derives `7780`
+(`src/cli/web.ts:79-85`). Forward the port you actually saw:
+
 ```bash
-# on your local machine
-ssh -L 7717:127.0.0.1:7717 you@remote-box
+# on the remote box
+parley watch --web --detach --no-open
+# parley: web panel on http://127.0.0.1:7780/?t=<token>
+
+# on your local machine — 7780 here because that is what it printed
+ssh -L 7780:127.0.0.1:7780 you@remote-box
 ```
 
-Then open the URL `parley watch --web` printed, unchanged, in your local
-browser. Because the port is derived from the repository, it is stable
-across restarts, so a forwarding rule you set up once keeps working the next
-time you reconnect — as long as you reuse the same local port.
+Then open the printed URL unchanged in your local browser, token and all,
+with the same port on both sides of the `-L`.
+
+The derived port is stable across restarts **as long as it is free**. If
+something else already holds it, parley does not fail and does not fight for
+it: it hands the choice to the operating system and takes whatever it is
+given (`chosen = 0`, `src/cli/web.ts:184-188`), which is a different,
+unpredictable port. So a forwarding rule set up once usually keeps working —
+but it is the printed URL, not the rule, that is authoritative. Check it
+whenever the panel does not answer.
 
 ## When it does not come up
 

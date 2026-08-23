@@ -19,5 +19,5 @@ features:
   - title: What one front learned, the next one has
     details: Notes anchored to the files they are about, decisions that bind until reversed, and command results nobody has to run twice.
   - title: A broken parley never stops the work
-    details: Unreachable daemon degrades to advisory and says so. An overrunning hook lets go. A torn journal line is dropped and the bus boots anyway.
+    details: An unreachable daemon never blocks an edit — a command you ran says so on stderr; the hook that guards your edits answers with nothing and lets it through unclaimed. An overrunning hook lets go. A torn journal line is dropped and the bus boots anyway.
 ---

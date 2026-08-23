@@ -126,11 +126,14 @@ being obvious — and that is where this earns its place.
 <!-- #region one-rule -->
 **A broken parley must never stop the work.**
 
-If the daemon is unreachable, `enforced` degrades to `advisory` and says so
-loudly. If a hook overruns its time budget, it lets go. If the journal has a torn
-line from a `kill -9`, the daemon drops that line and boots anyway. A
-coordination system that freezes the machine when it fails is worse than no
-system at all.
+If the daemon is unreachable, nothing blocks. A command you ran yourself prints
+the reason on stderr and exits clean. The pre-edit hook is quieter than that: it
+answers with nothing at all, and your edit lands unclaimed with parley never
+mentioned in the transcript — silence, not a warning, which is the honest
+description of what you get. If a hook overruns its time budget, it lets go. If
+the journal has a torn line from a `kill -9`, the daemon drops that line and
+boots anyway. A coordination system that freezes the machine when it fails is
+worse than no system at all.
 <!-- #endregion one-rule -->
 
 ---
