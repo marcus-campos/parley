@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sitePages } from "../../scripts/gen-citations";
 import {
   MAIN_PATH,
   dispatchedCommands,
@@ -17,6 +18,23 @@ const mainSource = readFileSync(MAIN_PATH, "utf8");
 // normalise it away so this test fails for the reason it exists and not for
 // the reason git checked the file out differently.
 const lf = (text: string): string => text.replace(/\r\n/g, "\n");
+
+/**
+ * Every `--flag` `src/cli/main.ts` actually reads, plus every one USAGE spells.
+ *
+ * Comments quote old code on purpose — `flagBool`'s doc names the two idioms
+ * it replaced — so what counts as a *read* is code with the comments stripped.
+ */
+function flagsTheCliReads(): Set<string> {
+  const code = mainSource.replace(/^\s*\/\/.*$/gm, "");
+  const known = new Set<string>();
+  for (const m of code.matchAll(/\bflag(?:String|Bool)\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) known.add(`--${m[1]}`);
+  for (const m of code.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z][\w$]*)/g)) known.add(`--${m[1]}`);
+  for (const m of code.matchAll(/\b(?:parsed|p)\.flags\[\s*"([^"]+)"\s*\]/g)) known.add(`--${m[1]}`);
+  const usage = mainSource.slice(mainSource.indexOf("const USAGE = `"), mainSource.indexOf("\n`;\n"));
+  for (const m of usage.matchAll(/--[a-z][A-Za-z0-9-]*/g)) known.add(m[0]);
+  return known;
+}
 
 describe("the command reference", () => {
   test("the committed file matches what the CLI actually offers", () => {
@@ -415,30 +433,65 @@ describe("the README's command tables agree with the CLI", () => {
     expect(unknown).toEqual([]);
   });
 
-  test("every flag the README's prose spells is one the CLI actually reads", () => {
-    // The check above reads table rows only. `--open=false` sat in a bullet
-    // under "In the browser" for the whole life of this branch, promising a
-    // flag that is read nowhere: the spelling is `--no-open`, and
-    // `parley watch --web --open=false` opened the browser anyway. It survived
-    // a whole-branch review and two fix rounds because reconcileFlags check 3
-    // reads USAGE, and USAGE never mentioned it.
-    const readme = readFileSync(join(root, "README.md"), "utf8");
-    // Comments quote old code on purpose; what a flag is *read* by is code.
-    const code = mainSource.replace(/^\s*\/\/.*$/gm, "");
-    const known = new Set<string>();
-    for (const m of code.matchAll(/\bflag(?:String|Bool)\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) known.add(`--${m[1]}`);
-    for (const m of code.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z][\w$]*)/g)) known.add(`--${m[1]}`);
-    for (const m of code.matchAll(/\b(?:parsed|p)\.flags\[\s*"([^"]+)"\s*\]/g)) known.add(`--${m[1]}`);
-    const usage = mainSource.slice(mainSource.indexOf("const USAGE = `"), mainSource.indexOf("\n`;\n"));
-    for (const m of usage.matchAll(/--[a-z][A-Za-z0-9-]*/g)) known.add(m[0]);
+  test("every flag any published page spells is one the CLI actually reads", () => {
+    // Two rounds of this class, found the same way and one page apart.
+    //
+    // `--open=false` sat in a README bullet under "In the browser" for the
+    // whole life of this branch, promising a flag read nowhere: the spelling
+    // is `--no-open`, and `parley watch --web --open=false` opened the browser
+    // anyway. It survived a whole-branch review and two fix rounds because
+    // reconcileFlags check 3 reads USAGE and the README cross-check above
+    // reads *table rows*, and this was a bullet.
+    //
+    // The guard built for it read `README.md` and nothing else, so
+    // `docs/ARCHITECTURE.md:72` kept documenting `--speak` — a flag that
+    // exists nowhere in `src/`; speaking on the terminal panel is the `i`
+    // keypress at `src/cli/watch.ts:469`, which USAGE itself says. That page
+    // is in the sidebar (docs/.vitepress/config.ts). A guard whose scope is
+    // one file closes the class for one file.
+    //
+    // WHAT THIS STILL CANNOT SEE, all accepted. The `--` anchor is what makes
+    // the scan cheap enough to run over every page without false positives,
+    // and it is the whole cost:
+    //   - a flag written without it ("the `open` flag", "pass open=false");
+    //   - a flag whose first character is not [a-z] (`--Web`, `--2fa`) — the
+    //     CLI has none, and loosening it makes `--` in prose match;
+    //   - a flag hard-wrapped across a line break.
+    // Each needs a reader. What is closed is the spelled, unbroken, published
+    // `--flag` — which is every instance either round actually found.
+    const known = flagsTheCliReads();
+
+    // Flags of other people's tools, quoted on a page as examples. Asserted by
+    // equality, so the list cannot quietly grow to swallow a real defect — the
+    // same arrangement as the sidebar exclusion set.
+    const NOT_PARLEYS: Record<string, string> = {
+      "--compile": "bun build --compile, in the packaging section",
+      "--git-common-dir": "git rev-parse --git-common-dir, the bus key",
+      "--noEmit": "tsc --noEmit",
+    };
     expect(known.size).toBeGreaterThanOrEqual(20);
 
-    // Flags of other people's tools, quoted in the README as examples. Asserted
-    // exactly, so the list cannot quietly grow to swallow a real defect — the
-    // same arrangement as the sidebar exclusion set.
-    const NOT_PARLEYS = ["--noEmit"];
-    const spelled = [...new Set([...readme.matchAll(/--[a-z][A-Za-z0-9-]*/g)].map((m) => m[0]))].sort();
-    expect(spelled.filter((f) => !known.has(f))).toEqual(NOT_PARLEYS);
+    const pages = ["README.md", ...sitePages(join(root, "docs"))];
+    // Vacuity: a `sitePages` that returned nothing would pass silently.
+    expect(pages.length).toBeGreaterThanOrEqual(10);
+
+    let checked = 0;
+    const unknown: string[] = [];
+    const foreign = new Set<string>();
+    for (const page of pages) {
+      const text = readFileSync(join(root, page), "utf8");
+      for (const flag of new Set([...text.matchAll(/--[a-z][A-Za-z0-9-]*/g)].map((m) => m[0]))) {
+        checked++;
+        if (known.has(flag)) continue;
+        if (flag in NOT_PARLEYS) foreign.add(flag);
+        else unknown.push(`${flag} (in ${page})`);
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(40);
+    expect(unknown.sort()).toEqual([]);
+    // Both directions: an entry nobody needs is a hole waiting for a real
+    // defect to fall into.
+    expect([...foreign].sort()).toEqual(Object.keys(NOT_PARLEYS).sort());
   });
 });
 
