@@ -207,8 +207,15 @@ describe("what the site cites", () => {
     // Recorded counts rather than a floor with headroom: these pages carry so
     // few that any loss is a page quietly stopping showing its work. Adding is
     // free; a new citing page has to be written down here, which is the point.
+    //
+    // `panel.md` went 3 → 5 when the two keypress citations landed. Adding
+    // without bumping would have passed — the check is `cites < recorded` —
+    // and that is exactly the hole this block exists to close: the ledger pins
+    // what is cited, never that anything is, so a citation nobody wrote down
+    // here can be deleted from the page and take its ledger entry with it in
+    // the same silent diff.
     const RECORDED: Record<string, number> = {
-      "docs/guide/panel.md": 3,
+      "docs/guide/panel.md": 5,
       "docs/guide/setup.md": 1,
     };
     const citing = sitePages(join(root, "docs"))

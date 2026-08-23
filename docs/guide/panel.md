@@ -38,13 +38,14 @@ claude          # or codex, or whatever you drive sessions with
 ```
 
 Leave pane 1 alone. The panel is built to be glanced at, not typed into —
-the composer only appears when you press <kbd>i</kbd> (or <kbd>s</kbd> on
-the web page), and closes itself again. If you are watching a long-running
-task, the moment you actually need the panel is when a **pending permission**
-line shows up with a countdown: that is the signal that one front is waiting
-on another, and it is the one thing worth interrupting your own work for,
-since an unanswered request resolves itself on a timer whether or not anyone
-looked at it.
+the composer only appears when you press <kbd>i</kbd>
+(`src/cli/watch.ts:468-469`, or <kbd>s</kbd> on the web page,
+`src/cli/web-page.ts:215-216`), and closes itself again. If you are watching
+a long-running task, the moment you actually need the panel is when a
+**pending permission** line shows up with a countdown: that is the signal
+that one front is waiting on another, and it is the one thing worth
+interrupting your own work for, since an unanswered request resolves itself
+on a timer whether or not anyone looked at it.
 
 For a detached web panel you plan to leave running across many sessions,
 treat the printed URL like a bookmark — it includes the access token, so

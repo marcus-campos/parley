@@ -997,6 +997,12 @@
 |   }
 @ docs/concepts/work-pool.md src/state/work.ts b5f091e36191
 |   const origin = frame.origin === "planned" ? "planned" : "discovered";
+@ docs/guide/panel.md src/cli/watch.ts 7fd22d3f8c3c
+|     if (composer === "none") {
+|       if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }
+@ docs/guide/panel.md src/cli/web-page.ts e416913d6805
+|   if (!speaking && (e.key === "s" || e.key === "S") && !e.metaKey && !e.ctrlKey) {
+|     e.preventDefault(); setSpeaking(true);
 @ docs/guide/panel.md src/cli/web.ts 36c287df3ea1
 | export function defaultPortFor(repoId: string): number {
 |   const span = 200;
