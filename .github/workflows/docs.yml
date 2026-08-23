@@ -48,6 +48,13 @@ jobs:
           bun run docs:commands
           git diff --exit-code docs/reference/commands.md
 
+      # Same argument, one level down. The pages cite `src/…:NN` roughly a
+      # hundred times and the only thing standing between a source edit and a
+      # site that sends readers to the wrong line is this test. It is cheap,
+      # and this workflow publishes without waiting for ci.yml.
+      - name: Citations point at the code they claim
+        run: bun test tests/docs/citations.test.ts
+
       - run: bun run docs:build
       - uses: actions/upload-pages-artifact@v3
         with:

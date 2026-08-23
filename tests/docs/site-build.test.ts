@@ -180,29 +180,9 @@ describe("the documentation site", () => {
     expect(readFileSync(join(root, "README.md"), "utf8")).toContain("unclaimed");
   });
 
-  test("every source citation on the site points at a line that exists", () => {
-    // The discipline this branch was built on, made mechanical: the pages cite
-    // `src/...:NN` and `src/...:NN-MM` constantly, and a citation nobody can
-    // check is decoration. Catches a page written against code that has since
-    // moved or shrunk — and a stub, which cites nothing at all.
-    const pages = [
-      ...CONCEPT_PAGES.map((p) => join("docs", "concepts", p)),
-      join("docs", "guide", "setup.md"),
-      join("docs", "guide", "panel.md"),
-    ];
-    let checked = 0;
-    for (const page of pages) {
-      const text = readFileSync(join(root, page), "utf8");
-      for (const m of text.matchAll(/`(src\/[A-Za-z0-9_./-]+\.ts):(\d+)(?:-(\d+))?`/g)) {
-        const [, file, from, to] = m;
-        const path = join(root, file!);
-        expect(existsSync(path)).toBe(true);
-        const lines = readFileSync(path, "utf8").split("\n").length;
-        expect(Number(to ?? from)).toBeLessThanOrEqual(lines);
-        checked++;
-      }
-    }
-    // The regex finding nothing would make every assertion above vacuous.
-    expect(checked).toBeGreaterThanOrEqual(50);
-  });
+  // Citations used to be checked here, with `Number(to ?? from) <= lines`.
+  // That is a claim about a file being long enough, and a citation is a claim
+  // about content: `src/cli/main.ts` grew by 49 lines, seven citations slid
+  // onto unrelated code, and every one still pointed at a line that existed.
+  // The real guard is tests/docs/citations.test.ts, which pins the cited text.
 });
