@@ -72,8 +72,9 @@ nothing in the code branches on it beyond the same "is this bus?" check
 `pool` already gets (`src/state/work.ts:48`, `src/state/work.ts:272`). There
 is no `parley plan <path>`, nothing parses a `**Files:**` block, and nothing
 publishes an item with `origin: "planned"` — that value exists in the
-`WorkItem` type (`src/state/types.ts:170`) but no code path on this branch
-ever sets it; a work item published through the CLI is always `"discovered"`
+`WorkItem` type (`src/state/types.ts:170`), and `publishWork` will honour it
+when a frame carries it, but no caller in this repository passes it, so a work
+item published through the CLI is always `"discovered"`
 (`src/state/work.ts:62`). So today, setting `shape plan` does not turn on
 plan-driven dispatch — it leaves a repository running exactly the `pool`
 machinery described above, because nothing distinguishes the two yet.

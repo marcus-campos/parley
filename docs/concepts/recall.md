@@ -61,8 +61,9 @@ the frame ever reaches `apply` — and only that copy is touched; the journal
 keeps exactly the frame that came in over the wire, so a replay never has to
 agree with what the index looked like at write time
 (`src/daemon/server.ts:247-250`). It searches across the *whole* corpus —
-notes, decisions, and results together — before slicing to `k`, then filters
-by which op asked:
+notes, decisions, and results together — then filters by which op asked, and
+only then slices to `k` (`src/daemon/server.ts:264-267`). The order is the
+whole point:
 
 > `search` ranks across every kind in one corpus-wide score, and its
 > distinctiveness threshold is a property of the whole corpus... So `k`

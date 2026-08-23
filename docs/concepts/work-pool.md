@@ -131,8 +131,9 @@ describes; it only stops the bookkeeping around it.
 
 One guard exists that nothing on this branch can currently trigger: a
 `planned` item — one dispatched rather than discovered — cannot be dropped,
-because dispatch is not an offer (`src/state/work.ts:197-200`). No code path
-here ever publishes an item with that origin; everything published through
-the CLI is `"discovered"` (`src/state/work.ts:62`). That guard is waiting on
+because dispatch is not an offer (`src/state/work.ts:197-200`). `publishWork`
+reads the origin off the incoming frame and would honour `"planned"`, but no
+caller in this repository passes it, so everything published through the CLI
+is `"discovered"` (`src/state/work.ts:62`). That guard is waiting on
 the `plan` shape, which this branch does not implement — see
 [shapes](/concepts/shapes).

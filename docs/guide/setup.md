@@ -75,8 +75,10 @@ Skip this section entirely if you only ever open one repository at a time.
 for the repository you are standing in:
 
 - which identity parley resolved (repository or workspace, and which one)
-- which transport it will use (unix socket, named pipe, or loopback — this
-  matters most in WSL)
+- which transport it will use, spelled exactly as `doctor` prints it:
+  `unix` for a socket, `pipe` for a Windows named pipe, or `tcp` for
+  authenticated loopback, which is what the WSL/Windows boundary falls back to
+  (`src/transport/address.ts:33-55`)
 - whether the skill in this project matches the binary you have installed
 - where state lives on this machine, and the process id an endpoint file
   claims — that file existing is not proof the process behind it is still

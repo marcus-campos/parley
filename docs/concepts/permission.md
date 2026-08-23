@@ -22,13 +22,20 @@ path; `scope: transfer` moves the whole overlapping claim to the requester
 An unanswered request does not stay pending forever — it becomes
 `granted_by_timeout` after the deadline (five minutes by default,
 `DEFAULTS.PERMISSION_TTL_MS` at `src/protocol/types.ts:70`, configurable per
-request via `ttl_s`) and the grant is announced by name:
+request via `ttl_s`) and the grant is announced by name. The announcement is
+built from this template, with the requester, the path, the owner and the
+minutes waited filled in at the time (`src/state/permissions.ts:176`):
 
-> `TESTE-CAMPO took src/backend/finance/services.py by timeout; FINANCEIRO
-> did not answer in 5 min.`
-> (`src/state/permissions.ts:162-181`)
+```
+${requester} took ${path} by timeout; ${owner} did not answer in ${waited} min.
+```
 
-The comment beside that code states the trade-off directly:
+which reaches the bus reading something like `TESTE-CAMPO took
+src/backend/finance/services.py by timeout; FINANCEIRO did not answer in
+5 min.` — an illustration, not a recorded event.
+
+Everything quoted below in this shape is verbatim source, unlike the line
+above. The comment beside that code states the trade-off directly:
 
 > Expiry is a grant, and it is announced by name. An idle agent is the most
 > expensive waste in the system; naming who failed to answer is what stops
