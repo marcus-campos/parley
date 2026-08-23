@@ -87,6 +87,16 @@ export const DEFAULTS = {
    * told there is nothing to look at.
    */
   RETIRE_GRACE_MS: 60_000,
+  /**
+   * How long a newborn's worktree is left alone after its front said `leave`.
+   *
+   * `leave` is not proof that a process has exited. The retirement notice
+   * itself asks the front to run `parley leave`, and a front that does so can
+   * still make another tool call afterwards — its cwd would be gone under it.
+   * One LEASE_TTL_MS of silence is what this bus already treats as death
+   * everywhere else, so it is what "actually gone" means here too.
+   */
+  COLLECT_AFTER_LEAVE_MS: 5 * 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
   /** Hard budget for the hook query path. Overrun means let go, never block. */

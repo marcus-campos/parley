@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, sep } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
@@ -77,6 +77,10 @@ export class ParleyDaemon {
   private server: Server | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastActivityMs: number;
+  /** Fronts that said `leave` from a worktree parley made, waiting to be proven gone. */
+  private readonly pendingCollection = new Map<string, { cwd: string; sinceMs: number }>();
+  /** Removals in flight. Nothing waits on these except `close`. */
+  private readonly collecting = new Set<Promise<void>>();
   private readonly token: string | null;
   private readonly now: () => number;
   /** Read once at boot, re-read whenever `parley/spawn.json` changes underneath us. */
@@ -267,6 +271,7 @@ export class ParleyDaemon {
     if (expired.broadcast.length) this.push(expired.broadcast, null);
     this.bearFrontFor(expired.birth, ctx);
     this.retireFronts(expired.retire, ctx);
+    this.sweepCollections(ctx.nowMs);
 
     // Journal BEFORE responding. This ordering is the entire crash story.
     const entry: JournalEntry = { at: ctx.now, actorId: conn.participantId, frame };
@@ -288,7 +293,7 @@ export class ParleyDaemon {
       if (p) p.connected = true;
     }
     if (frame.op === "leave" && outcome.response.ok) {
-      this.collectWorktree(conn.participantId ? this.state.participants[conn.participantId] : undefined);
+      this.scheduleCollection(conn.participantId ? this.state.participants[conn.participantId] : undefined);
       conn.participantId = null;
     }
 
@@ -308,6 +313,7 @@ export class ParleyDaemon {
     if (result.broadcast.length) this.push(result.broadcast, null);
     this.bearFrontFor(result.birth, ctx);
     this.retireFronts(result.retire, ctx);
+    this.sweepCollections(ctx.nowMs);
 
     const idleFor = this.now() - this.lastActivityMs;
     const limit = this.opts.idleShutdownMs ?? DEFAULTS.IDLE_SHUTDOWN_MS;
@@ -392,15 +398,25 @@ export class ParleyDaemon {
   }
 
   /**
-   * The worktree comes back only after the front has left, and only if it is
-   * empty. Both halves matter.
+   * A worktree is collected only after its front has left *and* gone quiet,
+   * and only if it is empty. All three matter, and the first two are not the
+   * same thing.
    *
-   * *After*: a front that has been named for retirement has not gone anywhere
-   * — it has been asked to. Until it says `leave` it is still running, still
-   * has that directory as its cwd, and may still be about to write a file
-   * into it. `leave` is the only thing parley ever hears that means "the
-   * process is done with this directory" (the SessionEnd hook sends it too,
-   * so a session closed from the harness side is covered).
+   * *Left*: `leave` is the only thing parley ever hears that means "I am done
+   * with this directory" (the SessionEnd hook sends it too, so a session
+   * closed from the harness side is covered).
+   *
+   * *Gone*: `leave` is not proof that the process has exited, and the
+   * retirement notice makes that the common case rather than the rare one —
+   * it asks the front to run `parley leave`, so the front runs it and then
+   * makes one more tool call, with its cwd deleted underneath it. Note which
+   * lock cannot help here: "only if clean" is exactly the one that cannot,
+   * because a newborn's tree is clean by construction. Collecting on socket
+   * close would not help either — `parley leave` from a hook or a shell is its
+   * own short-lived process, so its socket closes milliseconds later and
+   * proves only that the *command* finished. So leaving schedules; the sweep
+   * below decides. Anything that puts a live front back in that directory —
+   * one more tool call, and the hook re-joins — cancels it.
    *
    * *Empty*: `removeWorktreeIfClean` refuses anything with changes in it.
    *
@@ -411,15 +427,48 @@ export class ParleyDaemon {
    * but "git would have refused" is not the guarantee to rely on when the
    * failure mode is deleting somebody's checkout.
    */
-  private collectWorktree(p: Participant | undefined): void {
+  private scheduleCollection(p: Participant | undefined): void {
     if (!p || p.born !== "parley" || !p.cwd) return;
     const root = this.repoRootForExport();
     if (!root) return;
     if (!isNewbornWorktree(root, p.cwd)) return;
-    // Deliberately not awaited: two `git` subprocesses must never be something
-    // the daemon's event loop waits on. Failure is already the safe outcome —
-    // the worktree stays where it is.
-    void removeWorktreeIfClean(root, p.cwd).catch(() => { /* disk is cheap */ });
+    this.pendingCollection.set(p.id, { cwd: p.cwd, sinceMs: this.now() });
+  }
+
+  /**
+   * Nobody has been in that directory for as long as this bus takes silence to
+   * mean death. Now it can go.
+   *
+   * A front that came back — reattached to the same participant, or joined as
+   * a new one from the same directory — cancels its own collection outright,
+   * because the question was never "did it say leave" but "is anybody still in
+   * there".
+   */
+  private sweepCollections(nowMs: number): void {
+    if (this.pendingCollection.size === 0) return;
+    const root = this.repoRootForExport();
+    if (!root) return;
+    for (const [id, pending] of [...this.pendingCollection]) {
+      const inThere = Object.values(this.state.participants).some(
+        (p) => !p.gone && p.cwd && (p.cwd === pending.cwd || p.cwd.startsWith(`${pending.cwd}${sep}`)),
+      );
+      if (inThere || this.state.participants[id]?.gone === false) {
+        this.pendingCollection.delete(id);
+        continue;
+      }
+      if (nowMs - pending.sinceMs < DEFAULTS.COLLECT_AFTER_LEAVE_MS) continue;
+      this.pendingCollection.delete(id);
+      // Deliberately not awaited: two `git` subprocesses must never be
+      // something the daemon's event loop waits on. Failure is already the
+      // safe outcome — the worktree stays where it is. `close()` is the one
+      // place that waits, so a daemon shutting down cannot leave a half-done
+      // `git worktree remove` behind.
+      const collecting = removeWorktreeIfClean(root, pending.cwd)
+        .then(() => { /* the outcome is the directory itself */ })
+        .catch(() => { /* disk is cheap */ });
+      this.collecting.add(collecting);
+      void collecting.finally(() => this.collecting.delete(collecting));
+    }
   }
 
   /** Unsolicited frames on the same connection: inbox and territory events. */
@@ -477,6 +526,12 @@ export class ParleyDaemon {
       if (!this.server) return resolve();
       this.server.close(() => resolve());
     });
+    // A `git worktree remove` in flight belongs to this daemon; exiting from
+    // under it leaves a half-removed worktree and a stale entry in .git. Each
+    // one is bounded by GIT_TIMEOUT_MS, and there is at most one per front
+    // that has left.
+    this.pendingCollection.clear();
+    await Promise.all([...this.collecting]);
     if (
       this.opts.address.kind === "unix" &&
       existsSync(this.opts.address.address) &&

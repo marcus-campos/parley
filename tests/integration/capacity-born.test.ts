@@ -194,7 +194,7 @@ describe("the newborn's worktree", () => {
     expect(existsSync(worktree)).toBe(true);
 
     let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { endpoint } = await daemonFor(repo, () => clock);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
     const front = await connectTo(endpoint.address);
     await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
 
@@ -205,11 +205,14 @@ describe("the newborn's worktree", () => {
     await front.send({ op: "who" });
     await front.send({ op: "who" });
     await front.send({ op: "drain" });
-    clock += 60_000;
+    // Far past every window there is, and still the front has not left.
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 60_000;
     await front.send({ op: "who" });
     // Collection is asynchronous, so "still there on the next line" proves
-    // nothing — give an eager removal every chance to finish before looking.
-    await new Promise((r) => setTimeout(r, 500));
+    // nothing. This waited 500ms instead — which went red in 595ms on a
+    // reviewer's machine, and the flake direction was *a mutation surviving*.
+    // `close` waits for anything in flight, so there is nothing left to race.
+    await daemon.close();
     expect(existsSync(worktree)).toBe(true);
     expect(existsSync(join(worktree, "a.txt"))).toBe(true);
   });
@@ -227,6 +230,12 @@ describe("the newborn's worktree", () => {
     expect(existsSync(worktree)).toBe(true);
 
     await front.send({ op: "leave" });
+    // Said, but not yet proven: `leave` is what a front claims, silence is
+    // what proves it.
+    expect(existsSync(worktree)).toBe(true);
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
     // Collection is deliberately off the event loop: two `git` subprocesses
     // are never something the daemon waits on.
     const deadline = Date.now() + 5_000;
@@ -236,18 +245,50 @@ describe("the newborn's worktree", () => {
     expect(existsSync(worktree)).toBe(false);
   });
 
+  test("a front that says leave and then makes one more tool call keeps its directory", async () => {
+    // The notice itself asks for this: "Say so and run `parley leave`". So the
+    // front runs it — and then makes one more tool call, because it is a
+    // language model finishing a turn, not a process that has exited. Its cwd
+    // must still be there. Note which of the three locks cannot help: "only if
+    // clean" — a newborn's tree is clean by construction.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+
+    clock += DEFAULTS.RETIRE_GRACE_MS + 1;
+    await front.send({ op: "drain" });
+    await front.send({ op: "leave" });
+
+    // One more tool call: the hook re-joins on the same session, from the same
+    // directory. Anything that puts a live front back in there cancels the
+    // collection outright.
+    clock += 2_000;
+    await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
   test("a front that leaves holding uncommitted work keeps its directory", async () => {
     const repo = gitRepo();
     const { env, worktree } = bearOne(repo);
     writeFileSync(join(worktree, "b.txt"), "half an hour of work\n");
 
     let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { endpoint } = await daemonFor(repo, () => clock);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
     const front = await connectTo(endpoint.address);
     await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
     await front.send({ op: "leave" });
 
-    await new Promise((r) => setTimeout(r, 500));
+    // Past the point where the collection is genuinely attempted — otherwise
+    // this would pass on the deferral alone and prove nothing about clean.
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
     expect(existsSync(join(worktree, "b.txt"))).toBe(true);
   });
 
@@ -265,29 +306,42 @@ describe("the newborn's worktree", () => {
     expect(existsSync(join(theirs, "a.txt"))).toBe(true);
 
     let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { endpoint } = await daemonFor(repo, () => clock);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
     const front = await connectTo(endpoint.address);
     // Born by parley, but sitting in a directory parley did not create.
     await front.send(joinAsNewborn(env, theirs, "session-pool-1"));
     await front.send({ op: "leave" });
 
-    await new Promise((r) => setTimeout(r, 500));
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
     expect(existsSync(join(theirs, "a.txt"))).toBe(true);
   });
 
-  test("a person's worktree is never collected, whatever cwd they left from", async () => {
+  test("a person's session is never collected, even standing in a newborn's worktree", async () => {
+    // The cwd this must be run from. The version this replaces used the
+    // repository root, where the `.parley/worktrees/` prefix guard already
+    // refuses on its own — so `born` could be deleted from the check and the
+    // test stayed green. The real case is a person opening a session *inside*
+    // `.parley/worktrees/pool-1` to see what POOL-1 did: every other guard
+    // says yes there, and only `born` says no.
     const repo = gitRepo();
+    const { worktree } = bearOne(repo);
     let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { endpoint } = await daemonFor(repo, () => clock);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
     const front = await connectTo(endpoint.address);
     savedEnv = { ...process.env };
     delete process.env.PARLEY_BORN;
     process.env.PARLEY_NAME = "DEVELOP";
-    await front.send(joinFrame(resolveIdentity(repo, repo), { cwd: repo, kind: "agent", session: "s" }));
+    const frame = joinFrame(resolveIdentity(worktree, worktree), { cwd: worktree, kind: "agent", session: "s" });
+    expect(frame.born).toBe("person");
+    await front.send(frame);
     await front.send({ op: "leave" });
 
-    await new Promise((r) => setTimeout(r, 500));
-    expect(existsSync(join(repo, "a.txt"))).toBe(true);
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
   });
 });
 
