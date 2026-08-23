@@ -12,6 +12,8 @@ import { adapterStatus } from "../adapters/claude-code";
 import { parsePlan } from "../plan/parse";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isSelfReview } from "../state/work";
+import type { WorkItem } from "../state/types";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
 import { resolveIdentity, wakeAddress } from "./identity";
@@ -958,9 +960,15 @@ async function main(): Promise<void> {
           mine: p.flags.mine === true,
         });
         if (!r.ok) fail(p, describeError(r));
-        const work = (r as unknown as { work: { id: string; paths: string[]; title: string; state: string }[] }).work;
+        const work = (r as unknown as { work: WorkItem[] }).work;
         if (work.length === 0) return out(p, "parley: nothing in the pool", r);
-        const rows = work.map((w) => `  ${w.id}  ${w.state.padEnd(7)} ${w.paths.join(", ")} — ${w.title}`);
+        // The listing is where a finished wave is read back, and a done review
+        // keeps `takenById` — so this is the surface on which a wave that was
+        // reviewed by its own author would otherwise look exactly like one
+        // that was not. Same predicate `take` answers with.
+        const rows = work.map((w) =>
+          `  ${w.id}  ${w.state.padEnd(7)} ${w.paths.join(", ")} — ${w.title}` +
+          (isSelfReview(w, w.takenById) ? "  (self-review)" : ""));
         return out(p, rows.join("\n"), r);
       }
 
@@ -972,9 +980,12 @@ async function main(): Promise<void> {
           const offered = (r as unknown as { offeredTo?: { name: string; mission: string } }).offeredTo;
           fail(p, offered ? `${describeError(r)} — held by ${offered.name} (${offered.mission || "no mission"})` : describeError(r));
         }
+        // `reviewing` is the whole reviewed `WorkItem` (see `takeWork`), not
+        // the two fields this line prints — structural typing made the narrow
+        // shape safe but it understated what a consumer may read.
         const d = r as unknown as {
           title: string; paths: string[]; evidence: { notes: unknown[]; results: unknown[] };
-          reviewing: { id: string; title: string } | null;
+          reviewing: WorkItem | null; selfReview: boolean;
         };
         const evCount = d.evidence.notes.length + d.evidence.results.length;
         return out(
@@ -984,6 +995,11 @@ async function main(): Promise<void> {
             // exists only in --json, and the skill tells fronts to take items
             // in plain text.
             (d.reviewing ? `\n  reviewing ${d.reviewing.id} — ${d.reviewing.title}` : "") +
+            // And it names whose work that is when it is yours. parley does not
+            // refuse this take — with one front it is the only path — so saying
+            // so plainly is the only thing that keeps the rule from being a
+            // rule nobody can observe being kept.
+            (d.selfReview ? `\n  self-review — this review is of your own work` : "") +
             (evCount ? `\n  ${evCount} piece(s) of evidence came with it — read --json, do not re-discover it` : ""),
           r,
         );

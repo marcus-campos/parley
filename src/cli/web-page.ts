@@ -334,8 +334,13 @@ function render(s) {
     $("work-items").innerHTML = liveWork.map((w) => {
       const owner = w.state === "offered" ? workOwnerName(w.offeredToId, s.fronts)
         : w.state === "taken" ? workOwnerName(w.takenById, s.fronts) : "pool";
+      // Mirrors isSelfReview in src/state/work.ts. The page ships as one
+      // self-contained string and imports nothing, the same reason
+      // workGroupsFrom repeats workGroups.
+      const self = w.kind === "review" && w.publishedById && w.publishedById === w.takenById;
       return '<div class="witem"><span class="owner">'+esc(owner)+'</span> &middot; '+esc(w.state)
-        + '<div class="path">'+esc(w.paths[0])+'</div><div class="meta">'+esc(w.title)+'</div></div>';
+        + '<div class="path">'+esc(w.paths[0])+'</div><div class="meta">'+esc(w.title)
+        + (self ? ' (self-review)' : '')+'</div></div>';
     }).join("");
   }
 

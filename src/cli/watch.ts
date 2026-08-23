@@ -1,4 +1,5 @@
 import { ParleyClient } from "../client/client";
+import { isSelfReview } from "../state/work";
 import type { RepoInfo } from "../repo/locate";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
 
@@ -24,6 +25,8 @@ interface Front {
 interface WorkRow {
   id: string; paths: string[]; title: string; state: string;
   offeredToId: string | null; takenById: string | null;
+  /** Both only so a review held by its own author can be named as one. */
+  kind: string; publishedById: string;
 }
 
 interface Note {
@@ -139,7 +142,11 @@ export function workDetailLines(work: WorkRow[], fronts: { id: string; name: str
     .filter((w) => w.state !== "done")
     .map((w) => {
       const owner = w.state === "offered" ? nameFor(w.offeredToId) : w.state === "taken" ? nameFor(w.takenById) : "pool";
-      return `    ${owner}  ${w.state}  ${w.paths[0]} — ${w.title}`;
+      // The owner column already says who holds it; this says whose work it
+      // is. Without it the panel shows a review under way and never that the
+      // front doing it is the front that wrote what it checks.
+      const self = isSelfReview(w, w.takenById) ? "  (self-review)" : "";
+      return `    ${owner}  ${w.state}  ${w.paths[0]} — ${w.title}${self}`;
     });
 }
 
