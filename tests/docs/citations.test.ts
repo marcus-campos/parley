@@ -149,20 +149,46 @@ describe("what the site cites", () => {
     expect(round.find((c) => digest(c.text) === digest(withBlank!.text))).toBeDefined();
   });
 
+  const cited = (page: string) => [...readFileSync(join(root, page), "utf8").matchAll(CITATION)].length;
+
   test("every concept page carries its own citations, not the site's average", () => {
     // The count this replaces was global: `checked >= 50` across eight pages
     // carrying 94 citations. One page could lose every citation it has and the
     // number stayed far above the floor — proven by replacing `shapes.md` with
     // 705 words of shuffled vocabulary and zero citations, which passed.
     const pages = sitePages(join(root, "docs")).filter((p) => p.startsWith("docs/concepts/"));
-    expect(pages.length).toBe(6);
+    // Vacuity only. This was `toBe(6)`, which would have failed the day
+    // `docs/concepts/capacity.md` lands — the page this branch deliberately
+    // deferred until the branches converge — with a message about the number 6
+    // and nothing about citations.
+    expect(pages.length).toBeGreaterThanOrEqual(6);
     // The thinnest concept page carries 8. Six is a floor with room for prose
     // to consolidate, and nowhere near room for a page to stop showing its
     // work. Reported as a list so the failure names the page and its count.
-    const thin = pages
-      .map((page) => ({ page, cites: [...readFileSync(join(root, page), "utf8").matchAll(CITATION)].length }))
-      .filter((p) => p.cites < 6);
+    const thin = pages.map((page) => ({ page, cites: cited(page) })).filter((p) => p.cites < 6);
     expect(thin).toEqual([]);
+  });
+
+  test("a page outside docs/concepts/ cannot lose the citations it has either", () => {
+    // The floor above covers `docs/concepts/` alone, and two guide pages are
+    // in the ledger with nothing holding them: `panel.md` could drop all three
+    // of its citations and `setup.md` its one, and every test here would stay
+    // green because the ledger only pins what is cited, never that anything is.
+    //
+    // Recorded counts rather than a floor with headroom: these pages carry so
+    // few that any loss is a page quietly stopping showing its work. Adding is
+    // free; a new citing page has to be written down here, which is the point.
+    const RECORDED: Record<string, number> = {
+      "docs/guide/panel.md": 3,
+      "docs/guide/setup.md": 1,
+    };
+    const citing = sitePages(join(root, "docs"))
+      .filter((page) => !page.startsWith("docs/concepts/") && cited(page) > 0);
+    expect(citing.sort()).toEqual(Object.keys(RECORDED).sort());
+    const lost = citing
+      .map((page) => ({ page, cites: cited(page), recorded: RECORDED[page]! }))
+      .filter((p) => p.cites < p.recorded);
+    expect(lost).toEqual([]);
   });
 });
 

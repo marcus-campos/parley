@@ -414,6 +414,32 @@ describe("the README's command tables agree with the CLI", () => {
     expect(checked).toBeGreaterThanOrEqual(20);
     expect(unknown).toEqual([]);
   });
+
+  test("every flag the README's prose spells is one the CLI actually reads", () => {
+    // The check above reads table rows only. `--open=false` sat in a bullet
+    // under "In the browser" for the whole life of this branch, promising a
+    // flag that is read nowhere: the spelling is `--no-open`, and
+    // `parley watch --web --open=false` opened the browser anyway. It survived
+    // a whole-branch review and two fix rounds because reconcileFlags check 3
+    // reads USAGE, and USAGE never mentioned it.
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    // Comments quote old code on purpose; what a flag is *read* by is code.
+    const code = mainSource.replace(/^\s*\/\/.*$/gm, "");
+    const known = new Set<string>();
+    for (const m of code.matchAll(/\bflag(?:String|Bool)\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) known.add(`--${m[1]}`);
+    for (const m of code.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z][\w$]*)/g)) known.add(`--${m[1]}`);
+    for (const m of code.matchAll(/\b(?:parsed|p)\.flags\[\s*"([^"]+)"\s*\]/g)) known.add(`--${m[1]}`);
+    const usage = mainSource.slice(mainSource.indexOf("const USAGE = `"), mainSource.indexOf("\n`;\n"));
+    for (const m of usage.matchAll(/--[a-z][A-Za-z0-9-]*/g)) known.add(m[0]);
+    expect(known.size).toBeGreaterThanOrEqual(20);
+
+    // Flags of other people's tools, quoted in the README as examples. Asserted
+    // exactly, so the list cannot quietly grow to swallow a real defect — the
+    // same arrangement as the sidebar exclusion set.
+    const NOT_PARLEYS = ["--noEmit"];
+    const spelled = [...new Set([...readme.matchAll(/--[a-z][A-Za-z0-9-]*/g)].map((m) => m[0]))].sort();
+    expect(spelled.filter((f) => !known.has(f))).toEqual(NOT_PARLEYS);
+  });
 });
 
 describe("the generated file is byte-stable", () => {

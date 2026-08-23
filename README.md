@@ -669,7 +669,7 @@ parley watch --web
 ```
 
 ```
-parley: web panel on http://127.0.0.1:7717/?t=a619ab2e16136a21d6098859087f9d89
+parley: web panel on http://127.0.0.1:7834/?t=a619ab2e16136a21d6098859087f9d89
 parley: bound to 127.0.0.1 only; the token is required. Ctrl+C to stop.
 parley: the page opens in watching mode; press s there to say something.
 ```
@@ -689,11 +689,16 @@ closing.
   `parley watch --web --stop` shuts it down.
 - **Each repository gets its own port**, derived from its id, so panels for
   several projects run side by side — and it is the *same* port every time, so
-  the URL in your browser history keeps working. If it happens to be taken,
-  parley moves to a free one and tells you.
+  the URL in your browser history keeps working. It is
+  `7717 + (hash of the repository id % 200)`, so anything from 7717 to 7916 is
+  normal and **the port in the sample above is one repository's, not yours** —
+  read yours off the line parley prints. The id hashes the canonical path to
+  the repository's git directory, not its name, so the same project cloned into
+  two directories derives two different ports and no page can tell you which is
+  which. If the port is taken, parley moves to a free one and tells you.
 - `--port N` pins it. If that one is busy, you get told which, rather than a
   raw bind error.
-- `--open=false` skips launching the browser.
+- `--no-open` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
   not a security boundary on a shared machine: without a token, any process — or
   any page you have open — could read your bus and speak on it.
