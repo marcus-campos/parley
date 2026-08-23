@@ -218,6 +218,12 @@ hand and do not guess. Two tasks that touch the same file never open together.
 The first wave is published open, other fronts take it, and the next wave opens
 by itself once the current one is entirely done.
 
+**One plan runs at a time.** A second \`parley plan\` while the first still has
+an unfinished item is refused — that guarantee is a proof over the tasks parley
+was handed, and it cannot cover two plans at once. To re-sequence, run
+\`parley plan <file> --replace\`: it withdraws every unfinished item of the
+running plan, including one somebody is holding, and starts from wave 0.
+
 A planned **task** is **dispatched, not offered**: it is open to everybody, it
 does not arrive named in your footer, and once you take it \`drop\` refuses it.
 So go and look, and take what you can actually finish:

@@ -918,12 +918,19 @@ async function main(): Promise<void> {
         // The daemon never touches the filesystem: parsing happens here, and
         // only the parsed tasks cross the wire.
         const parsed = parsePlan(markdown);
-        const r = await send({ op: "plan", goal: parsed.goal, spec: parsed.spec, tasks: parsed.tasks });
+        const r = await send({
+          op: "plan", goal: parsed.goal, spec: parsed.spec, tasks: parsed.tasks,
+          // One plan runs at a time. `--replace` is what the README calls
+          // re-sequencing: it withdraws what the running plan has not
+          // finished — including items a front is holding — and starts over.
+          replace: p.flags.replace === true,
+        });
         if (!r.ok) fail(p, describeError(r));
-        const d = r as unknown as { waves: number; opened: number };
+        const d = r as unknown as { waves: number; opened: number; withdrawn: number };
         return out(
           p,
           `parley: ${parsed.tasks.length} task(s) in ${d.waves} wave(s) — ${d.opened} item(s) open now\n` +
+            (d.withdrawn > 0 ? `  ${d.withdrawn} unfinished item(s) of the previous plan were withdrawn\n` : "") +
             `  parley works --state open`,
           r,
         );

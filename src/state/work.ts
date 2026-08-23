@@ -106,6 +106,21 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
 }
 
 /**
+ * Everything the running plan published that is not finished yet — across
+ * every wave it has opened, tasks and the reviews their `done` spawned alike,
+ * since `finishWork` files those under the same task number.
+ *
+ * This is the whole of what a second dispatch would have to answer for, and
+ * the only thing that distinguishes "a plan is running" from "a plan ran".
+ */
+function livePlanItems(state: State): WorkItem[] {
+  const plan = state.plan;
+  if (!plan) return [];
+  const ids = new Set(Object.values(plan.itemsByTask).flat());
+  return state.work.filter((w) => ids.has(w.id) && w.state !== "done");
+}
+
+/**
  * A superpowers plan is dispatched one wave at a time: only the first wave's
  * tasks become work now, and every later wave waits for `finishWork` to open
  * it once its predecessor is entirely done.
@@ -113,6 +128,27 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
  * The waves are computed here, once, from the paths every task declares —
  * `waves()` is a proof those tasks cannot collide, not a guess that they
  * probably do not.
+ *
+ * **One plan runs at a time, and a second dispatch is refused.** The whole
+ * feature computes one rule — two tasks touching the same file never open in
+ * the same wave — and `waves()` can only prove it over the tasks it was
+ * handed. Stacking a second plan on top publishes a second set of open items
+ * over the same paths that no collision graph ever compared, which is the
+ * exact failure the graph exists to make impossible: two fronts editing one
+ * file, concurrently, each holding a legitimately-taken item. `state.plan`
+ * holding only the newest plan makes it worse rather than better — the older
+ * plan's items stay in `state.work` with nothing left tracking them, so their
+ * wave can never advance and `droppable` refuses every hand-back.
+ *
+ * Merging is not on offer either: the second plan's waves would have to be
+ * recomputed against tasks that are already taken or done, and a wave index
+ * means nothing across two orderings.
+ *
+ * `replace` is the deliberate way through, and it is what the README's
+ * "re-sequence" names. It withdraws what the running plan published and has
+ * not finished — including items a front is holding, announced by name — and
+ * dispatches the new plan from wave 0. A plan whose every item is done is not
+ * running, so a fresh dispatch after it needs no flag.
  */
 export function dispatchPlan(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
@@ -121,10 +157,48 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
     return { state, response: err("UNKNOWN_OP", "plans are dispatched in shape plan — parley shape plan"), broadcast: [] };
   }
   const tasks = (Array.isArray(frame.tasks) ? frame.tasks : []) as PlanTask[];
+  // Load-bearing, not defensive: `openWave` is called with `tasksByWave[0]!`
+  // below, and `computeWaves([])` returns no waves at all — so without this a
+  // markdown file with no `### Task` heading in it throws inside the daemon.
+  // Pointing `parley plan` at the wrong file is the reachable input.
   if (tasks.length === 0) return { state, response: err("UNKNOWN_OP", "a plan needs tasks"), broadcast: [] };
+
+  const running = livePlanItems(state);
+  if (running.length > 0 && frame.replace !== true) {
+    const held = [...new Set(running.map((w) => w.takenById).filter((id): id is string => id !== null))]
+      .map((id) => state.participants[id]?.name ?? id);
+    return {
+      state,
+      response: err(
+        "CONFLICT",
+        `a plan is already running: ${running.length} item(s) of wave ${state.plan!.waveIndex + 1} are not done` +
+          `${held.length > 0 ? ` (${held.join(", ")} holding)` : ""}` +
+          " — finish it, or re-sequence with parley plan <file> --replace",
+      ),
+      broadcast: [],
+    };
+  }
 
   const computed = computeWaves(tasks);
   me.lastSeenMs = ctx.nowMs;
+
+  const broadcast: ConvEvent[] = [];
+  if (running.length > 0) {
+    // Withdrawn, not left behind: an item whose plan is gone is tracked by
+    // nothing, advances no wave, and — being `planned` and `work` — cannot be
+    // dropped by the front holding it either. Leaving it in the pool would be
+    // the residue this refusal exists to prevent, one flag later.
+    const withdrawn = new Set(running.map((w) => w.id));
+    state.work = state.work.filter((w) => !withdrawn.has(w.id));
+    const held = [...new Set(running.map((w) => w.takenById).filter((id): id is string => id !== null))]
+      .map((id) => state.participants[id]?.name ?? id);
+    broadcast.push(pushEvent(state, ctx, {
+      kind: "system", from: null, to: null, priority: "high",
+      text: `${me.name} re-sequenced the plan: ${running.length} unfinished item(s) withdrawn` +
+        `${held.length > 0 ? ` — ${held.join(", ")} were holding some of them; stop and read the new wave` : ""}`,
+      about: me.id,
+    }));
+  }
 
   state.plan = {
     goal: typeof frame.goal === "string" ? frame.goal : "",
@@ -135,11 +209,11 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
     tasksByWave: computed.map((w) => w.tasks),
   };
 
-  const broadcast = [pushEvent(state, ctx, {
+  broadcast.push(pushEvent(state, ctx, {
     kind: "system", from: null, to: null, priority: "high",
     text: `${me.name} dispatched a plan: ${tasks.length} task(s) in ${computed.length} wave(s) — the waves are computed from the paths each task declares`,
     about: me.id,
-  })];
+  }));
 
   // `opened` comes back from `openWave` rather than being recomputed from the
   // wave's task list: one task opens one item PER DECLARED PATH, so a task
@@ -150,7 +224,7 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
 
   return {
     state,
-    response: ok({ waves: computed.length, opened: wave0.opened }),
+    response: ok({ waves: computed.length, opened: wave0.opened, withdrawn: running.length }),
     broadcast,
   };
 }

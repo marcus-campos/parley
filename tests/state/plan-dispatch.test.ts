@@ -189,4 +189,108 @@ describe("dispatching a plan", () => {
     const out = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
     expect(out.response.ok).toBe(false);
   });
+
+  // `openWave` is called with `tasksByWave[0]!` and `computeWaves([])` returns
+  // no waves at all, so without the guard this throws inside the daemon rather
+  // than answering. Pointing `parley plan` at a markdown file that has no
+  // `### Task` heading in it is the reachable input.
+  test("a plan with no tasks is refused, not dispatched into a wave that does not exist", () => {
+    const out = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [] }, at(100));
+    expect(out.response).toMatchObject({ ok: false });
+    expect(state.plan).toBeNull();
+    expect(state.work).toHaveLength(0);
+  });
+});
+
+/**
+ * The rule this whole feature computes is "two tasks touching the same file
+ * never open in the same wave", and `waves()` can only prove it over the tasks
+ * it was handed. A second dispatch used to overwrite `state.plan` and publish
+ * a second set of open items over the same paths that no collision graph ever
+ * compared — two open items on one path, takeable concurrently — while the
+ * first plan's items stayed in `state.work` tracked by nothing and refused
+ * every `drop`.
+ */
+describe("a second plan while the first is still running", () => {
+  test("is refused, and publishes nothing", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["b.ts"])],
+    }, at(100));
+    const before = state.work.map((w) => w.id);
+
+    const again = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["b.ts"])],
+    }, at(200));
+
+    expect(again.response).toMatchObject({ ok: false, error: { code: "CONFLICT" } });
+    // The failure this guards is two takeable items on one path, so count the
+    // path, not the response: an implementation that answered `ok: false` and
+    // published anyway would satisfy the line above.
+    expect(state.work.filter((w) => w.paths[0] === "a.ts" && w.state !== "done")).toHaveLength(1);
+    expect(state.work.map((w) => w.id)).toEqual(before);
+    expect(again.broadcast).toHaveLength(0);
+  });
+
+  test("the refusal names the way through, and it is a command that exists", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const again = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(200));
+    const message = (again.response as unknown as { error: { message: string } }).error.message;
+
+    expect(message).toContain("--replace");
+    // And the flag it names really is honoured, rather than being a sentence.
+    const replaced = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, replace: true, tasks: [task(1, ["a.ts"])],
+    }, at(300));
+    expect(replaced.response.ok).toBe(true);
+  });
+
+  test("--replace withdraws what the old plan never finished, keeps what it did, and leaves no residue", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["b.ts"])],
+    }, at(100));
+
+    // Task 2 runs to completion, review included: that is history, not residue.
+    const two = state.work.find((w) => w.title === "Task 2")!;
+    apply(state, worker, { v: 1, op: "take", id: two.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: two.id }, at(300));
+    const review = state.work.find((w) => w.kind === "review" && w.reviewOf === two.id)!;
+    apply(state, coord, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, coord, { v: 1, op: "done", id: review.id }, at(500));
+
+    // Task 1 is in WORKER's hands, unfinished — the hard case, because a
+    // planned task is undroppable and nothing else would ever clear it.
+    const one = state.work.find((w) => w.title === "Task 1")!;
+    apply(state, worker, { v: 1, op: "take", id: one.id }, at(600));
+
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g2", spec: null, replace: true, tasks: [task(9, ["c.ts"])],
+    }, at(700));
+
+    expect(out.response).toMatchObject({ ok: true, withdrawn: 1, opened: 1 });
+    expect(state.work.find((w) => w.id === one.id)).toBeUndefined();
+    // Finished work survives: it is what the plan achieved, and nothing about
+    // it is still waiting on anyone.
+    expect(state.work.filter((w) => w.state === "done").map((w) => w.id).sort())
+      .toEqual([two.id, review.id].sort());
+    // Nothing unfinished is left over from the old plan at all.
+    expect(state.work.filter((w) => w.state !== "done").map((w) => w.paths[0])).toEqual(["c.ts"]);
+    expect(state.plan!.waveIndex).toBe(0);
+    expect(state.plan!.goal).toBe("g2");
+    // The front that lost the item under its hands is told, by name.
+    expect(out.broadcast.some((e) => e.text.includes("WORKER") && e.text.includes("withdrawn"))).toBe(true);
+  });
+
+  test("a plan whose every item is done is not running, so the next one needs no flag", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const one = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: one.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: one.id }, at(300));
+    const review = state.work.find((w) => w.kind === "review")!;
+    apply(state, coord, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, coord, { v: 1, op: "done", id: review.id }, at(500));
+
+    const next = apply(state, coord, { v: 1, op: "plan", goal: "g2", spec: null, tasks: [task(1, ["a.ts"])] }, at(600));
+    expect(next.response).toMatchObject({ ok: true, withdrawn: 0 });
+    expect(state.work.filter((w) => w.state === "open")).toHaveLength(1);
+  });
 });
