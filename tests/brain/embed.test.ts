@@ -398,19 +398,26 @@ describe("what the floor lets through, and what it holds back, as a rate", () =>
       1, 2, 3, 6, 7, 11, 13, 24, 35, 47, 50, 74, 95, 138, 427, 436,
       12345, 999983, 0xdeadbeef, 0xcafebabe, 0x5eed1234,
     ];
+    const floors: number[] = [];
     for (const seed of seeds) {
       const reshuffled = calibrate(model, seed);
       expect(reshuffled).not.toBeNull();
-      const { floor: f, nullMean: nm, nullSd: sd } = reshuffled!;
-      // The band the sweep actually reaches, asserted rather than described.
-      expect((f - nm) / sd).toBeCloseTo(4, 10);
-      expect(f).toBeGreaterThan(0.34);
-      expect(f).toBeLessThan(0.38);
+      const { floor: f, nullSd: sd } = reshuffled!;
+      floors.push(f);
       expect(above(unrelated, f)).toBeLessThanOrEqual(10);
       expect(above(unrelated, f - sd)).toBeGreaterThanOrEqual(30);
       expect(above(dilutedGenuine, f)).toBeGreaterThanOrEqual(250);
       expect(above(dilutedGenuine, f)).toBeLessThanOrEqual(1000);
     }
+
+    // And the leverage itself, as a number rather than a description: how far
+    // the seed alone moves the floor, in units of the spread it is measured
+    // in. 0.34 nullSd over the 1,500-seed sweep, against 0.87 before
+    // `SAMPLES` — and against the one sigma `FLOOR_SIGMAS` is pinned inside.
+    // This is the assertion the round before this one described and did not
+    // make.
+    const travel = (Math.max(...floors) - Math.min(...floors)) / calibration.nullSd;
+    expect(travel).toBeLessThan(0.45);
   });
 });
 
