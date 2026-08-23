@@ -1,5 +1,5 @@
 import { err, ok } from "../protocol/types";
-import { matchesPath, readPathList } from "../repo/paths";
+import { matchesPath, normalizeTerritoryPath, readPathList } from "../repo/paths";
 import { waves as computeWaves } from "../plan/graph";
 import type { PlanTask } from "../plan/parse";
 import { staleReason } from "./results";
@@ -162,25 +162,89 @@ function livePlanItems(state: State): WorkItem[] {
  * `handleFrame` journals BEFORE applying. The poisoned frame was on disk, and
  * the next start replayed it: the bus never came up at all.
  *
- * `readPathList` next door already states the rule this restores — a frame is
- * whatever a harness on the other end sent, and never a reason for the daemon
- * to throw. So everything that can be coerced is coerced, exactly the way that
- * function coerces a path list, and `paths` is read THROUGH it: `tasks:
- * [{n:1, paths:"nope"}]` used to iterate the string and open four items, one
- * per character.
+ * `readPathList` next door states the tolerant half of the rule this restores
+ * — a frame is whatever a harness on the other end sent, and never a reason
+ * for the daemon to throw — and `title` and `parseError` are coerced exactly
+ * that way.
  *
- * `n` is the one exception, and it is refused rather than invented. It is the
- * only field the plan's arithmetic keys on — `waves()` seats by it,
- * `itemsByTask` is keyed by it, `taskNumberOf` reads it back, and every "task
- * N is waiting" prints it. Supplying a number the caller did not send would be
- * inventing the plan, which is the same fabrication as merging two plans'
- * waves: a number shaped like an answer, standing for nothing.
+ * Two fields are refused instead of coerced, for one shared reason: coercing
+ * either makes the daemon assert something the caller never said.
+ *
+ * `n` is refused rather than invented. It is the only field the plan's
+ * arithmetic keys on — `waves()` seats by it, `itemsByTask` is keyed by it,
+ * `taskNumberOf` reads it back, and every "task N is waiting" prints it.
+ * Supplying a number the caller did not send would be inventing the plan,
+ * which is the same fabrication as merging two plans' waves: a number shaped
+ * like an answer, standing for nothing.
+ *
+ * `paths` is refused rather than emptied, which is that same argument one
+ * field over — see `readTaskPaths` below for why emptying it was the quieter
+ * invention of the two.
  *
  * The shipped CLI cannot send any of this — `parsePlan` always emits
  * well-formed tasks. The wire can: unix transport has no auth, and a
  * version-skewed parley on the same socket is an ordinary thing to have in a
  * checkout running several worktrees.
  */
+/**
+ * The paths of one task, refused rather than emptied.
+ *
+ * `paths` is what the collision proof keys on. `waves()` computes the plan's
+ * one guarantee — two tasks touching the same file never open in the same wave
+ * — from these strings and nothing else, so dropping an element the caller DID
+ * send asserts "this task declared nothing", which is as much an invention as
+ * supplying an `n`. It was the quieter of the two: a version-skewed front
+ * sending `paths: "src/a.ts"`, or `[{path:"src/a.ts"}]` under an
+ * object-per-path schema, produced a plan byte-identical to the legitimate
+ * declared-nothing plan — same waves, same `(no declared path)` items, no
+ * waiting broadcast, no `parseError` in the title. Two tasks over one file
+ * opened together and nothing anywhere named the loss. A PARTIAL drop was
+ * worse still: `["src/a.ts", {path:"src/b.ts"}]` keeps a real path, so it does
+ * not even look like a task that declared nothing, while the b.ts collision it
+ * was supposed to be serialised against is gone.
+ *
+ * So this is the strict sibling of `readPathList`, which is right to be
+ * tolerant where it is used: `publishWork` reads ONE item's paths and refuses
+ * outright on an empty result, so nothing there can silently mean less than it
+ * said. `openWave` is the one place that substitutes a label instead, and what
+ * has to stop being reachable is a substitution standing for a path the caller
+ * sent.
+ *
+ * Omitted and `null` are still legitimately empty, which narrows the rule from
+ * "present but not an array of strings" on purpose. Neither can hide a file
+ * name — they are the two JSON spellings of nothing, so reading them as
+ * "declared nothing" discards no declaration and cannot void the proof. What
+ * is refused is content that could not be read, INCLUDING an element-wise
+ * miss: one lost path voids the serialisation just as completely as all of
+ * them, and leaves less trace.
+ *
+ * A string that is not a repository path is refused rather than skipped for
+ * the same reason. `parsePlan` normalises every path it emits, so the shipped
+ * CLI cannot reach this, and a caller naming `../outside.ts` has declared a
+ * file the plan cannot reason about at all.
+ *
+ * The offending value is never echoed back into the error: the position is
+ * what repairs the frame, and the value is the caller's own unbounded string.
+ */
+type ReadPaths = { ok: true; paths: string[] } | { ok: false; why: string };
+
+function readTaskPaths(value: unknown): ReadPaths {
+  if (value === undefined || value === null) return { ok: true, paths: [] };
+  if (!Array.isArray(value)) return { ok: false, why: "declares paths that are not a list" };
+  const paths: string[] = [];
+  for (const [i, p] of value.entries()) {
+    if (typeof p !== "string") {
+      return { ok: false, why: `declares a path at position ${i + 1} that is not a string` };
+    }
+    try {
+      paths.push(normalizeTerritoryPath(p));
+    } catch {
+      return { ok: false, why: `declares a path at position ${i + 1} that is not a repository path` };
+    }
+  }
+  return { ok: true, paths };
+}
+
 type ReadTasks = { ok: true; tasks: PlanTask[] } | { ok: false; why: string };
 
 function readPlanTasks(value: unknown): ReadTasks {
@@ -194,10 +258,12 @@ function readPlanTasks(value: unknown): ReadTasks {
     if (typeof t.n !== "number" || !Number.isFinite(t.n)) {
       return { ok: false, why: `task at position ${i + 1} has no task number` };
     }
+    const paths = readTaskPaths(t.paths);
+    if (!paths.ok) return { ok: false, why: `task at position ${i + 1} ${paths.why}` };
     tasks.push({
       n: t.n,
       title: typeof t.title === "string" ? t.title : "",
-      paths: readPathList(t.paths),
+      paths: paths.paths,
       parseError: typeof t.parseError === "string" ? t.parseError : null,
     });
   }

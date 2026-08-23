@@ -409,14 +409,18 @@ describe("a plan frame is read, not cast", () => {
     expect(state.work[0]!.paths).toEqual(["(no declared path)"]);
   });
 
-  test("paths that are not a list of paths open no items at all", () => {
-    // `paths: "nope"` used to be iterated as a STRING: four items, one per
-    // character, each holding a one-letter path.
-    apply(state, coord, {
+  // This test used to assert the opposite — that `paths: "nope"` opened one
+  // item holding the placeholder — and it changed because the RULING changed,
+  // not to fit the code. What it originally pinned is still pinned: the string
+  // is not iterated as a character sequence (which opened four items, one per
+  // letter). It now also pins that the loss is named instead of absorbed.
+  test("paths the daemon could not read refuse the frame, and are never read as 'declared nothing'", () => {
+    const out = apply(state, coord, {
       v: 1, op: "plan", goal: "g", spec: null, tasks: [{ n: 1, title: "A", paths: "nope" }],
     }, at(100));
-    expect(state.work).toHaveLength(1);
-    expect(state.work[0]!.paths).toEqual(["(no declared path)"]);
+    expect(out.response.ok).toBe(false);
+    expect(state.plan).toBeNull();
+    expect(state.work).toHaveLength(0);
   });
 
   test("one malformed task refuses the whole frame, without dispatching the well-formed ones", () => {
@@ -474,6 +478,90 @@ describe("a plan frame is read, not cast", () => {
     });
     expect(state.work.map((w) => w.paths[0])).toEqual(["src/a.ts", "src/b.ts"]);
     expect(state.work[0]!.title).toBe("Refactor — capture is partial");
+  });
+});
+
+/**
+ * The wave serialisation is a proof computed from `paths` and nothing else, so
+ * a `paths` the daemon could not read is not an empty `paths`. Coercing it to
+ * one produced an answer BYTE-IDENTICAL to the legitimate "this task declared
+ * nothing" answer — same wave count, same `(no declared path)` items, no
+ * waiting broadcast, no `parseError` in the title — while the plan's one
+ * guarantee was void and nothing anywhere named the loss.
+ *
+ * Every refusal below is paired with a control that must still be accepted: a
+ * rule that refused every plan would pass the refusing half on its own.
+ */
+describe("a paths the caller sent is never emptied into 'declared nothing'", () => {
+  const twoOnOneFile = (paths: unknown) => [
+    { n: 1, title: "T1", paths },
+    { n: 2, title: "T2", paths },
+  ];
+
+  test("the control: two tasks over one file are serialised into two waves", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: twoOnOneFile(["src/a.ts"]),
+    }, at(100));
+    expect(out.response).toMatchObject({ ok: true, waves: 2, opened: 1 });
+  });
+
+  test("paths as a bare string is refused, not collapsed into one wave holding both tasks", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: twoOnOneFile("src/a.ts"),
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(state.plan).toBeNull();
+    expect(state.work).toHaveLength(0);
+  });
+
+  test("paths under an object-per-path schema is refused", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: twoOnOneFile([{ path: "src/a.ts" }]),
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(state.work).toHaveLength(0);
+  });
+
+  // The case the placeholder could never flag: a real path survives, so the
+  // task does not even look like one that declared nothing, and the element
+  // that was lost is the whole of the collision it should have been
+  // serialised against.
+  test("one unreadable element among readable ones refuses the frame, naming which element", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [{ n: 1, title: "T1", paths: ["src/a.ts", { path: "src/b.ts" }] }, task(2, ["src/b.ts"])],
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    // Which element, not merely that one was bad: the position is the whole of
+    // what repairs the frame, and naming the task instead of the path inside it
+    // would read as a bad task number.
+    expect((out.response as unknown as { error: { message: string } }).error.message)
+      .toContain("task at position 1 declares a path at position 2");
+    expect(state.work).toHaveLength(0);
+  });
+
+  test("a string that is not a repository path is refused rather than skipped", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [{ n: 1, title: "T1", paths: ["../outside.ts"] }],
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(state.work).toHaveLength(0);
+  });
+
+  // The deliberate narrowing of "present but not an array of strings". These
+  // three spell nothing and can hide no file name, so reading them as
+  // "declared nothing" discards no declaration and cannot void the proof —
+  // and refusing them would cost the frame `parsePlan` legitimately emits for
+  // a task whose **Files:** block is missing.
+  test("omitted, null and empty are all still legitimately empty", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [{ n: 1, title: "T1" }, { n: 2, title: "T2", paths: null }, { n: 3, title: "T3", paths: [] }],
+    }, at(100));
+    expect(out.response).toMatchObject({ ok: true, waves: 1, opened: 3 });
+    expect(state.work.map((w) => w.paths[0])).toEqual([
+      "(no declared path)", "(no declared path)", "(no declared path)",
+    ]);
   });
 });
 

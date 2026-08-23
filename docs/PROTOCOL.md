@@ -714,12 +714,22 @@ parses the markdown and only the parsed tasks cross the wire.
 ← {"ok":true,"waves":2,"opened":1,"withdrawn":0}
 ```
 
-Every task is read rather than trusted: an entry that is not an object, or whose
-`n` is not a number, refuses the whole frame with `UNKNOWN_OP` and withdraws
-nothing — `n` is what the waves and `itemsByTask` are keyed on, and it is the one
-field the daemon will not supply for a client. `title`, `paths` and `parseError`
-are coerced instead: a missing `paths` is the same as an empty one, and a
-`paths` that is not a list of strings contributes none.
+Every task is read rather than trusted. An entry that is not an object, whose
+`n` is not a number, or whose `paths` the daemon cannot read refuses the whole
+frame with `UNKNOWN_OP` and withdraws nothing. `title` and `parseError` are
+coerced instead — anything that is not a string reads as `""` and `null`.
+
+Two fields are refused rather than coerced, because coercing either would make
+the daemon assert something the client never sent. `n` is what the waves and
+`itemsByTask` are keyed on, and the daemon will not supply one. `paths` is what
+the waves are *computed from*, so emptying a `paths` the client did send would
+claim the task declared no files and open it in the same wave as a task it
+collides with — silently, and indistinguishably from a task that really
+declared nothing. `paths` may be omitted, `null` or `[]`, which are three
+spellings of "this task declares nothing" and can hide no file name; anything
+else must be a list of strings that each read as a repository path. A single
+unreadable element refuses the whole frame, and the error names which task and
+which element inside it.
 
 The waves are computed from the paths each task declares: tasks whose paths are
 disjoint open together, tasks that touch the same file are serialised, and a
