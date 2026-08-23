@@ -8,6 +8,7 @@ import {
   describeChanges,
   diffLedger,
   digest,
+  firstDifference,
   locate,
   needsAcceptance,
   parseLedger,
@@ -196,6 +197,26 @@ describe("re-pinning has to be read, not merely run", () => {
     expect(report).toContain("docs/concepts/shapes.md → src/state/work.ts");
     expect(report).toContain("was | const a = 1;");
     expect(report).toContain("now | const a = 9;");
+  });
+
+  test("the report shows the line that changed, not the line that comes first", () => {
+    // A block whose first line is stable is the normal case — every one of the
+    // five `} catch (e) {` citations on this site is that shape. Reporting the
+    // head of both sides printed `was | } catch (e) {` above
+    // `now | } catch (e) {`, which looks like a report and says nothing.
+    const was = "} catch (e) {\n  if (parsed.flags.json) emit();\n  process.exit(0);\n}";
+    const now = '} catch (e) {\n  if (flagBool(parsed.flags, "json")) emit();\n  process.exit(0);\n}';
+    const d = firstDifference(was, now);
+    expect(d.at).toBe(2);
+    expect(d.of).toBe(4);
+    expect(d.was).toBe("if (parsed.flags.json) emit();");
+    expect(d.now).toBe('if (flagBool(parsed.flags, "json")) emit();');
+    const report = describeChanges(diffLedger(
+      [{ page: "docs/concepts/recall.md", file: "src/cli/main.ts", text: was }],
+      [{ page: "docs/concepts/recall.md", file: "src/cli/main.ts", text: now }],
+    ));
+    expect(report).toContain("(first change at line 2 of 4)");
+    expect(report).toContain("was | if (parsed.flags.json) emit();");
   });
 
   test("a transposition is reported, which is the case the buckets cannot see", () => {

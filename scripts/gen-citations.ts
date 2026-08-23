@@ -206,11 +206,28 @@ export interface LedgerChange {
   now?: string;
 }
 
+const clip = (line: string): string => (line.length > 96 ? `${line.slice(0, 95)}…` : line);
+
 /** First line with something on it — what a person recognises a block by. */
-const head = (text: string): string => {
-  const line = (text.split("\n").find((l) => l.trim()) ?? "(blank)").trim();
-  return line.length > 96 ? `${line.slice(0, 95)}…` : line;
-};
+const head = (text: string): string => clip((text.split("\n").find((l) => l.trim()) ?? "(blank)").trim());
+
+/**
+ * The first line that is actually different, not the first line there is.
+ *
+ * Printing the head of both sides reads as `was | } catch (e) {` /
+ * `now | } catch (e) {` whenever the edit is anywhere below the first line,
+ * which is most edits. A report that shows two identical lines is worse than
+ * no report: it looks like it checked.
+ */
+export function firstDifference(was: string, now: string): { at: number; of: number; was: string; now: string } {
+  const a = was.split("\n");
+  const b = now.split("\n");
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? "") === (b[i] ?? "")) continue;
+    return { at: i + 1, of: a.length, was: clip((a[i] ?? "(nothing — the block got longer)").trim()), now: clip((b[i] ?? "(nothing — the block got shorter)").trim()) };
+  }
+  return { at: 1, of: a.length, was: head(was), now: head(now) };
+}
 
 /**
  * What re-pinning would do, compared against the ledger already on disk.
@@ -305,9 +322,10 @@ export function describeChanges(changes: LedgerChange[]): string {
     lines.push("re-pinned — the code under these citations was rewritten. Each one is a");
     lines.push("question about the sentence that cites it, not a chore:");
     for (const c of of("changed")) {
-      lines.push(`  ${c.page} → ${c.file}`);
-      lines.push(`    was | ${head(c.was!)}`);
-      lines.push(`    now | ${head(c.now!)}`);
+      const d = firstDifference(c.was!, c.now!);
+      lines.push(`  ${c.page} → ${c.file}  (first change at line ${d.at} of ${d.of})`);
+      lines.push(`    was | ${d.was}`);
+      lines.push(`    now | ${d.now}`);
     }
   }
   for (const c of of("reordered")) {
