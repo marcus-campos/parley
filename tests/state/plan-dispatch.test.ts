@@ -435,6 +435,18 @@ describe("a plan frame is read, not cast", () => {
     expect((out.response as unknown as { error: { message: string } }).error.message).toContain("position 2");
   });
 
+  // Not reachable over the wire — JSON has no NaN literal — but `apply` is the
+  // reducer boundary, and any in-process caller reaches it directly. A task
+  // number that is not a number is the whole of what this refusal is for:
+  // `waves()` would sort by it and `itemsByTask` would key on the string "NaN".
+  test("NaN is not a task number", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [{ n: Number.NaN, title: "A", paths: ["a.ts"] }],
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(state.plan).toBeNull();
+  });
+
   // The guard sits above the `running` check for the same reason the
   // empty-plan guard does: refusing must never cost the running plan.
   test("a malformed --replace refuses without withdrawing anything", () => {
