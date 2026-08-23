@@ -334,10 +334,13 @@ function render(s) {
     $("work-items").innerHTML = liveWork.map((w) => {
       const owner = w.state === "offered" ? workOwnerName(w.offeredToId, s.fronts)
         : w.state === "taken" ? workOwnerName(w.takenById, s.fronts) : "pool";
-      // Mirrors isSelfReview in src/state/work.ts. The page ships as one
-      // self-contained string and imports nothing, the same reason
-      // workGroupsFrom repeats workGroups.
-      const self = w.kind === "review" && w.publishedById && w.publishedById === w.takenById;
+      // NOT re-derived here. The page ships as one self-contained string with
+      // no bundler behind it, so it cannot import isSelfReview -- which is
+      // exactly why panelWorkRows in web.ts answers it before the snapshot
+      // goes out. Every other surface calls that one predicate; a copy of the
+      // logic in this template is the only way any of them could ever
+      // disagree, on the rule parley states instead of enforcing.
+      const self = w.selfReview;
       return '<div class="witem"><span class="owner">'+esc(owner)+'</span> &middot; '+esc(w.state)
         + '<div class="path">'+esc(w.paths[0])+'</div><div class="meta">'+esc(w.title)
         + (self ? ' (self-review)' : '')+'</div></div>';

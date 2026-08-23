@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { workDetailLines, workSummaryLines } from "../../src/cli/watch";
+import { panelWorkRows } from "../../src/cli/web";
 import { PAGE } from "../../src/cli/web-page";
+import type { WorkItem } from "../../src/state/types";
 
 interface Row {
   id: string; paths: string[]; title: string; state: string;
@@ -130,18 +132,48 @@ describe("the WORK section of the web panel", () => {
     expect(PAGE).toContain("workGroupsFrom");
   });
 
-  // Deletion only, and named as such: this is a substring assertion over a
-  // page that ships as one string, the same limit the two above carry. What it
-  // buys is that the web panel cannot lose the marker while the terminal panel
-  // keeps it — the two are read by the same person about the same bus, and an
-  // asymmetry there is worse than either surface being silent.
-  test("the item row marks a review held by the front that published it", () => {
+  // The page renders the answer; it does not work it out. A copy of the
+  // predicate here is the only way this surface could ever disagree with
+  // `parley take`, the take event, `parley works` and the terminal panel —
+  // and inverting a copy is invisible to a substring test, which is how the
+  // old version of this test let `!==` through.
+  test("the item row reads the server's answer and re-derives nothing", () => {
     const start = PAGE.indexOf('$("work-items").innerHTML');
     const end = PAGE.indexOf('.join("")', start);
     expect(start).toBeGreaterThan(-1);
     const renderer = PAGE.slice(start, end);
-    expect(renderer).toContain("publishedById");
+    expect(renderer).toContain("w.selfReview");
     expect(renderer).toContain("self-review");
+    // The field the old inline copy keyed on, and its only use in this row was
+    // the predicate. `takenById` cannot be asserted the same way: the owner
+    // column two lines above legitimately reads it.
+    expect(renderer).not.toContain("publishedById");
+  });
+
+  /**
+   * And the behaviour behind it, which the substring test above cannot reach:
+   * the web panel used to compute this inline, and BOTH inversions of that
+   * copy — `!==`, and dropping the comparison entirely so every review is
+   * marked — left every test green. The answer now comes from the same
+   * `isSelfReview` every other surface calls, so this pins the value, not a
+   * spelling.
+   */
+  test("the row the server sends says self-review for the publisher's own review, and only for that", () => {
+    const base = {
+      paths: ["a.ts"], evidenceIds: [], publishedByName: "WORKER", origin: "discovered" as const,
+      state: "taken" as const, offeredToId: null, offeredAtMs: null, orphanedAtMs: null,
+      nudgedAtMs: null, at: "2026-08-20T12:00:00Z",
+    };
+    const work: WorkItem[] = [
+      { ...base, id: "w_1", title: "review: Task 1", kind: "review", publishedById: "p_a", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_2", title: "review: Task 2", kind: "review", publishedById: "p_b", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_3", title: "Task 3", kind: "work", publishedById: "p_a", takenById: "p_a", reviewOf: null },
+    ];
+
+    expect(panelWorkRows(work).map((w) => w.selfReview)).toEqual([true, false, false]);
+    // Nothing else about the item is dropped on the way through: the row is
+    // the record plus one field, and the page reads paths, title and state off it.
+    expect(panelWorkRows(work)[0]).toMatchObject({ id: "w_1", title: "review: Task 1", state: "taken" });
   });
 
   test("pressing w toggles WORK open, the same key the terminal panel answers to", () => {
