@@ -297,10 +297,58 @@ describe("re-pinning has to be read, not merely run", () => {
     expect(d.was).not.toBe(d.now);
     expect(d.now).toContain("·");
     // A gap is not a difference a reader can see, so tabs and spaces have to
-    // render as different characters and not as different widths.
+    // render as different characters and not as different widths. All of the
+    // whitespace, not just the indent: when the difference IS whitespace every
+    // space is a candidate, and a rendering that reveals only some of them
+    // leaves the reader guessing which gap moved.
     const tabbed = firstDifference("\treturn 1;", "    return 1;");
-    expect(tabbed.was).toBe("→return 1;");
-    expect(tabbed.now).toBe("····return 1;");
+    expect(tabbed.was).toBe("→return·1;");
+    expect(tabbed.now).toBe("····return·1;");
+  });
+
+  test("whitespace INSIDE the line is a difference too, and it was not shown", () => {
+    // The predicate was `was.trim() === now.trim()`, so it fired on leading
+    // whitespace and on nothing else. A tab swapped for spaces mid-line trims
+    // to two different strings, took the ordinary path, and printed a pair
+    // that is identical on any terminal that renders a tab as spaces — this
+    // function's own failure mode, one column right of where it was fixed.
+    //
+    // Unreachable on this tree today: no tab appears anywhere in src/ or
+    // scripts/, which is a fact about the tree and not about the code. The
+    // reachable form is the second pair below, a collapsed double space, which
+    // rendered as two lines distinguishable only by counting their length.
+    const tabbed = firstDifference("const a\t= 1;", "const a = 1;");
+    expect(tabbed.was).toBe("const·a→=·1;");
+    expect(tabbed.now).toBe("const·a·=·1;");
+    expect(tabbed.was).not.toBe(tabbed.now);
+
+    const collapsed = firstDifference("const a  = 1;", "const a = 1;");
+    expect(collapsed.was).toBe("const·a··=·1;");
+    expect(collapsed.now).toBe("const·a·=·1;");
+
+    // And an ordinary rewrite is untouched — no dots on a line whose
+    // difference is not the whitespace, or the marks stop meaning anything.
+    const ordinary = firstDifference("  const a = 1;", "  const a = 2;");
+    expect(ordinary.was).toBe("const a = 1;");
+    expect(ordinary.now).toBe("const a = 2;");
+  });
+
+  test("the report prints a key for the marks, and only when it used them", () => {
+    // Obvious in the pair, not obvious to somebody skimming a single line of a
+    // re-pin report. Printed only when a pair actually leans on the marks: a
+    // legend attached to every report nobody needed it for is how legends stop
+    // being read.
+    const KEY = "· is a space and → a tab";
+    const indented = describeChanges([
+      { kind: "changed", page: "docs/x.md", file: "src/a.ts", was: "return 1;", now: "  return 1;" },
+    ]);
+    expect(indented).toContain("·");
+    expect(indented).toContain(KEY);
+
+    const rewritten = describeChanges([
+      { kind: "changed", page: "docs/x.md", file: "src/a.ts", was: "return 1;", now: "return 2;" },
+    ]);
+    expect(rewritten).not.toContain(KEY);
   });
 
   test("a difference past the clip is windowed into view, both sides alike", () => {

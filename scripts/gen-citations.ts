@@ -286,9 +286,11 @@ export function firstDifference(was: string, now: string): { at: number; of: num
   return { at: 1, of: a.length, was: head(was), now: head(now) };
 }
 
-/** Leading spaces and tabs, made visible. A gap is not a difference a reader can see. */
-const showIndent = (line: string): string =>
-  line.replace(/^[ \t]+/, (ws) => ws.replace(/ /g, "·").replace(/\t/g, "→"));
+/** Spaces and tabs, made visible. A gap is not a difference a reader can see. */
+const showSpace = (line: string): string => line.replace(/ /g, "·").replace(/\t/g, "→");
+
+/** Whether a rendered pair is leaning on `·`/`→`, and so needs the key. */
+const usesSpaceMarks = (was: string, now: string): boolean => /[·→]/.test(was + now);
 
 /**
  * The two lines, shown so that what differs about them is on the screen.
@@ -308,9 +310,22 @@ const showIndent = (line: string): string =>
  * sides identically around the first column that actually differs.
  */
 export function sideBySide(was: string, now: string): { was: string; now: string } {
-  const whitespaceOnly = was.trim() === now.trim();
-  const a = whitespaceOnly ? showIndent(was) : was.trim();
-  const b = whitespaceOnly ? showIndent(now) : now.trim();
+  // Whitespace-only *anywhere*, not merely leading. The predicate was
+  // `was.trim() === now.trim()`, which caught a block moved into a `try` and
+  // missed `const a\t= 1;` against `const a = 1;` — trimmed, those differ, so
+  // the pair took the ordinary path and printed two lines that are identical
+  // on any terminal that renders a tab as spaces. That is this function's own
+  // failure mode, one column to the right of where it was fixed. Unreachable
+  // on this tree today (no tab appears anywhere in src/ or scripts/) and the
+  // weaker reachable form is a collapsed double space, legible only by length.
+  // "Nobody has typed a tab" is not a property of the code.
+  //
+  // When the difference IS whitespace, every space is a candidate, so all of
+  // it is shown rather than the indent alone: a reader cannot tell which gap
+  // moved from a rendering that reveals only some of them.
+  const whitespaceOnly = was.replace(/\s/g, "") === now.replace(/\s/g, "");
+  const a = whitespaceOnly ? showSpace(was) : was.trim();
+  const b = whitespaceOnly ? showSpace(now) : now.trim();
   let at = 0;
   while (at < a.length && at < b.length && a[at] === b[at]) at++;
   // One start for both sides, or the two lines stop being comparable by eye.
@@ -415,12 +430,18 @@ export function describeChanges(changes: LedgerChange[]): string {
     lines.push("");
     lines.push("re-pinned — the code under these citations was rewritten. Each one is a");
     lines.push("question about the sentence that cites it, not a chore:");
+    let marked = false;
     for (const c of of("changed")) {
       const d = firstDifference(c.was!, c.now!);
+      marked ||= usesSpaceMarks(d.was, d.now);
       lines.push(`  ${c.page} → ${c.file}  (first change at line ${d.at} of ${d.of})`);
       lines.push(`    was | ${d.was}`);
       lines.push(`    now | ${d.now}`);
     }
+    // Only when a pair actually leans on them. Obvious in the pair, not obvious
+    // to somebody skimming one line of a re-pin report — and a legend printed
+    // over every report nobody needed it for is how legends stop being read.
+    if (marked) lines.push("  (· is a space and → a tab, shown because the difference is the whitespace)");
   }
   for (const c of of("reordered")) {
     lines.push("");
