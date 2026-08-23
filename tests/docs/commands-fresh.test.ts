@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   MAIN_PATH,
   dispatchedCommands,
+  dispatchedFlags,
   parseUsage,
   renderCommandReference,
 } from "../../scripts/gen-commands";
@@ -129,6 +130,15 @@ describe("the command reference is derived, not typed out", () => {
 // page looks maintained and is not. These two tests are the ones that make
 // "add a command and nothing happens" impossible.
 describe("a command that only exists on one side is an error", () => {
+  // These fixtures are about command *names*. The generator also cross-checks
+  // flags, and a help text spelling a flag nothing reads is an error there — so
+  // the prologue reads back whatever flags the fixture's usage spells, leaving
+  // the name mismatch as the only thing under test.
+  const readsEveryFlagIn = (usage: string): string =>
+    ["--json", ...(usage.match(/--[a-z][a-z0-9-]*/g) ?? [])]
+      .map((f) => `parsed.flags["${f.slice(2)}"];`)
+      .join(" ");
+
   const fake = (usage: string, cases: string[]): string =>
     [
       "const USAGE = `parley — fake",
@@ -137,6 +147,7 @@ describe("a command that only exists on one side is an error", () => {
       "",
       "Global flags: --json (machine output)",
       "`;",
+      `function out(parsed) { ${readsEveryFlagIn(usage)} }`,
       "switch (parsed.command) {",
       ...cases.map((c) => `  case "${c}": { break; }`),
       "}",
@@ -174,6 +185,140 @@ describe("a command that only exists on one side is an error", () => {
     for (const hidden of ["hook", "__daemon", "__refresh-adapters", "help", "version"]) {
       expect(found).not.toContain(hidden);
     }
+  });
+});
+
+// `reconcile` cross-checks command *names*. Nothing cross-checked flags, so the
+// page rendered `parley uninit` with no flags while `--global` was dispatched
+// and working, and `docs/guide/setup.md` two clicks away told the reader to run
+// `parley uninit [--global]`. Two pages of one site disagreed and the generated,
+// authoritative-looking one was the wrong one. Five more flags were in the same
+// state: --human, --open/--no-open, --text, --active.
+describe("a flag that only exists on one side is an error too", () => {
+  /**
+   * A whole synthetic CLI: help text, a shared prologue every command runs
+   * through, and a dispatch switch whose case bodies really read the flags they
+   * are given. Flags arrive without their dashes.
+   */
+  const cli = (
+    usage: string,
+    cases: Array<[command: string, flags: string[]]>,
+    sharedFlags: string[] = [],
+  ): string =>
+    [
+      "const USAGE = `parley — fake",
+      "",
+      usage,
+      "",
+      "Global flags: --json (machine output)",
+      "`;",
+      `function out(parsed) { if (parsed.flags.json) return 1; ${sharedFlags
+        .map((f) => `parsed.flags["${f}"];`)
+        .join(" ")} }`,
+      "switch (parsed.command) {",
+      ...cases.map(
+        ([name, flags]) =>
+          `  case "${name}": { ${flags.map((f) => `p.flags["${f}"];`).join(" ")} break; }`,
+      ),
+      "}",
+    ].join("\n");
+
+  const claim = '  parley claim <paths...> [--intent "..."]    take files or globs';
+
+  test("the fixture renders when both sides agree, so the failures below mean something", () => {
+    const page = renderCommandReference(cli(claim, [["claim", ["intent"]]]));
+    expect(page).toContain("### `parley claim`");
+    expect(page).toContain("`--intent`");
+  });
+
+  test("a flag the dispatch reads and the help text omits fails the generator", () => {
+    expect(() => renderCommandReference(cli(claim, [["claim", ["intent", "sneaky"]]]))).toThrow(
+      /--sneaky/,
+    );
+  });
+
+  test("a flag the help text spells and nothing reads fails the generator too", () => {
+    // The `--no-open` shape: documented, inert, and the reader believes it
+    // worked because nothing ever says otherwise.
+    const usage = '  parley claim <paths...> [--intent "..."] [--ghost]    take files or globs';
+    expect(() => renderCommandReference(cli(usage, [["claim", ["intent"]]]))).toThrow(/--ghost/);
+  });
+
+  test("a global flag counts as documented for every command", () => {
+    // `--json` is read inside case bodies all over the real CLI and spelled
+    // once, in the global block. That must not be an error.
+    expect(() => renderCommandReference(cli(claim, [["claim", ["intent", "json"]]]))).not.toThrow();
+  });
+
+  test("a flag read in shared code must appear somewhere in the help text", () => {
+    expect(() => renderCommandReference(cli(claim, [["claim", ["intent"]]], ["rogue"]))).toThrow(
+      /--rogue/,
+    );
+  });
+
+  test("but shared code may read a flag the help text spells on one command", () => {
+    // `withSession` reads `--mission` for every session command while USAGE
+    // spells it on `join` and `rename`. Demanding a per-command match there
+    // would fire on correct code, so the shared check is deliberately weaker.
+    expect(() => renderCommandReference(cli(claim, [["claim", ["intent"]]], ["intent"]))).not.toThrow();
+  });
+
+  test("a fall-through case label carries the flags of the body it falls into", () => {
+    // `case "note":` sits directly above `case "decide": {` and shares every
+    // line of it. A checker that gave the label an empty flag set would let an
+    // undocumented flag through on the first of every fall-through pair.
+    const usage = [
+      '  parley note --title "..."          write it down',
+      '  parley decide --title "..." [--tags a,b]    record something binding',
+    ].join("\n");
+    const source = cli(usage, []).replace(
+      "switch (parsed.command) {",
+      'switch (parsed.command) {\n  case "note":\n  case "decide": { p.flags["title"]; p.flags["tags"]; break; }',
+    );
+    expect(() => renderCommandReference(source)).toThrow(/parley note.*--tags/s);
+  });
+
+  test("the flag reader sees the real CLI, per command, not one flat pile", () => {
+    const found = dispatchedFlags(mainSource);
+    // Vacuity guards: a regex that matched nothing would make every assertion
+    // below pass for the wrong reason.
+    expect(found.byCommand.size).toBeGreaterThanOrEqual(20);
+    expect([...found.byCommand.values()].reduce((n, f) => n + f.size, 0)).toBeGreaterThanOrEqual(50);
+
+    // The six drift cases, re-derived here rather than taken from the
+    // generator, and each confirmed against the line that reads it.
+    expect(found.byCommand.get("uninit")).toContain("--global");
+    expect(found.byCommand.get("watch")).toContain("--no-open");
+    expect(found.byCommand.get("reply")).toContain("--text");
+    expect(found.byCommand.get("notes")).toContain("--active");
+    expect(found.shared).toContain("--human");
+    // Attribution, not just presence: `--global` belongs to init AND uninit,
+    // and `--active` must not leak onto every command in the group.
+    expect(found.byCommand.get("init")).toContain("--global");
+    expect(found.byCommand.get("results")?.has("--active")).toBe(false);
+  });
+
+  test("the flags the page renders are the flags the CLI reads", () => {
+    // Independently: pull each command's section out of the rendered page and
+    // check the flags the dispatch reads for it are all named there.
+    const page = renderCommandReference();
+    const sections = new Map<string, string>();
+    const parts = page.split(/^### `parley ([a-z][a-z0-9-]*)`$/gm).slice(1);
+    for (let i = 0; i + 1 < parts.length; i += 2) sections.set(parts[i]!, parts[i + 1]!);
+    expect(sections.size).toBeGreaterThanOrEqual(40);
+
+    const globals = ["--json", "--as", "--quiet", "--human", "--help", "--version"];
+    let checked = 0;
+    for (const [command, flags] of dispatchedFlags(mainSource).byCommand) {
+      const section = sections.get(command);
+      if (!section) continue;
+      for (const flag of flags) {
+        if (globals.includes(flag)) continue;
+        expect(section).toContain(flag);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThanOrEqual(40);
   });
 });
 

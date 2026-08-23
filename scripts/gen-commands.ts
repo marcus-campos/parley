@@ -262,6 +262,221 @@ function reconcile(usage: Usage, dispatched: string[]): void {
   }
 }
 
+/**
+ * Where each command's own code starts, in source order.
+ *
+ * A "marker" is any of the three ways main.ts decides which command ran: a
+ * `case "x":` label inside either dispatch switch, a `parsed.command === "x"`
+ * test above them, or the `argv[0] === "x"` branches that run before a
+ * repository is even located. A command's region runs from its marker to the
+ * next one; everything before the first marker is shared code (`out`, `fail`,
+ * `withSession`) that every command passes through.
+ *
+ * This is a lexical approximation, not a call graph, and it is deliberately
+ * one: the alternative is following `runInit`, `runWebPanel` and friends into
+ * other modules, and a generator that needs whole-program analysis to run is a
+ * generator nobody will keep working.
+ */
+interface Region {
+  command: string;
+  from: number;
+  to: number;
+  /** `case "note":` falling straight through to `case "decide": {`. */
+  fallsThrough: boolean;
+}
+
+function regionsOf(source: string): { regions: Region[]; sharedTo: number } {
+  const switchAt = source.indexOf("switch (parsed.command)");
+  if (switchAt < 0) throw new Error("no `switch (parsed.command)` in the CLI — the dispatch moved");
+
+  const marks: { command: string; at: number; end: number; isCase: boolean }[] = [];
+  for (const m of source.slice(switchAt).matchAll(/\bcase "([^"]+)":/g)) {
+    marks.push({ command: m[1]!, at: switchAt + m.index!, end: switchAt + m.index! + m[0].length, isCase: true });
+  }
+  for (const m of source.matchAll(/\b(?:parsed|p)\.command === "([^"]+)"/g)) {
+    marks.push({ command: m[1]!, at: m.index!, end: m.index! + m[0].length, isCase: false });
+  }
+  for (const m of source.matchAll(/\bargv\[0\] === "([^"]+)"/g)) {
+    marks.push({ command: m[1]!, at: m.index!, end: m.index! + m[0].length, isCase: false });
+  }
+  marks.sort((a, b) => a.at - b.at);
+  if (marks.length === 0) throw new Error("read no command markers out of the CLI dispatch");
+
+  const regions: Region[] = marks.map((mark, i) => {
+    const to = i + 1 < marks.length ? marks[i + 1]!.at : source.length;
+    // A `case` label with nothing but whitespace and comments before the next
+    // label is a fall-through: `case "note":` shares every line of the
+    // `case "decide": {` body below it, flags included.
+    const body = withoutComments(source.slice(mark.end, to)).trim();
+    return { command: mark.command, from: mark.end, to, fallsThrough: mark.isCase && body === "" };
+  });
+
+  return { regions, sharedTo: marks[0]!.at };
+}
+
+/**
+ * Comments out, code in.
+ *
+ * A comment explaining a flag is prose, and prose is exactly what this whole
+ * generator refuses to trust — the comment at the `--no-open` fix names the
+ * broken `parsed.flags.open` test it replaced, and reading that as a live flag
+ * read would demand the help text document a flag no longer read anywhere.
+ * The `[^:]` guard keeps `https://` and `uds://` inside string literals whole.
+ */
+const withoutComments = (source: string): string =>
+  source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
+
+/** Every flag name read out of `parsed.flags` / `p.flags` in a slice of source. */
+function flagsReadIn(rawSlice: string): Set<string> {
+  const slice = withoutComments(rawSlice);
+  const found = new Set<string>();
+  for (const m of slice.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z_$][A-Za-z0-9_$]*)/g)) found.add(`--${m[1]!}`);
+  for (const m of slice.matchAll(/\b(?:parsed|p)\.flags\[\s*"([^"]+)"\s*\]/g)) found.add(`--${m[1]!}`);
+  for (const m of slice.matchAll(/\bflagString\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) found.add(`--${m[1]!}`);
+  return found;
+}
+
+export interface DispatchedFlags {
+  /** Flags read inside one command's own region, keyed by command name. */
+  byCommand: Map<string, Set<string>>;
+  /** Flags read in code every command runs through — `withSession`, `out`, `fail`. */
+  shared: Set<string>;
+}
+
+/**
+ * Which flags the CLI actually reads, and for which command.
+ *
+ * `reconcile` above cross-checks command *names* only, which is why the page
+ * could promise that nothing here goes stale while rendering `parley uninit`
+ * with no flags at all — `--global` was read at the dispatch and absent from
+ * the help text, and five more flags were in the same state. Names were never
+ * the whole contract; a reader who is told a command cannot quietly lie reads
+ * the flag list as part of that.
+ */
+export function dispatchedFlags(source: string): DispatchedFlags {
+  const { regions, sharedTo } = regionsOf(source);
+
+  const byCommand = new Map<string, Set<string>>();
+  const add = (command: string, flags: Set<string>): void => {
+    const into = byCommand.get(command) ?? new Set<string>();
+    for (const f of flags) into.add(f);
+    byCommand.set(command, into);
+  };
+
+  // Two passes, because one is not enough. A command's flags are the union of
+  // every region carrying its name — `case "decide": {` opens the body, and
+  // two `p.command === "decide"` tests inside it split that body into three
+  // regions, only the middle of which reads any flags. So the fall-through
+  // label `case "note":` cannot simply inherit the region that follows it: it
+  // has to inherit everything the command it falls into ended up with.
+  for (const region of regions) {
+    if (region.fallsThrough) continue;
+    add(region.command, flagsReadIn(source.slice(region.from, region.to)));
+  }
+  for (let i = 0; i < regions.length; i++) {
+    if (!regions[i]!.fallsThrough) continue;
+    // Walk past any further fall-through labels stacked on the same body.
+    let j = i + 1;
+    while (j < regions.length && regions[j]!.fallsThrough) j++;
+    const target = regions[j];
+    if (target) add(regions[i]!.command, byCommand.get(target.command) ?? new Set());
+  }
+
+  return { byCommand, shared: flagsReadIn(source.slice(0, sharedTo)) };
+}
+
+/** Flags a USAGE invocation line spells, per command, plus the global block. */
+function documentedFlags(usage: Usage): { byCommand: Map<string, Set<string>>; global: Set<string> } {
+  const byCommand = new Map<string, Set<string>>();
+  for (const group of usage.groups) {
+    for (const command of group.commands) {
+      // Only the invocation line counts, never the description prose beside
+      // it. The page's `Flags:` list is rendered from `variant.flags`, so a
+      // flag mentioned in a blurb and missing from the invocation is exactly
+      // the page that under-reports what the command takes — which is the
+      // defect this check exists for. Proven by mutation: while descriptions
+      // counted, deleting `[--no-open]` and `[--active]` from their invocation
+      // lines left the generator perfectly happy.
+      const flags = new Set<string>();
+      for (const variant of command.variants) {
+        for (const flag of variant.flags) flags.add(flag);
+      }
+      byCommand.set(command.name, flags);
+    }
+  }
+  const global = new Set<string>();
+  for (const line of usage.globalFlags) {
+    for (const m of line.matchAll(/--[a-z][a-z0-9-]*/g)) global.add(m[0]);
+  }
+  return { byCommand, global };
+}
+
+/**
+ * The same contract as `reconcile`, one level down.
+ *
+ * Three checks, and the asymmetry between them is the honest part:
+ *
+ *  1. A flag read inside a command's own region and absent from that command's
+ *     help-text line fails. This is the direction that produces a page which
+ *     lies — `parley uninit --global` worked and the page said the command
+ *     took no flags at all.
+ *  2. A flag read in shared code must at least appear somewhere in USAGE.
+ *     `withSession` reads `--mission` for every session command while the help
+ *     text spells it on `join` and `rename`, so this one cannot be per-command
+ *     without inventing a claim the source does not make.
+ *  3. A flag USAGE documents that nothing in main.ts reads fails. That is the
+ *     `--no-open` case: spelled in the help text, never read, silently inert.
+ *
+ * What is deliberately NOT checked: "this command's line documents a flag its
+ * own region never reads". `join`'s region reads nothing — `--as` and
+ * `--mission` are read in `withSession`, two hundred lines above it — so that
+ * check would fire on correct code. Catching it needs a call graph, and the
+ * cost of that is a generator that stops being maintained.
+ */
+function reconcileFlags(usage: Usage, source: string): void {
+  const dispatched = dispatchedFlags(source);
+  const { byCommand: documented, global } = documentedFlags(usage);
+
+  const everywhere = new Set(global);
+  for (const flags of documented.values()) for (const f of flags) everywhere.add(f);
+
+  for (const [command, flags] of dispatched.byCommand) {
+    // Hidden entry points (`__daemon`, `hook`) have no page and no help-text
+    // line; whatever they read is covered by the shared check below.
+    const own = documented.get(command);
+    if (!own) continue;
+    const missing = [...flags].filter((f) => !own.has(f) && !global.has(f)).sort();
+    if (missing.length) {
+      throw new Error(
+        `\`parley ${command}\` reads ${missing.map((f) => `\`${f}\``).join(", ")} but USAGE in ` +
+          `src/cli/main.ts does not spell it on that command's line. Add it there — the page ` +
+          `renders the flag list straight off the help text, so an undocumented flag becomes a ` +
+          `reference page that says the command takes fewer options than it does.`,
+      );
+    }
+  }
+
+  const orphanShared = [...dispatched.shared].filter((f) => !everywhere.has(f)).sort();
+  if (orphanShared.length) {
+    throw new Error(
+      `the CLI reads ${orphanShared.map((f) => `\`${f}\``).join(", ")} in code every command ` +
+        `runs through, and USAGE in src/cli/main.ts never mentions it anywhere. Put it in the ` +
+        `global flags block, or on the command that owns it.`,
+    );
+  }
+
+  const readAnywhere = new Set(dispatched.shared);
+  for (const flags of dispatched.byCommand.values()) for (const f of flags) readAnywhere.add(f);
+  const inert = [...everywhere].filter((f) => !readAnywhere.has(f)).sort();
+  if (inert.length) {
+    throw new Error(
+      `USAGE documents ${inert.map((f) => `\`${f}\``).join(", ")} but nothing in ` +
+        `src/cli/main.ts ever reads it. A flag in the help text that the parser drops on the ` +
+        `floor is worse than an undocumented one: somebody will type it and believe it worked.`,
+    );
+  }
+}
+
 // `<` opens a component as far as VitePress is concerned, and half these
 // invocations are full of `<paths...>`. Inside a fence it is inert; in prose it
 // is not, so descriptions get escaped.
@@ -278,6 +493,7 @@ export function renderCommandReference(source?: string): string {
   const usage = parseUsage(text);
   const dispatched = dispatchedCommands(text);
   reconcile(usage, dispatched);
+  reconcileFlags(usage, text);
 
   const out: string[] = [
     HEADER,
