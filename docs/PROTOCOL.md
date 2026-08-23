@@ -827,6 +827,14 @@ repository undispatchable permanently, since restarting is what replays it.
 Reducers validate their own frames at the boundary rather than lean on this, so
 a skipped entry should mean a bug, not a malformed client.
 
+**The count on stderr is entries, not damage.** Whatever depended on a skipped
+entry is refused on replay and writes nothing, so a skipped `join` costs its
+whole session while the count still says one. The number of later entries naming
+a participant that no surviving entry joined is reported next to it, because
+that is the one dependent loss the daemon can measure — a frame is journaled
+under the participant its connection was bound to, and that binding only ever
+comes from an accepted `join`.
+
 Nothing survives a restart `connected`. Presence must be re-proven.
 
 ---

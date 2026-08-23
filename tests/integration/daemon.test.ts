@@ -2,13 +2,29 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { readEndpoint } from "../../src/daemon/endpoint";
-import { ParleyDaemon } from "../../src/daemon/server";
+import { ParleyDaemon, thrownMessage } from "../../src/daemon/server";
 import { RawClient, dirs, daemons, startDaemon, tempRepo } from "./harness";
 
 afterEach(async () => {
   for (const d of daemons.splice(0)) await d.close();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+/** Boot a daemon with stderr captured, restoring it however the boot ends. */
+async function bootCapturingStderr(dir: string, journal: string) {
+  const written: string[] = [];
+  const original = process.stderr.write.bind(process.stderr);
+  (process.stderr as unknown as { write: unknown }).write = (chunk: unknown) => {
+    written.push(String(chunk));
+    return true;
+  };
+  try {
+    const started = await startDaemon(dir, journal);
+    return { daemon: started.daemon, stderr: written.join("") };
+  } finally {
+    (process.stderr as unknown as { write: unknown }).write = original;
+  }
+}
 
 describe("a real daemon over a real socket", () => {
   test("publishes a readable endpoint and answers status", async () => {
@@ -163,6 +179,113 @@ describe("a real daemon over a real socket", () => {
     expect(written.join("")).toContain("2026-08-20T12:00:00.000Z");
   });
 
+  /**
+   * `skipped 1 journal entry(ies)` counts entries, and entries are not the
+   * damage. Poison the JOIN and every later entry of that session is journaled
+   * under a participant id nothing ever created: each replays, is refused
+   * `NOT_JOINED`, and writes nothing. The state is not corrupt and the ruling
+   * to skip is unchanged — but an operator repairing this by hand was told one
+   * entry was lost when a whole session went with it.
+   *
+   * The assertion is the measured number, not the prose: a message that warned
+   * about dependents in general would pass without ever counting one. The
+   * unjoined frame at the end is what pins the `actorId !== null` half — it is
+   * refused `NOT_JOINED` too, and it is nobody's dependent.
+   */
+  test("a skipped entry reports the session that went with it, not only itself", async () => {
+    const dir = tempRepo();
+    const journal = join(dir, "journal.ndjson");
+    const first = await startDaemon(dir, journal);
+    const a = await RawClient.connect(first.endpoint.address);
+    await a.send({ op: "join", name: "FIN", cwd: "/wt/a" });
+    await a.send({ op: "claim", paths: ["src/app.ts"] });
+    await a.send({ op: "note", title: "CI runs tsc -b here", body: "solution-style tsconfig" });
+    a.close();
+    // Journaled under no participant at all, and refused for the same code.
+    const b = await RawClient.connect(first.endpoint.address);
+    expect(await b.send({ op: "claim", paths: ["src/other.ts"] }))
+      .toMatchObject({ error: { code: "NOT_JOINED" } });
+    b.close();
+    await first.daemon.close();
+
+    const good = (await Bun.file(journal).text()).trimEnd().split("\n");
+    expect(JSON.parse(good[0]!).frame.op).toBe("join");
+    const poison = JSON.stringify({ at: "2026-08-20T12:00:00.000Z", actorId: null, frame: null });
+    await Bun.write(journal, [poison, ...good.slice(1), ""].join("\n"));
+
+    const { daemon, stderr } = await bootCapturingStderr(dir, journal);
+
+    const state = daemon.snapshot();
+    expect(Object.values(state.participants)).toHaveLength(0);
+    expect(state.claims).toHaveLength(0);
+    expect(state.notes).toHaveLength(0);
+
+    expect(stderr).toContain("skipped 1 journal entry");
+    expect(stderr).toContain("2 journal entry(ies) named a participant that no surviving entry joined");
+  });
+
+  /**
+   * The same session-wide loss with NOTHING skipped: a torn line is discarded
+   * one layer down, in `Journal.replay`, and if the torn line was the join then
+   * every entry after it is orphaned while `failed` stays empty. This is not a
+   * hypothetical shape — a partially written last line is exactly what `kill
+   * -9` produces, and the join is as likely to be it as any other frame.
+   */
+  test("a discarded line costs its session too, and that is reported", async () => {
+    const dir = tempRepo();
+    const journal = join(dir, "journal.ndjson");
+    const first = await startDaemon(dir, journal);
+    const a = await RawClient.connect(first.endpoint.address);
+    await a.send({ op: "join", name: "FIN", cwd: "/wt/a" });
+    await a.send({ op: "claim", paths: ["src/app.ts"] });
+    a.close();
+    await first.daemon.close();
+
+    const good = (await Bun.file(journal).text()).trimEnd().split("\n");
+    await Bun.write(journal, [good[0]!.slice(0, 30), ...good.slice(1), ""].join("\n"));
+
+    const { daemon, stderr } = await bootCapturingStderr(dir, journal);
+
+    expect(daemon.snapshot().claims).toHaveLength(0);
+    expect(stderr).toContain("discarded 1 unreadable journal line");
+    expect(stderr).not.toContain("skipped");
+    expect(stderr).toContain("1 journal entry(ies) named a participant that no surviving entry joined");
+  });
+
+  /**
+   * The control, and the one that makes the guard load-bearing rather than
+   * decorative: `NOT_JOINED` under a real participant id is reachable on a
+   * PERFECTLY healthy journal. Two connections may share a session — the hook
+   * opens a new one on every tool call — and so share an id; one of them
+   * leaving marks that participant `gone`, and `actorOf` refuses a gone
+   * participant, so the other's next frame is refused under a non-null actor.
+   * Counting orphans unconditionally would print a lost-session warning on a
+   * boot where nothing was lost at all.
+   */
+  test("a healthy journal reports no lost session, even when an entry was refused NOT_JOINED", async () => {
+    const dir = tempRepo();
+    const journal = join(dir, "journal.ndjson");
+    const first = await startDaemon(dir, journal);
+    const a = await RawClient.connect(first.endpoint.address);
+    const joined = await a.send({ op: "join", name: "FIN", session: "s1", cwd: "/wt/a" });
+    const b = await RawClient.connect(first.endpoint.address);
+    const reattached = await b.send({ op: "join", name: "FIN", session: "s1", cwd: "/wt/a" });
+    // The premise: both connections are bound to ONE participant.
+    expect((reattached as unknown as { id: string }).id).toBe((joined as unknown as { id: string }).id);
+
+    await a.send({ op: "leave" });
+    expect(await b.send({ op: "claim", paths: ["src/app.ts"] }))
+      .toMatchObject({ error: { code: "NOT_JOINED" } });
+    a.close();
+    b.close();
+    await first.daemon.close();
+
+    const { stderr } = await bootCapturingStderr(dir, journal);
+    expect(stderr).not.toContain("skipped");
+    expect(stderr).not.toContain("discarded");
+    expect(stderr).not.toContain("named a participant");
+  });
+
   test("an unknown op is refused without dropping the connection", async () => {
     const dir = tempRepo();
     const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));
@@ -170,6 +293,41 @@ describe("a real daemon over a real socket", () => {
     expect(await a.send({ op: "teleport" })).toMatchObject({ error: { code: "UNKNOWN_OP" } });
     expect(await a.send({ op: "status" })).toMatchObject({ ok: true });
     a.close();
+  });
+});
+
+/**
+ * `restore` reports a skipped entry by reading what the reducer threw, and
+ * `(e as Error).message` was a cast rather than a check — the identical shape
+ * to the `frame.tasks as PlanTask[]` this branch removed, and to the
+ * `entry.frame.op` read one expression earlier, which DID take the boot down
+ * in the first draft of that fix.
+ *
+ * Tested directly rather than through a poisoned journal because a journal
+ * cannot reach it: every `throw` under `src/` raises an `Error`, and so do the
+ * engine's own. So this pins the shape against deletion and can never go red
+ * for a live bug — the honest version of the same trade the `livePlanItems`
+ * breadth test makes.
+ */
+describe("the skip reporter never trusts what was thrown to be an Error", () => {
+  test("an Error still reports its own message", () => {
+    expect(thrownMessage(new Error("undefined is not an object"))).toBe("undefined is not an object");
+  });
+
+  test("a thrown string is its own message", () => {
+    expect(thrownMessage("boom")).toBe("boom");
+  });
+
+  test("null is described instead of dereferenced", () => {
+    expect(() => thrownMessage(null)).not.toThrow();
+    expect(thrownMessage(null)).toContain("null");
+  });
+
+  test("a hostile toString is described, never invoked", () => {
+    let called = false;
+    const hostile = { toString() { called = true; throw new Error("gotcha"); } };
+    expect(() => thrownMessage(hostile)).not.toThrow();
+    expect(called).toBe(false);
   });
 });
 
