@@ -78,6 +78,11 @@ export function resolveIdentity(root: string, cwd: string, explicitName?: string
  * `extra` carries what only the caller knows — `cwd`, `kind`, `session`,
  * `wake`, `connected` — and may override any derived field (the NAME_TAKEN
  * retry re-sends the same frame under the suggested name).
+ *
+ * Except `born`, which is stamped after the spread. The retry only ever needs
+ * `name`, and the entire point of a single producer is that `born` cannot be
+ * forgotten on the way to the bus — so it is the one field no caller can
+ * overwrite, by accident or otherwise.
  */
 export function joinFrame(identity: Identity, extra: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -86,8 +91,8 @@ export function joinFrame(identity: Identity, extra: Record<string, unknown>): R
     mission: identity.mission,
     harness: identity.harness,
     branch: identity.branch,
-    born: identity.born,
     ...extra,
+    born: identity.born,
   };
 }
 

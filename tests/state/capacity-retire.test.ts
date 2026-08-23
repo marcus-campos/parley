@@ -43,6 +43,19 @@ describe("retiring a newborn", () => {
     expect(out.retire).toContain(pool1);
   });
 
+  test("a joinedAt nobody can parse buys the grace period, it does not lose it", () => {
+    // Unreachable today: `joinedAt` is written by the daemon's own clock. But
+    // the two directions are not equally wrong — one costs a front one more
+    // grace period, the other names it for retirement on sight, which is the
+    // direction the code took.
+    state.participants[pool1]!.joinedAt = "not a timestamp";
+    expect(tick(state, at(LIVE), { maxFronts: 6 }).retire).not.toContain(pool1);
+
+    // The control, so this cannot pass by nothing ever being retired here.
+    state.participants[pool1]!.joinedAt = new Date(T0 + 20).toISOString();
+    expect(tick(state, at(LIVE), { maxFronts: 6 }).retire).toContain(pool1);
+  });
+
   test("holding an item: it stays", () => {
     apply(state, core, { v: 1, op: "work", title: "x", paths: ["a.ts"] }, at(100));
     apply(state, pool1, { v: 1, op: "take", id: state.work[0]!.id }, at(200));

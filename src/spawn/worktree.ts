@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 export interface Worktree {
   path: string;
@@ -34,6 +34,31 @@ function gitAsync(cwd: string, args: string[]): Promise<string | null> {
   });
 }
 
+/** Where every newborn's directory goes. The one place that decides so. */
+function worktreeHome(repoRoot: string): string {
+  return join(repoRoot, ".parley", "worktrees");
+}
+
+/**
+ * Is this a directory parley made for a newborn front?
+ *
+ * A front's cwd is wherever its process happened to be, not a fact about what
+ * parley made — so this is what stands between `collectWorktree` and somebody
+ * else's checkout. It reads the layout from `addWorktree`'s own helper rather
+ * than restating it, because a guard that spells out a path a second time is
+ * a guard that stops matching the day the layout moves.
+ *
+ * The directory `.parley/worktrees` itself is not one of them: only what is
+ * *inside* it is. The previous form admitted it exactly (`cwd !== home && !cwd
+ * .startsWith(home + sep)`), which read as if it excluded that directory and
+ * did the opposite. Git refused it anyway, so nothing was ever lost — but "git
+ * would have refused" is not what this guard is for.
+ */
+export function isNewbornWorktree(repoRoot: string, cwd: string): boolean {
+  if (!cwd) return false;
+  return cwd.startsWith(`${worktreeHome(repoRoot)}${sep}`);
+}
+
 /**
  * A newborn front always gets its own directory.
  *
@@ -51,7 +76,7 @@ function gitAsync(cwd: string, args: string[]): Promise<string | null> {
  * is what keeps "at most once per five minutes" from ever becoming "forever".
  */
 export function addWorktree(repoRoot: string, name: string): Worktree {
-  const dir = join(repoRoot, ".parley", "worktrees", name);
+  const dir = join(worktreeHome(repoRoot), name);
   const branch = `parley/${name}`;
   git(repoRoot, ["worktree", "add", "-b", branch, dir, "HEAD"]);
   return { path: dir, branch };

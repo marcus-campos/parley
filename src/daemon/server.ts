@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
-import { basename, dirname, join, sep } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
@@ -12,7 +12,7 @@ import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint
 import type { Address } from "../transport/address";
 import { readSpawnConfigIn, type SpawnConfig } from "../cli/spawn-config";
 import { bearFront } from "../spawn/birth";
-import { removeWorktreeIfClean } from "../spawn/worktree";
+import { isNewbornWorktree, removeWorktreeIfClean } from "../spawn/worktree";
 
 interface Conn {
   socket: Socket;
@@ -415,8 +415,7 @@ export class ParleyDaemon {
     if (!p || p.born !== "parley" || !p.cwd) return;
     const root = this.repoRootForExport();
     if (!root) return;
-    const home = join(root, ".parley", "worktrees");
-    if (p.cwd !== home && !p.cwd.startsWith(`${home}${sep}`)) return;
+    if (!isNewbornWorktree(root, p.cwd)) return;
     // Deliberately not awaited: two `git` subprocesses must never be something
     // the daemon's event loop waits on. Failure is already the safe outcome —
     // the worktree stays where it is.

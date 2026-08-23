@@ -271,7 +271,11 @@ export function shouldRetire(state: State, p: Participant, ctx: Ctx, graceMs: nu
   if (p.born !== "parley" || p.gone) return false;
   if (!isIdleFront(state, p)) return false;
   const joinedMs = Date.parse(p.joinedAt);
-  if (!Number.isNaN(joinedMs) && ctx.nowMs - joinedMs < graceMs) return false;
+  // A timestamp that will not parse is read as "just arrived", never as
+  // "arrived long ago". Unreachable today — `joinedAt` is written by the
+  // daemon's own clock — but the two directions are not equally wrong: one
+  // costs a front one more grace period, the other retires it on sight.
+  if (Number.isNaN(joinedMs) || ctx.nowMs - joinedMs < graceMs) return false;
   if (state.work.some((w) => w.state === "open" || w.state === "offered")) return false;
   return true;
 }
