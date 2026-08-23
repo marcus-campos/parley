@@ -221,7 +221,7 @@ describe("the newborn's worktree", () => {
     const repo = gitRepo();
     const { env, worktree } = bearOne(repo);
     let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { endpoint } = await daemonFor(repo, () => clock);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
     const front = await connectTo(endpoint.address);
     await front.send(joinAsNewborn(env, worktree, "session-pool-1"));
 
@@ -237,11 +237,11 @@ describe("the newborn's worktree", () => {
     clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
     await front.send({ op: "who" });
     // Collection is deliberately off the event loop: two `git` subprocesses
-    // are never something the daemon waits on.
-    const deadline = Date.now() + 5_000;
-    while (existsSync(worktree) && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    // are never something the daemon waits on. `close` is the one place that
+    // does wait — a daemon that exits from under a `git worktree remove`
+    // leaves a half-removed worktree and a stale entry in `.git` — which is
+    // also what makes this assertion a fact rather than a sleep.
+    await daemon.close();
     expect(existsSync(worktree)).toBe(false);
   });
 
