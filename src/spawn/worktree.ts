@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 
 export interface Worktree {
@@ -60,6 +60,47 @@ export function isNewbornWorktree(repoRoot: string, cwd: string): boolean {
 }
 
 /**
+ * The first birth in a repository leaves a full checkout — with its own `.git`
+ * — inside the person's working tree. Somebody has to say it is not theirs.
+ *
+ * Nothing did. The plan's Task 3 added `.parley/` to *parley's own*
+ * `.gitignore`; neither `parley init` nor `src/adapters/install.ts` writes one
+ * into a user's repository, and while `repoRootForExport()` returned `null`
+ * for every real repository the question never came up. It does now: the first
+ * birth in any repository puts `.parley/worktrees/pool-1` in `git status`, as
+ * an embedded git repository, which git also warns about the first time
+ * somebody types `git add .`.
+ *
+ * Written here rather than at install time because this is the code that
+ * creates the directory, which makes it right for repositories parley was
+ * installed into long before this existed.
+ *
+ * Scoped to `worktrees/`, never `.parley/`: `.parley/notes.md` is meant to be
+ * committed — it is the shared memory of the repository — and an unqualified
+ * ignore would hide the one artefact the design says to keep.
+ */
+function ignoreNewbornWorktrees(repoRoot: string): void {
+  const file = join(repoRoot, ".parley", ".gitignore");
+  if (existsSync(file)) return;
+  try {
+    mkdirSync(join(repoRoot, ".parley"), { recursive: true });
+    writeFileSync(
+      file,
+      [
+        "# Written by parley the first time it bore a front here.",
+        "# Each newborn gets a full checkout with its own .git; none of that is yours to commit.",
+        "# Scoped on purpose: .parley/notes.md is meant to be committed.",
+        "worktrees/",
+        "",
+      ].join("\n"),
+    );
+  } catch {
+    // An ignore file that could not be written is untidy, never a reason to
+    // refuse a birth.
+  }
+}
+
+/**
  * A newborn front always gets its own directory.
  *
  * Territory settles the logical conflict — two agents in one file. It does
@@ -76,6 +117,7 @@ export function isNewbornWorktree(repoRoot: string, cwd: string): boolean {
  * is what keeps "at most once per five minutes" from ever becoming "forever".
  */
 export function addWorktree(repoRoot: string, name: string): Worktree {
+  ignoreNewbornWorktrees(repoRoot);
   const dir = join(worktreeHome(repoRoot), name);
   const branch = `parley/${name}`;
   git(repoRoot, ["worktree", "add", "-b", branch, dir, "HEAD"]);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWorktree, isNewbornWorktree, removeWorktreeIfClean } from "../../src/spawn/worktree";
@@ -24,6 +24,31 @@ describe("a worktree for a newborn front", () => {
     expect(existsSync(wt.path)).toBe(true);
     expect(existsSync(join(wt.path, "a.txt"))).toBe(true);
     expect(wt.branch).toContain("pool-1");
+  });
+
+  test("what it creates does not land in somebody's git status", () => {
+    // A full checkout with its own .git, inside the working tree, is not the
+    // person's to commit — and until this branch nothing wrote an ignore into
+    // a user's repository, because `repoRootForExport()` returned null and no
+    // worktree was ever created in one.
+    const wt = addWorktree(repo, "pool-1");
+    writeFileSync(join(repo, ".parley", "notes.md"), "# what this repository knows\n");
+
+    // `-uall`, because the default collapses an untracked directory into one
+    // line and would hide both halves of what this asserts.
+    const status = execFileSync("git", ["status", "--porcelain", "-uall"], { cwd: repo, encoding: "utf8" });
+    expect(existsSync(wt.path)).toBe(true);
+    expect(status).not.toContain("worktrees");
+    // And only that: the notes file is the shared memory of the repository and
+    // is meant to be committed, so an unqualified `.parley/` would be wrong.
+    expect(status).toContain(".parley/notes.md");
+  });
+
+  test("an ignore file already there is left exactly as it is", () => {
+    mkdirSync(join(repo, ".parley"), { recursive: true });
+    writeFileSync(join(repo, ".parley", ".gitignore"), "# mine\nworktrees/\nscratch/\n");
+    addWorktree(repo, "pool-1");
+    expect(readFileSync(join(repo, ".parley", ".gitignore"), "utf8")).toContain("scratch/");
   });
 
   test("two newborns never collide", () => {
