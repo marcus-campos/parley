@@ -10,7 +10,7 @@ import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { join } from "node:path";
-import { flagString, parseArgs, type Parsed } from "./args";
+import { flagBool, flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
 import { resolveIdentity, wakeAddress } from "./identity";
 
@@ -102,8 +102,8 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              un-bind a decision, keeping it on the record
   parley notes [--tag x] [--path p] [--kind decision] [--active] [--export]
                              [--import] [--query "..." [--k N]]
-                             read them back; --active drops the decisions that
-                             were reversed, --query ranks by relevance
+                             read them back; --active drops anything reversed,
+                             note or decision, --query ranks by relevance
 
   parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
                              record what a command produced, and the paths it
@@ -577,11 +577,12 @@ async function main(): Promise<void> {
         return fail(parsed, "started the web panel but it never came up");
       }
 
-      // `--no-open` is the spelling the help text offers, and it is the one the
-      // parser can actually produce: parseArgs only ever writes `true` or a
-      // string, so the old `parsed.flags.open !== false` was true for every
-      // input including `--no-open` — the browser opened regardless.
-      return runWebPanel(repo, panelName, port, parsed.flags["no-open"] !== true, explicitPort !== "");
+      // `--no-open` is the spelling the help text offers, and `flagBool` is
+      // what reads it: the old `parsed.flags.open !== false` was true for every
+      // input, and `parsed.flags["no-open"] !== true` was still true for
+      // `--no-open=true` and `--no-open true`, which parseArgs stores as the
+      // string `"true"`. See flagBool in ./args for why this one flag needs it.
+      return runWebPanel(repo, panelName, port, !flagBool(parsed.flags, "no-open"), explicitPort !== "");
     }
     return runWatch(repo, panelName);
   }

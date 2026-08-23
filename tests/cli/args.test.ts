@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { flagString, parseArgs } from "../../src/cli/args";
+import { flagBool, flagString, parseArgs } from "../../src/cli/args";
 
 describe("parseArgs", () => {
   test("separates command, positionals and flags", () => {
@@ -32,6 +32,43 @@ describe("parseArgs", () => {
     const p = parseArgs(["note", "--title"]);
     expect(flagString(p.flags, "title", "fallback")).toBe("fallback");
     expect(flagString(p.flags, "missing", "fallback")).toBe("fallback");
+  });
+});
+
+describe("flagBool", () => {
+  // `--no-open` is the only flag in the help text whose name is a negation, so
+  // it is the one people write a value onto. parseArgs stores `--no-open=true`
+  // and `--no-open true` as the string `"true"`, and an `=== true` test read
+  // both as "not given": the browser opened on somebody who had just said not
+  // to, twice. A documented flag the parser drops on the floor is the failure
+  // the generator's own flag check exists to refuse.
+  const bool = (argv: string[], key = "no-open") => flagBool(parseArgs(argv).flags, key);
+
+  test("absent is false", () => {
+    expect(bool(["watch", "--web"])).toBe(false);
+  });
+
+  test("bare is true", () => {
+    expect(bool(["watch", "--no-open"])).toBe(true);
+    expect(bool(["watch", "--no-open", "--web"])).toBe(true);
+  });
+
+  test("a value written onto it is read as a value, not ignored", () => {
+    expect(bool(["watch", "--no-open=true"])).toBe(true);
+    expect(bool(["watch", "--no-open", "true"])).toBe(true);
+    expect(bool(["watch", "--no-open=false"])).toBe(false);
+    expect(bool(["watch", "--no-open", "false"])).toBe(false);
+  });
+
+  test("the other spellings of off are off too", () => {
+    for (const off of ["0", "no", "off", "FALSE", "Off"]) {
+      expect(bool(["watch", `--no-open=${off}`])).toBe(false);
+    }
+  });
+
+  test("anything else counts as meant, because silently ignoring it is worse", () => {
+    expect(bool(["watch", "--no-open=yes"])).toBe(true);
+    expect(bool(["watch", "--no-open=1"])).toBe(true);
   });
 });
 

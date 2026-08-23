@@ -337,7 +337,12 @@ function flagsReadIn(rawSlice: string): Set<string> {
   const found = new Set<string>();
   for (const m of slice.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z_$][A-Za-z0-9_$]*)/g)) found.add(`--${m[1]!}`);
   for (const m of slice.matchAll(/\b(?:parsed|p)\.flags\[\s*"([^"]+)"\s*\]/g)) found.add(`--${m[1]!}`);
-  for (const m of slice.matchAll(/\bflagString\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) found.add(`--${m[1]!}`);
+  // Every accessor in src/cli/args.ts, not just the two that existed when this
+  // was written: `flagBool` was added for `--no-open` and, until this line
+  // learned about it, check 4 reported the flag as documented and unread. That
+  // is the guard working — but a reader who adds an accessor and gets an error
+  // about their help text will fix the help text, so the list belongs here.
+  for (const m of slice.matchAll(/\bflag(?:String|Bool)\(\s*(?:parsed|p)\.flags\s*,\s*"([^"]+)"/g)) found.add(`--${m[1]!}`);
   return found;
 }
 
@@ -545,8 +550,10 @@ export function renderCommandReference(source?: string): string {
     "command that exists but is not in the help text, or is in the help text but does",
     "not exist, fails the generator rather than producing a page that quietly lies.",
     "",
-    "Every invocation, flag and description below is the text `parley --help`",
-    "prints, so the two cannot disagree. It opens on the same line:",
+    "Every invocation and flag below is the text `parley --help` prints, and every",
+    "description is that help text's continuation lines re-wrapped into a paragraph",
+    "— nothing is written twice, so the two cannot disagree. It opens on the same",
+    "line:",
     "",
     `> ${escapeProse(usage.tagline)}`,
     "",
@@ -568,9 +575,10 @@ export function renderCommandReference(source?: string): string {
 
   out.push("## Global flags", "", "Every command takes these.", "", "```", ...usage.globalFlags, "```", "");
 
-  // Exactly one trailing newline: the `docs:commands` script writes this string
-  // through a shell redirect and adds nothing of its own, so the file on disk
-  // is byte-for-byte what this function returns.
+  // Exactly one trailing newline: `writeFileSync` below puts this string on
+  // disk verbatim and adds nothing of its own, so the committed page is
+  // byte-for-byte what this function returns and `git diff --exit-code` in CI
+  // means what it says.
   return `${out.join("\n").replace(/\n+$/, "")}\n`;
 }
 

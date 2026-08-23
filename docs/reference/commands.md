@@ -9,8 +9,10 @@ it, and CI fails when the committed copy does not match what the CLI offers. A
 command that exists but is not in the help text, or is in the help text but does
 not exist, fails the generator rather than producing a page that quietly lies.
 
-Every invocation, flag and description below is the text `parley --help`
-prints, so the two cannot disagree. It opens on the same line:
+Every invocation and flag below is the text `parley --help` prints, and every
+description is that help text's continuation lines re-wrapped into a paragraph
+— nothing is written twice, so the two cannot disagree. It opens on the same
+line:
 
 > parley — coordination bus for concurrent agent sessions in one repository
 
@@ -336,7 +338,7 @@ Flags: `--reason`
 parley notes [--tag x] [--path p] [--kind decision] [--active] [--export] [--import] [--query "..." [--k N]]
 ```
 
-read them back; --active drops the decisions that were reversed, --query ranks by relevance
+read them back; --active drops anything reversed, note or decision, --query ranks by relevance
 
 Flags: `--active`, `--export`, `--import`, `--k`, `--kind`, `--path`, `--query`, `--tag`
 

@@ -428,7 +428,7 @@ describe("the generated file is byte-stable", () => {
     expect(source).not.toMatch(/new Date|Date\.now|Math\.random|toISOString/);
   });
 
-  test("it ends with exactly one newline, which is what the shell redirect writes", () => {
+  test("it ends with exactly one newline, which is what writeFileSync puts on disk", () => {
     const text = renderCommandReference();
     expect(text.endsWith("\n")).toBe(true);
     expect(text.endsWith("\n\n")).toBe(false);

@@ -161,6 +161,32 @@ describe("the documentation site", () => {
     }
   });
 
+  /**
+   * `recall.md` is the one concept page with no `## Why it is built this way`,
+   * and it is named here for the same reason the absent `capacity` sidebar
+   * entry is named in the config: an exemption written down is a decision, and
+   * an exemption left implicit is a hole. Its three body sections argue the
+   * design as they go — the floor, reaching it, and why the brain is designed
+   * but not operable on this branch — rather than gathering the argument under
+   * one heading.
+   *
+   * If a page ever loses the heading, this fails; if `recall.md` grows one,
+   * the second assertion fails and the exemption comes out. Both directions,
+   * so the list cannot quietly grow to cover a page that simply stopped
+   * arguing its case.
+   */
+  const NO_WHY_SECTION = ["recall.md"];
+
+  test("every concept page but the one named argues why it is built that way", () => {
+    const missing = CONCEPT_PAGES.filter(
+      (page) =>
+        !readFileSync(join(root, "docs", "concepts", page), "utf8").includes(
+          "\n## Why it is built this way\n",
+        ),
+    );
+    expect(missing).toEqual(NO_WHY_SECTION);
+  });
+
   test("no page promises a warning the hook path never emits", () => {
     // `docs/concepts/territory.md` gets this right and the landing page got it
     // wrong, so the site asserted it twice and refuted it once. An unreachable

@@ -560,7 +560,7 @@ through the environment.
 | `parley question --to NAME "..."` | Ask, when you need an answer rather than to be heard. The other session **cannot go idle** while your question is open. `--wait N` blocks for the reply. |
 | `parley reply <id> "answer"` | Answer a question put to you. Someone is blocked on it — and "I cannot answer" unblocks them just as well. |
 | `parley ack <id> ["got it"]` | Close the loop. Without it the front that answered has no idea the answer landed. |
-| `parley nudged <id>` | Record that you rang somebody's doorbell. Until you do, **every attempt to finish a turn tells you again**, naming the question and the address. |
+| `parley nudged <id>` | Record that you rang somebody's doorbell. Until you do, **every attempt to finish a turn tells you again**, naming the question and the address — while the front you are waiting on is still unreachable, has been quiet for two minutes, and has an address to ring at all. |
 | `parley questions` | What you owe an answer to, and what you are waiting on. |
 
 ### Territory
