@@ -314,6 +314,13 @@ function advancePlanIfWaveDone(state: State, ctx: Ctx): ConvEvent[] {
   const wave = plan.waves[plan.waveIndex];
   if (!wave) return [];
   const ids = wave.taskNumbers.flatMap((n) => plan.itemsByTask[n] ?? []);
+  // Unreachable today, and kept deliberately rather than by oversight:
+  // `openWave` publishes at least one item for every task of the wave it is
+  // given (a task with no declared path still gets one), so a wave that has
+  // been opened always has ids. What it guards is the shape of the line
+  // below — `[].every(...)` is vacuously TRUE, so an empty list would advance
+  // a wave that dispatched nothing, silently, and go on to open the next one.
+  // A guard against a failure that loud is worth a line that never runs.
   if (ids.length === 0) return [];
   if (!ids.every((id) => state.work.find((w) => w.id === id)?.state === "done")) return [];
 
@@ -367,12 +374,33 @@ function evidenceFor(state: State, item: { evidenceIds: string[] }) {
 }
 
 /**
- * A review being done by the front that asked for it.
+ * A review being taken by the front that published it.
  *
- * On both paths that create a review, its publisher is the author of the work
- * it reviews: `finishWork` stamps the front that finished the reviewed item,
- * and `parley work --kind review` is a front asking for a check of its own
- * pass. So one field on one record answers it — no join, no clock, no I/O.
+ * That is the whole of what this answers, and the claim is deliberately no
+ * wider, because the two paths that create a review differ in what the
+ * publisher *is*:
+ *
+ * - `finishWork` stamps `publishedById` with the front that finished the
+ *   reviewed item, so on the plan path the publisher IS the author. This is
+ *   enforced, not assumed: no frame reaches that field.
+ * - `parley work --kind review` stamps whoever ran the command. It is meant
+ *   to be a front asking for a check of its own pass, and that is what the
+ *   skill and the README tell it to do — but it is intent, not a constraint.
+ *   A front can publish a review of somebody else's work and then take it,
+ *   and this returns true for it.
+ *
+ * So the disclosure means "this review is yours to begin with", which is a
+ * self-review on the path that matters — the one the plan drives, where the
+ * wave is not over until the review is done and nothing else states who did
+ * it. The alternative was to gate on `origin === "planned"` and disclose
+ * nothing at all on the hand-published path, which trades a rare overstatement
+ * for a silence in the case a front deliberately went looking for a check.
+ *
+ * One field on one record answers it — no join, no clock, no I/O — and that is
+ * what lets every surface ask it. `parley take`, the take event, `parley
+ * works`, `parley watch` and the web panel all call this one function, so none
+ * of them can disagree about it: the same discipline `droppable` gives `drop`
+ * and the footer.
  *
  * The rule is that the front that did the work is never *offered* its own
  * review, and `take` is deliberately not gated on this. An offer buys first
@@ -384,17 +412,16 @@ function evidenceFor(state: State, item: { evidenceIds: string[] }) {
  * repository self-review is the only path there is, so wording that implied
  * wrongdoing would be wrong as often as it was right.
  *
- * Asked here and by every surface that shows an item, so `parley take`, the
- * take event, `parley works` and both panels can never disagree about it — the
- * same discipline `droppable` gives `drop` and the footer.
+ * `publishedById: ""` — the stamp `openWave` puts on a dispatched task — needs
+ * no guard of its own: such a record is always `kind: "work"`, and no caller
+ * passes "" as `frontId` (it is either `me.id` or an item's `takenById`, which
+ * is a real id or null).
  */
 export function isSelfReview(
   item: { kind: string; publishedById: string },
   frontId: string | null,
 ): boolean {
-  // A planned task carries `publishedById: ""` (see `openWave`), so an
-  // unauthenticated caller passing null or "" can never match one.
-  return item.kind === "review" && item.publishedById !== "" && item.publishedById === frontId;
+  return item.kind === "review" && item.publishedById === frontId;
 }
 
 /**
