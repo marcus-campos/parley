@@ -52,67 +52,138 @@ describe("the documentation site", () => {
   });
 
   // The nav and sidebar in config.ts are declared config, not proof: VitePress
-  // does not fail its build when they point at a page that does not exist
-  // (only broken links *inside rendered markdown* fail the build under
-  // ignoreDeadLinks: false). Without this test, a sidebar entry can 404 on
-  // the published site indefinitely with every other check staying green.
+  // does not fail its build when they point at a page that does not exist.
+  // `ignoreDeadLinks: false` only validates links *inside rendered markdown* —
+  // proven by mutation both ways: a dead in-page link fails `docs:build`, and a
+  // dead sidebar entry does not. So a sidebar link can 404 on every page of the
+  // published site indefinitely with the build, the typecheck and every other
+  // test staying green. This test is the only thing standing there.
   //
-  // Four concept links were named in Task 4 of the docs-site plan (shapes,
-  // the work pool, capacity, recall — docs/superpowers/plans/
-  // 2026-08-20-docs-site.md). This branch forked before capacity's own
-  // feature (src/spawn/birth.ts) existed, so shapes, work-pool and recall
-  // are written now — each against only the machinery actually present here
-  // — while capacity stays out until the branches converge and there is
-  // real code to describe rather than a design doc. It is named here
-  // explicitly, not silently skipped, so this stays a real regression test
-  // for every link this task and earlier ones are actually responsible for,
-  // instead of either failing on work nobody has done yet or skipping the
-  // check wholesale.
-  const PENDING_TASK_4 = new Set([
-    "/concepts/capacity",
-  ]);
+  // It walks the *imported config object*, not the source text. A regex over
+  // the file would keep passing the day someone builds the sidebar from a
+  // variable, a helper, or a nested group — and it would read a link the
+  // config no longer uses.
+  async function loadConfig(): Promise<Record<string, unknown>> {
+    const mod = await import(join(root, "docs", ".vitepress", "config.ts"));
+    return (mod as { default: Record<string, unknown> }).default;
+  }
 
-  test("every sidebar link resolves to a file", () => {
-    const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
-    const links = [...config.matchAll(/link:\s*"(\/[^"]+)"/g)].map((m) => m[1]!);
-    // The regex above cannot fail to match anything (it would just find zero
-    // links), so assert there is a non-trivial number of them first — a test
-    // that "passes" over an empty list proves nothing.
-    expect(links.length).toBeGreaterThanOrEqual(9);
-    for (const link of links) {
-      if (link.startsWith("http") || PENDING_TASK_4.has(link)) continue;
-      const candidates = [
-        join(root, "docs", `${link}.md`),
-        join(root, "docs", link, "index.md"),
-        join(root, "docs", `${link.replace(/^\//, "")}.md`),
-      ];
-      expect(candidates.some((c) => existsSync(c))).toBe(true);
+  /** Every `link:` anywhere in the config, however deeply nested. */
+  function linksIn(node: unknown, found: string[] = []): string[] {
+    if (Array.isArray(node)) {
+      for (const item of node) linksIn(item, found);
+      return found;
+    }
+    if (node && typeof node === "object") {
+      for (const [key, value] of Object.entries(node)) {
+        if (key === "link" && typeof value === "string") found.push(value);
+        else linksIn(value, found);
+      }
+    }
+    return found;
+  }
+
+  function resolvesToAPage(link: string): boolean {
+    const clean = link.split("#")[0]!.split("?")[0]!.replace(/^\//, "");
+    if (clean === "") return existsSync(join(root, "docs", "index.md"));
+    return [
+      join(root, "docs", `${clean}.md`),
+      join(root, "docs", clean, "index.md"),
+      join(root, "docs", clean.replace(/\/$/, "") + ".md"),
+    ].some((c) => existsSync(c));
+  }
+
+  test("every nav and sidebar link resolves to a page that exists", async () => {
+    const config = await loadConfig();
+    const links = linksIn(config);
+    // A walker that found nothing would make the loop below vacuous, and this
+    // test is the whole guard — it may not be allowed to pass over an empty
+    // list. Four nav entries plus fifteen sidebar entries today.
+    expect(links.length).toBeGreaterThanOrEqual(18);
+
+    const internal = links.filter((l) => !/^(https?:|mailto:)/.test(l));
+    expect(internal.length).toBeGreaterThanOrEqual(15);
+
+    const dead = internal.filter((l) => !resolvesToAPage(l));
+    // Named rather than counted: the failure message has to say *which* link
+    // 404s, or the next person reads "expected 1 to be 0" and learns nothing.
+    expect(dead).toEqual([]);
+  });
+
+  test("the external links are the only ones the check above skips", async () => {
+    // Guards the skip itself. If someone writes an internal link the filter
+    // happens to treat as external, the test above goes quiet about it.
+    const config = await loadConfig();
+    const external = linksIn(config).filter((l) => /^(https?:|mailto:)/.test(l));
+    expect(external).toEqual(["https://github.com/marcus-campos/parley"]);
+  });
+
+  // Two independent ways to switch the dead-link gate off silently, both
+  // reproduced by the reviewer with all 37 tests staying green. Each gets one
+  // assertion, because a gate nothing pins is a gate nobody has.
+  test("dead links inside pages fail the build, and nothing has switched that off", async () => {
+    const config = await loadConfig();
+    // Read as a value, not as text: `ignoreDeadLinks: true` is the standard
+    // way somebody unblocks a red build, and it makes `docs:build` pass with
+    // a dead link present.
+    expect(config.ignoreDeadLinks).toBe(false);
+  });
+
+  test("CI builds the docs site, so a dead link reproves the pull request", () => {
+    const ci = readFileSync(join(root, ".github", "workflows", "ci.yml"), "utf8");
+    // The whole step was deletable with every test green. Pin the name, the
+    // command and the guard — a typo in the guard skips it on all three
+    // operating systems and looks exactly like a passing build.
+    expect(ci).toMatch(
+      /- name: Build the docs site\n\s*if: matrix\.os == 'ubuntu-latest'\n\s*run: bun run docs:build/,
+    );
+  });
+
+  // The concept pages are 570 lines of prose that no assertion reached: the
+  // only content test checked shapes.md for four words, and a five-line stub
+  // containing exactly those four words passed it. These two are written to
+  // fail on that stub.
+  const CONCEPT_PAGES = [
+    "permission.md", "presence.md", "recall.md", "shapes.md", "territory.md", "work-pool.md",
+  ];
+
+  test("every concept page still argues its case and ends in how it fails", () => {
+    for (const page of CONCEPT_PAGES) {
+      const text = readFileSync(join(root, "docs", "concepts", page), "utf8");
+      // The plan's contract for these pages: every one of them *ends* on
+      // degradation, because that is the promise the project makes. Asserted
+      // as the last section rather than merely present, so a page cannot keep
+      // the heading and bury it in the middle.
+      const sections = [...text.matchAll(/^## (.+)$/gm)].map((m) => m[1]!);
+      expect(sections.length).toBeGreaterThanOrEqual(2);
+      expect(sections.at(-1)).toBe("What happens when it fails");
+      expect(text.split(/\s+/).length).toBeGreaterThan(400);
     }
   });
 
-  // The exclusion above must not become a place where a genuinely broken
-  // link hides forever: once capacity lands, this must actually resolve
-  // too, so pin the set instead of letting it silently grow.
-  test("exactly capacity is still pending, now that shapes, work-pool and recall are written", () => {
-    const config = readFileSync(join(root, "docs", ".vitepress", "config.ts"), "utf8");
-    const links = [...config.matchAll(/link:\s*"(\/[^"]+)"/g)].map((m) => m[1]!);
-    const missing = links.filter((link) => {
-      if (link.startsWith("http")) return false;
-      const candidates = [
-        join(root, "docs", `${link}.md`),
-        join(root, "docs", link, "index.md"),
-        join(root, "docs", `${link.replace(/^\//, "")}.md`),
-      ];
-      return !candidates.some((c) => existsSync(c));
-    });
-    expect(new Set(missing)).toEqual(PENDING_TASK_4);
-  });
-
-  test("the shapes page states that mode and shape are different axes", () => {
-    const page = readFileSync(join(root, "docs", "concepts", "shapes.md"), "utf8");
-    expect(page).toContain("orthogonal");
-    expect(page).toContain("bus");
-    expect(page).toContain("pool");
-    expect(page).toContain("plan");
+  test("every source citation on the site points at a line that exists", () => {
+    // The discipline this branch was built on, made mechanical: the pages cite
+    // `src/...:NN` and `src/...:NN-MM` constantly, and a citation nobody can
+    // check is decoration. Catches a page written against code that has since
+    // moved or shrunk — and a stub, which cites nothing at all.
+    const pages = [
+      ...CONCEPT_PAGES.map((p) => join("docs", "concepts", p)),
+      join("docs", "guide", "setup.md"),
+      join("docs", "guide", "panel.md"),
+    ];
+    let checked = 0;
+    for (const page of pages) {
+      const text = readFileSync(join(root, page), "utf8");
+      for (const m of text.matchAll(/`(src\/[A-Za-z0-9_./-]+\.ts):(\d+)(?:-(\d+))?`/g)) {
+        const [, file, from, to] = m;
+        const path = join(root, file!);
+        expect(existsSync(path)).toBe(true);
+        const lines = readFileSync(path, "utf8").split("\n").length;
+        expect(Number(to ?? from)).toBeLessThanOrEqual(lines);
+        checked++;
+      }
+    }
+    // The regex finding nothing would make every assertion above vacuous.
+    expect(checked).toBeGreaterThanOrEqual(50);
   });
 });

@@ -36,7 +36,13 @@ export default defineConfig({
           { text: "Territory", link: "/concepts/territory" },
           { text: "Permission", link: "/concepts/permission" },
           { text: "The work pool", link: "/concepts/work-pool" },
-          { text: "Capacity", link: "/concepts/capacity" },
+          // Capacity is deliberately absent: the feature it would describe
+          // (src/spawn/birth.ts) is not on this branch, and a sidebar entry
+          // pointing at a page nobody wrote is a 404 on every page of the
+          // site. VitePress does not check nav or sidebar links — only links
+          // inside rendered markdown — so nothing but the test in
+          // tests/docs/site-build.test.ts stands between a typo here and a
+          // published dead link. Add the entry back with the page, not before.
           { text: "Notes and recall", link: "/concepts/recall" },
           { text: "Presence", link: "/concepts/presence" },
         ],
