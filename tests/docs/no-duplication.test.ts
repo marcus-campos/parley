@@ -1,13 +1,39 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 const root = join(import.meta.dir, "..", "..");
-const guide = join(root, "docs", "guide");
+const docs = join(root, "docs");
+const guide = join(docs, "guide");
 const readme = readFileSync(join(root, "README.md"), "utf8");
 
-function pages(): string[] {
+function guidePages(): string[] {
   return readdirSync(guide).filter((f) => f.endsWith(".md"));
+}
+
+/**
+ * Every markdown file the site actually publishes.
+ *
+ * This describe block is called "the site never becomes a second copy" and the
+ * duplication checks only ever walked `docs/guide/`. Six concept pages and two
+ * reference pages were outside it: an entire README region appended verbatim to
+ * `docs/concepts/presence.md` passed the whole suite and built clean. The
+ * exclusions below are exactly `srcExclude` in docs/.vitepress/config.ts — if a
+ * file publishes, it is checked.
+ */
+function sitePages(dir = docs, found: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    const rel = relative(docs, full);
+    if (entry.isDirectory()) {
+      // `superpowers/**` are working documents and `.vitepress` is the build.
+      if (entry.name === "superpowers" || entry.name === ".vitepress") continue;
+      sitePages(full, found);
+    } else if (entry.name.endsWith(".md") && entry.name !== "README.md") {
+      found.push(rel.split(sep).join("/"));
+    }
+  }
+  return found;
 }
 
 function paragraphs(t: string): string[] {
@@ -51,7 +77,7 @@ function shingleOverlap(a: string, b: string): number {
 
 describe("the site never becomes a second copy", () => {
   test("every guide page exists", () => {
-    expect(pages().sort()).toEqual([
+    expect(guidePages().sort()).toEqual([
       "install.md", "panel.md", "setup.md", "what-it-is.md", "where-it-fits.md",
     ]);
   });
@@ -113,31 +139,62 @@ describe("the site never becomes a second copy", () => {
     }
   });
 
-  test("no long paragraph appears in both the README and a guide page", () => {
+  test("the walker actually reaches the pages outside docs/guide/", () => {
+    // The check below is a loop over this list. If the walker ever stopped
+    // finding the concept and reference pages, every duplication assertion
+    // would keep passing over a shrinking set and say nothing about it.
+    const pages = sitePages();
+    expect(pages.length).toBeGreaterThanOrEqual(14);
+    for (const expected of [
+      "index.md",
+      "guide/what-it-is.md",
+      "concepts/presence.md",
+      "concepts/territory.md",
+      "reference/commands.md",
+      "reference/compatibility.md",
+      "ARCHITECTURE.md",
+      "PROTOCOL.md",
+    ]) {
+      expect(pages).toContain(expected);
+    }
+  });
+
+  test("no long paragraph appears in both the README and a page of the site", () => {
     const readmeParas = new Set(paragraphs(readme));
-    for (const page of pages()) {
-      const text = readFileSync(join(guide, page), "utf8");
+    for (const page of sitePages()) {
+      const text = readFileSync(join(docs, page), "utf8");
       for (const para of paragraphs(text)) {
         expect(readmeParas.has(para)).toBe(false);
       }
     }
   });
 
-  test("no guide paragraph is a lightly-edited copy of a README paragraph", () => {
+  test("no page of the site is a lightly-edited copy of a README paragraph", () => {
     // This is deliberately a *different* check from the exact-match test
     // above: it would still fire on a paragraph copied from the README with
     // one word swapped, a comma moved, or a sentence dropped — drift that
     // looks intentional precisely because it is not byte-identical.
     const readmeParas = paragraphs(readme);
-    for (const page of pages()) {
-      const text = readFileSync(join(guide, page), "utf8");
-      for (const guidePara of paragraphs(text)) {
+    expect(readmeParas.length).toBeGreaterThanOrEqual(20);
+    let compared = 0;
+    for (const page of sitePages()) {
+      const text = readFileSync(join(docs, page), "utf8");
+      for (const sitePara of paragraphs(text)) {
         for (const readmePara of readmeParas) {
-          const overlap = shingleOverlap(guidePara, readmePara);
-          expect(overlap).toBeLessThan(0.5);
+          const overlap = shingleOverlap(sitePara, readmePara);
+          if (overlap >= 0.5) {
+            throw new Error(
+              `${page} carries a paragraph ${Math.round(overlap * 100)}% shared with the README. ` +
+                `Include the region instead of copying it.`,
+            );
+          }
+          compared++;
         }
       }
     }
+    // A walker returning nothing, or pages with no long paragraphs, would make
+    // the loop above vacuous while reporting success.
+    expect(compared).toBeGreaterThanOrEqual(500);
   });
 
   test("the README's own relative links still point at files that exist", () => {
