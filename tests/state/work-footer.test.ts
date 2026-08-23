@@ -100,20 +100,26 @@ describe("the pool footer", () => {
   });
 
   // The other direction, so the invariant does not survive by accident of
-  // which code path happens to create offers. `openWave` publishes planned
-  // tasks `open` today, so this shapes an offered one by hand: the footer must
+  // which code path happens to create offers. No reachable path makes an
+  // OFFERED planned task any more — `openWave` publishes them open, and
+  // `publishWork` refuses to take `origin` off a frame precisely so nobody
+  // can aim an unrefusable item at a path's holder. So the item is shaped by
+  // hand: if such a pairing ever existed again, the footer would still have to
   // decide from the same predicate `dropWork` decides from, not from a guess.
   test("an offer the reducer would refuse to drop is named without the drop", () => {
     apply(state, responsivo, { v: 1, op: "claim", paths: ["mine/**"] }, at(50));
-    apply(state, core, {
-      v: 1, op: "work", title: "task 1", paths: ["mine/a.ts"], origin: "planned",
-    }, at(100));
+    state.work.push({
+      id: "w_hand", paths: ["mine/a.ts"], title: "task 1", evidenceIds: [],
+      publishedById: core, publishedByName: "CORE", kind: "work", origin: "planned",
+      state: "offered", offeredToId: responsivo, offeredAtMs: T0 + 100,
+      takenById: null, orphanedAtMs: null, nudgedAtMs: null, reviewOf: null,
+      at: new Date(T0 + 100).toISOString(),
+    });
 
     const footer = poolFooterFor(state, responsivo);
     expect(footer).toContain("parley take ");
     expect(footer).not.toContain("parley drop ");
 
-    const id = state.work[0]!.id;
-    expect(apply(state, responsivo, { v: 1, op: "drop", id }, at(200)).response.ok).toBe(false);
+    expect(apply(state, responsivo, { v: 1, op: "drop", id: "w_hand" }, at(200)).response.ok).toBe(false);
   });
 });

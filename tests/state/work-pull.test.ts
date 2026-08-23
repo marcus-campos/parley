@@ -133,15 +133,33 @@ describe("pulling from the pool", () => {
     expect(state.work[0]!.takenById).toBe(auditor);
   });
 
-  test("a planned item cannot be dropped — dispatch is not an offer", () => {
+  /**
+   * `origin` is what decides whether an item can be refused, so a front able
+   * to set it from a frame could publish work its offeree is forbidden to
+   * hand back — and `publishWork` routes an item AT whoever already holds the
+   * path. RESPONSIVO holds `mine/**`, so CORE naming `origin: "planned"` used
+   * to hand RESPONSIVO an item it could not drop: the front that discovered
+   * the work acquiring authority over the front that holds the file, which is
+   * the one hierarchy this module says it exists to do without. `tick` freed
+   * it after five minutes, so it was a delay rather than a capture — but it
+   * was a delay nobody consented to.
+   *
+   * A planned item is made by dispatching a plan, and by nothing else.
+   * `plan-review.test.ts` covers that a real one is undroppable.
+   */
+  test("no frame can publish planned work — dispatch authority is not a field you set", () => {
+    apply(state, responsivo, { v: 1, op: "claim", paths: ["mine/**"] }, at(50));
     const out = apply(state, core, {
-      v: 1, op: "work", title: "task 5", paths: ["a.ts"], origin: "planned",
+      v: 1, op: "work", title: "task 5", paths: ["mine/a.ts"], origin: "planned",
     }, at(100));
     const id = (out.response as unknown as { items: { id: string }[] }).items[0]!.id;
-    apply(state, responsivo, { v: 1, op: "take", id }, at(200));
-    const dropped = apply(state, responsivo, { v: 1, op: "drop", id }, at(300));
-    expect(dropped.response.ok).toBe(false);
-    expect(state.work[0]!.state).toBe("taken");
+
+    expect(state.work[0]!.origin).toBe("discovered");
+    // And the consequence, which is the thing that actually mattered: the
+    // front the item was aimed at can still refuse it.
+    expect(state.work[0]!.offeredToId).toBe(responsivo);
+    expect(apply(state, responsivo, { v: 1, op: "drop", id }, at(200)).response.ok).toBe(true);
+    expect(state.work[0]!.state).toBe("open");
   });
 
   test("done is only for the front holding it", () => {

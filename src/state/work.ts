@@ -62,7 +62,6 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
     ? frame.evidence.filter((e): e is string => typeof e === "string")
     : [];
   const kind = frame.kind === "review" ? "review" : "work";
-  const origin = frame.origin === "planned" ? "planned" : "discovered";
 
   const created: WorkItem[] = [];
   for (const path of paths) {
@@ -75,7 +74,15 @@ export function publishWork(state: State, actorId: string | null, frame: Record<
       publishedById: me.id,
       publishedByName: me.name,
       kind,
-      origin,
+      // NOT read off the frame. `origin` decides whether the item can be
+      // refused (see `droppable`), so a front able to set it could publish
+      // work its offeree is forbidden to hand back — and this routes the item
+      // straight AT the front that already holds the path. That is the
+      // hierarchy `ownerForPath` above exists to prevent: the front that
+      // discovered the work acquiring authority over the front that holds the
+      // file. Only a dispatched plan makes a planned item, and `openWave` is
+      // the only place that says so.
+      origin: "discovered",
       state: ownerId ? "offered" : "open",
       offeredToId: ownerId,
       offeredAtMs: ownerId ? ctx.nowMs : null,
@@ -483,10 +490,13 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
   const item = findItem(state, frame);
   if (!item) return { state, response: err("UNKNOWN_OP", "no work item with that id"), broadcast: [] };
-  // Dispatch is not an offer. A planned task stays where the plan put it — a
-  // planned review does not, because a review was offered to a named front.
-  if (!droppable(item)) {
-    return { state, response: err("NOT_OWNER", "a planned task is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+  // Whether this item is yours is asked BEFORE what kind of item it is, so the
+  // refusal names the caller's actual problem. Asked the other way round, a
+  // front dropping an id that was never theirs was told "a planned task is
+  // dispatched, not offered" — an answer about someone else's item, and one
+  // that reads as a rule when the truth is a typo.
+  if (item.offeredToId !== me.id && item.takenById !== me.id) {
+    return { state, response: err("NOT_TAKEN", "not offered to you and not taken by you"), broadcast: [] };
   }
   // done is terminal, same as takeWork and tick already treat it — a finisher
   // still holds takenById, so without this an already-delivered item could be
@@ -494,8 +504,10 @@ export function dropWork(state: State, actorId: string | null, frame: Record<str
   if (item.state === "done") {
     return { state, response: err("NOT_TAKEN", "already done"), broadcast: [] };
   }
-  if (item.offeredToId !== me.id && item.takenById !== me.id) {
-    return { state, response: err("NOT_TAKEN", "not offered to you and not taken by you"), broadcast: [] };
+  // Dispatch is not an offer. A planned task stays where the plan put it — a
+  // planned review does not, because a review was offered to a named front.
+  if (!droppable(item)) {
+    return { state, response: err("NOT_OWNER", "a planned task is dispatched, not offered — it cannot be dropped"), broadcast: [] };
   }
 
   item.state = "open";

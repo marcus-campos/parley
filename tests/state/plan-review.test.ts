@@ -203,6 +203,23 @@ describe("review after every task", () => {
     expect(item.state).toBe("taken");
   });
 
+  // Two different refusals, and the caller has to be able to tell them apart:
+  // "the plan put this here" is a rule, "that is not yours" is a typo. The
+  // ownership check used to sit AFTER the planned check, so a front dropping
+  // an id it never held was told about dispatch authority instead.
+  test("a front dropping a planned task it never held is told that, not the dispatch rule", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+
+    const wrong = apply(state, auditor, { v: 1, op: "drop", id: item.id }, at(300));
+    expect(wrong.response).toMatchObject({ ok: false, error: { code: "NOT_TAKEN" } });
+    expect((wrong.response as unknown as { error: { message: string } }).error.message)
+      .toContain("not offered to you");
+    expect(item.state).toBe("taken");
+    expect(item.takenById).toBe(worker);
+  });
+
   // I1: `WorkItem.evidenceIds` is documented as ids of a Note and a
   // CommandResult, and `evidenceFor` resolves strictly against `state.notes`
   // and `state.results` — a `w_*` id is neither, so putting the reviewed
