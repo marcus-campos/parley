@@ -636,7 +636,7 @@ through the environment.
 | `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. `--mine` is what is offered to you plus what you have taken. **Offers also ride the footer that carries your inbox** — every MCP tool response, and every hook that drains it — so this is for looking, not for polling. |
 | `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
 | `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. A planned **task** refuses it — a review does not. |
-| `parley done <id> [--summary "..."]` | Mark it finished. |
+| `parley done <id> [--summary "..."]` | Mark it finished. Terminal, and only once: a second `done` on the same item is refused rather than filing a second review. |
 
 ### Knowledge that outlives the session
 
