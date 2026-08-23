@@ -483,22 +483,27 @@ routed on publish, not by hand: a path a live front already holds becomes an
 pool unanswered; a path owned by nobody is **open** for anyone.
 
 ```bash
-parley works --mine          # what has been offered to you
+parley works --mine          # offered to you, plus everything you have taken
 parley works --state open    # what belongs to nobody
 parley take w_0012           # first refusal is exclusive while it stands
 parley drop w_0012 --reason "not my mission"
 parley done w_0012 --summary "3 labels removed"
 ```
 
-**Offers ride the footer** — the same one every hook and MCP response already
-carries — so a front never polls `works` to learn one arrived. **`take` hands
+**Offers ride the footer** — the same one your inbox rides: every MCP tool
+response, and every hook that drains the inbox. (`SessionStart`, `Stop`,
+`SessionEnd` and an edit denied under `enforced` answer without draining, so
+they carry neither.) A front never polls `works` to learn an offer arrived. **`take` hands
 back the notes and results already gathered for the item, in the same
 response**, so nobody re-runs the investigation that produced them. **`drop`
 costs nothing and is the right call whenever the item is not your mission**;
 it goes back in the pool for whoever it actually belongs to.
 
-A front holding no claim and no taken item is spare capacity. If the pool
-still has something open ten minutes later, parley rings that front once —
+An **agent** front holding no explicit claim and no taken item is spare
+capacity. An auto-claim does not make it busy — that is the footprint of an
+edit, not a declaration of what it is doing — and a person watching a panel is
+never spare capacity, because they were never going to pick the item up. If the
+pool still has something open ten minutes later, parley rings that front once —
 same discipline as the doorbell for an unanswered question, never a loop.
 
 `--kind review --review-of <id>` marks an item as somebody else's work to
@@ -540,8 +545,8 @@ parley plan docs/superpowers/plans/2026-08-20-thing.md --replace
 
 A `writing-plans` plan states each task's exact paths in a `**Files:**` block.
 That is the template's shape, not something anything validates — which is why a
-task whose block is missing or will not parse is still dispatched, carrying the
-reason as its title (below). parley parses those blocks and computes the
+task whose block is missing or will not parse is still dispatched, with the
+reason appended to its title (below). parley parses those blocks and computes the
 collision graph before anything is dispatched: tasks whose paths are disjoint
 open together, tasks that touch the same file are pushed into later waves.
 Other orchestrators leave the question to a human — superpowers'
@@ -555,10 +560,10 @@ deterministic unit test.
 | Dispatched, not offered | A planned **task** is published **open**, owned by nobody, and any front takes it — but once taken it cannot be dropped. The plan put it there and it stays. |
 | A wave, not a queue | The next wave opens by itself, the moment every item of the current one is done. |
 | Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. A review is the one planned item that really is an offer: it is named in that front's footer, `drop` hands it back to the pool, and `take` returns the item under review along with it. |
-| Self-review is stated, never blocked | A review is never **offered** to the front that did the work — but `take` does not refuse one. An offer buys first refusal, not obedience, and with one live front the review can only ever be open to its author, so a block would stall the plan at that wave with nothing to rescue it. parley says so instead, wherever the item is read: `parley take` prints it, the take event carries it, and `parley works` and both panels mark the row `(self-review)`. |
+| Self-review is stated, never blocked | A review is never **offered** to the front that did the work — but `take` does not refuse one. An offer buys first refusal, not obedience, and with one live front the review can only ever be open to its author, so a block would stall the plan at that wave with nothing to rescue it. parley says so instead, wherever the item is read: `parley take` prints it, the take event carries it, and `parley works` marks the row `(self-review)`. Both panels mark it too, while the item is live — they show nothing that is `done`, so a **finished** self-review is read back in `parley works`, which is what that listing is for. |
 | A person's front outranks the plan | A path held under an explicit claim is never taken from its holder. That task is published anyway and announced as waiting — the holder runs `parley release`, or you re-sequence with `parley plan <file> --replace`. |
 | One plan at a time | A second `parley plan` while the first still has an unfinished item is **refused**. The wave rule is a proof over the tasks `parley plan` was handed, and a second plan's items would sit on the same paths with nothing having compared them. `--replace` is the way through: it withdraws every unfinished item of the running plan — including one a front is holding, announced by name — and dispatches the new plan from wave 0. What the old plan finished stays. |
-| No task disappears | A task whose `**Files:**` block is missing or unparseable is published with the parse failure as its title. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
+| No task disappears | A task whose `**Files:**` block is missing or unparseable is published anyway, with the parse failure **appended to its title** — the whole title only when the heading carried none. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
 
 The coordinator is a front, never the daemon. The daemon holds the plan's state
 and advances its waves, but it never reads your plan file: `parley plan` parses
@@ -628,7 +633,7 @@ through the environment.
 | `parley shape [bus\|pool\|plan]` | The shape belongs to the repository, not to a session. Read it with no argument. |
 | `parley plan <path-to-plan.md> [--replace]` | Read a `superpowers:writing-plans` plan, compute its waves from the paths each task declares, and publish the first one. `parley shape plan` first. One plan runs at a time: a second dispatch is refused while the first has an unfinished item, and `--replace` withdraws those and re-sequences. |
 | `parley work "<title>" <path…> [--evidence <id,...>] [--kind review --review-of <id>]` | Publish discovered work, one item per path. Routed on publish: offered to whoever already holds the path, open for anyone otherwise. |
-| `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. **Offers also ride the footer of every hook and MCP response** — this is for looking, not for polling. |
+| `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. `--mine` is what is offered to you plus what you have taken. **Offers also ride the footer that carries your inbox** — every MCP tool response, and every hook that drains it — so this is for looking, not for polling. |
 | `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
 | `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. A planned **task** refuses it — a review does not. |
 | `parley done <id> [--summary "..."]` | Mark it finished. |

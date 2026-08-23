@@ -187,7 +187,10 @@ description of it.
 
 Where the repository runs in \`shape pool\`, a front that discovers work on a
 path you hold does not have to reach you to hand it over — the offer already
-rides in the same footer every tool call reads. You do not poll for it.
+rides in the same footer your inbox does: every MCP tool response, and every
+hook that drains the inbox. (An edit denied under \`enforced\`, and the
+session-start and session-end hooks, answer without draining.) You do not poll
+for it.
 
 \`\`\`
 parley take w_0012
@@ -234,17 +237,22 @@ parley take w_0004
 parley done w_0004 --summary "..."
 \`\`\`
 
-Finishing a planned task publishes a **review** of it, offered to another front
-— never to you. A review is the one planned item that *is* an offer: it arrives
-named in your footer and \`drop\` accepts it — hand it back if you cannot review
-this one and it returns to the pool for somebody else. Taking one also hands
-you the item it reviews. The wave is not over until those reviews are done too,
-so review here is a state on the bus, not something two fronts agreed to do.
+Finishing a planned task publishes a **review** of it, offered to another live
+agent — never to you. If nobody else is live it is published **open** instead
+of falling back to you, and then taking it yourself is the only way that wave
+ever closes; parley says so rather than refusing, on \`take\`, in the event and
+in \`parley works\`. A review is the one planned item that *is* an offer: it
+arrives named in your footer and \`drop\` accepts it — hand it back if you
+cannot review this one and it returns to the pool for somebody else. Taking one
+also hands you the item it reviews. The wave is not over until those reviews
+are done too, so review here is a state on the bus, not something two fronts
+agreed to do.
 
 The plan never takes a path a person's front already holds under an explicit
 claim: that task is published anyway and announced as waiting. And a task whose
-\`**Files:**\` block did not parse still gets an item, titled with the failure —
-so a broken task never looks like a task that quietly never happened.
+\`**Files:**\` block did not parse still gets an item, with the failure appended
+to its title — so a broken task never looks like a task that quietly never
+happened.
 
 ## Use parley, not a side channel
 

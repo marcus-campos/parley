@@ -253,7 +253,9 @@ export async function runHook(event: string): Promise<void> {
     const events = drained.ok ? (drained as unknown as { events: never[] }).events : [];
     const inbox = formatEvents(events);
     // Rides on the same drain the inbox came from — a second request for the
-    // pool would double the round trips this hook pays against its 30ms budget.
+    // pool would double the round trips this hook pays against the hard
+    // deadline set at the top of this function (`HOOK_BUDGET_MS * 40`, 1.2s),
+    // which is the only budget anything here actually enforces.
     const pool = drained.ok ? (drained as unknown as { pool?: string }).pool ?? "" : "";
 
     if (name !== "PreToolUse") {
