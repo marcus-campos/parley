@@ -146,7 +146,7 @@ A closed list. Anything outside it is a protocol violation.
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
 | `OBSERVER_ONLY` | A participant with `kind: "human"` tried to `grant` or `deny`. A human has a voice, not a vote. |
-| `NOT_TAKEN` | A work item you are not holding: `done` on someone else's, `drop` on one neither offered to you nor taken by you, or either on one already `done`. |
+| `NOT_TAKEN` | A work item you cannot act on: `done` on someone else's, `drop` on one neither offered to you nor taken by you, or either on one already `done` — including a `done` you sent twice. |
 | `NO_CAPACITY` | Reserved for the front-birth ceiling. **No operation returns it yet**; it is in the closed list so a client written against this version already knows it. |
 
 Success is always `{"ok": true, ...}`. Failure is always
@@ -650,7 +650,7 @@ touched least recently. It is a routing hint, not a permission — the loser is
 never consulted. **`origin` is not a field a client may set** — see 6.9.3.
 
 ```json
-→ {"v":1,"op":"works","state":"open","mine":true}
+→ {"v":1,"op":"works","state":"open"}
 ← {"ok":true,"work":[{"id":"w_0013","paths":["b.html"],"title":"label sem for",
      "evidenceIds":["n_0003"],"publishedById":"p_1","publishedByName":"CORE",
      "kind":"work","origin":"discovered","state":"open",
@@ -661,7 +661,11 @@ never consulted. **`origin` is not a field a client may set** — see 6.9.3.
 
 `state` filters to one of `open`, `offered`, `taken`, `done`; anything else is
 ignored rather than refused. `mine` returns what is offered to you **plus what
-you have taken**, `done` items included.
+you have taken**, `done` items included. The two filters combine, and one
+combination is always empty: `{"state":"open","mine":true}` returns nothing for
+any participant, because an `open` item has `offeredToId` and `takenById` both
+null and `mine` matches on exactly those two. `mine` is ignored altogether on a
+connection with no participant bound to it — there is nobody for it to mean.
 
 ```json
 → {"v":1,"op":"take","id":"w_0013"}
@@ -693,9 +697,10 @@ or `done` is `CONFLICT` too.
 `drop` returns the item to the pool and is free: possession bought first
 refusal, not obedience. It refuses with `NOT_TAKEN` when the item is neither
 offered to you nor taken by you, or is already `done`, and with `NOT_OWNER` for
-a planned **task** (6.9.3). `done` is only for the participant holding the item.
-Both are terminal in the sense that `done` is: no operation moves an item out of
-it.
+a planned **task** (6.9.3). `done` is only for the participant holding the item,
+and refuses with `NOT_TAKEN` on an item already `done` — a retried `done` is
+answered, never applied twice, because the second one would file a second
+review. `done` is terminal: no operation moves an item out of it.
 
 #### 6.9.2 Dispatching a plan
 
@@ -708,6 +713,13 @@ parses the markdown and only the parsed tasks cross the wire.
             {"n":2,"title":"Task 2","paths":["a.ts"],"parseError":null}]}
 ← {"ok":true,"waves":2,"opened":1,"withdrawn":0}
 ```
+
+Every task is read rather than trusted: an entry that is not an object, or whose
+`n` is not a number, refuses the whole frame with `UNKNOWN_OP` and withdraws
+nothing — `n` is what the waves and `itemsByTask` are keyed on, and it is the one
+field the daemon will not supply for a client. `title`, `paths` and `parseError`
+are coerced instead: a missing `paths` is the same as an empty one, and a
+`paths` that is not a list of strings contributes none.
 
 The waves are computed from the paths each task declares: tasks whose paths are
 disjoint open together, tasks that touch the same file are serialised, and a
@@ -797,6 +809,14 @@ the daemon boots anyway — a partially written last line is exactly what a `kil
 -9` produces, and refusing to start because of it would be worse than losing one
 event.
 
+An entry that parses and then **throws** while being applied is skipped the same
+way, named on stderr, and the replay continues with the entries after it. The
+frame is journaled before it is applied, so a frame the daemon cannot survive is
+already on disk by the time anyone finds out; refusing to boot would make the
+repository undispatchable permanently, since restarting is what replays it.
+Reducers validate their own frames at the boundary rather than lean on this, so
+a skipped entry should mean a bug, not a malformed client.
+
 Nothing survives a restart `connected`. Presence must be re-proven.
 
 ---
@@ -809,5 +829,6 @@ Nothing survives a restart `connected`. Presence must be re-proven.
 | Daemon unreachable | `enforced` **degrades to `advisory`** with a loud warning. |
 | Hook slow | Hard time budget. Overrun means let go; the agent never waits for parley. |
 | Journal truncated | Drop the bad line, warn, boot. |
+| Journal entry throws on replay | Skip that entry, name it on stderr, boot with the rest. |
 | Duplicate name | Refuse with a usable suggestion. |
 | Version skew | `PROTOCOL_MISMATCH` naming both versions. |
