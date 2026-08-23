@@ -314,7 +314,7 @@ export function tick(
   //    that reads nothing is never pushed round in circles.
   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
   const stale = state.work.filter(
-    (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
+    (w) => w.state === "open" && ctx.nowMs - Date.parse(w.at) > orphanPool,
   );
   let birth: BirthIntent | null = null;
   if (stale.length > 0) {
@@ -324,15 +324,28 @@ export function tick(
       // larger waste, and reviving it costs nothing: no worktree, no
       // dependency install, no cold context. Creating is the fallback, never
       // the first move.
-      const target = idle[0]!;
-      for (const w of stale) w.nudgedAtMs = ctx.nowMs;
-      broadcast.push(pushEvent(state, ctx, {
-        // Addressed to the front it is about, same as ask/grant/deny — every
-        // other front already gets the pool count from poolFooterFor on its
-        // own next call, so broadcasting this too would only be noise for them.
-        kind: "system", from: null, to: target.name, priority: "high",
-        text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
-      }));
+      //
+      // `nudgedAtMs` governs *this* branch and only this one. It used to be
+      // part of the `stale` filter above, which meant one ring disqualified an
+      // item from ever asking for a front again: the idle front that was rung
+      // could ignore it and go home, and no later tick would ever ask for
+      // capacity for that item — `birth` stayed null at +400s, at +5000s and
+      // at +50000s. And since recycling runs before creating by design, the
+      // bell is the common path, so that permanently disarmed the birth path
+      // for the majority of items. Ring once per item; ask for capacity
+      // whenever there is nobody left to ring.
+      const unrung = stale.filter((w) => w.nudgedAtMs === null);
+      if (unrung.length > 0) {
+        const target = idle[0]!;
+        for (const w of unrung) w.nudgedAtMs = ctx.nowMs;
+        broadcast.push(pushEvent(state, ctx, {
+          // Addressed to the front it is about, same as ask/grant/deny — every
+          // other front already gets the pool count from poolFooterFor on its
+          // own next call, so broadcasting this too would only be noise for them.
+          kind: "system", from: null, to: target.name, priority: "high",
+          text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
+        }));
+      }
     } else if (canBearFront(state, ctx, opts)) {
       // Stamped when the intent is emitted, not when a spawn succeeds. A
       // spawn that fails therefore costs one cooldown window and then asks
