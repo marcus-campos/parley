@@ -101,6 +101,30 @@ describe("what the site cites", () => {
     }
     expect(problems).toEqual([]);
 
+    // Order, which the buckets above cannot see. They compare multisets, so
+    // two citations on one page swapping which lines they point at leaves
+    // every bucket identical — both still resolve, both now send the reader to
+    // the other one's evidence. Proven: transposing work-pool.md:14 and :26
+    // passed all eight tests here with the ledger byte-identical.
+    //
+    // Only checked once the comparison above is clean, because an added or
+    // dropped citation shifts every position after it and the report for that
+    // is the list of blocks, not an index.
+    if (problems.length === 0) {
+      const seq = (list: { page: string; file: string; text: string }[]) =>
+        list.map((c) => `${c.page} ${c.file} ${digest(c.text)}`);
+      const before = seq(pinned);
+      const after = seq(current);
+      const at = before.findIndex((line, i) => line !== after[i]);
+      expect(
+        at < 0
+          ? null
+          : `the ledger pins the same blocks in a different order, starting at entry ${at + 1}: ` +
+            `${before[at]} is now ${after[at]}. Nothing was added or dropped, so this is two ` +
+            `citations on one page swapping which lines they point at. Open the page.`,
+      ).toBeNull();
+    }
+
     // Byte-for-byte too, so a hand-edited or half-regenerated ledger is a
     // failure rather than a thing the comparison above happens to tolerate.
     expect(readFileSync(LEDGER_PATH, "utf8")).toBe(renderLedger(current));

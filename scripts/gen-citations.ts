@@ -117,8 +117,17 @@ export function collectCitations(root = ROOT): Citation[] {
     }
   }
 
-  // Sorted so the ledger is a function of content alone, never of walk order.
-  return out.sort((a, b) => a.page.localeCompare(b.page) || a.file.localeCompare(b.file) || a.text.localeCompare(b.text));
+  // Grouped by page, and inside a page kept in the order the citations appear
+  // in it. `sitePages` sorts, and `matchAll` walks a page top to bottom, so
+  // this is still a function of content alone and never of filesystem order.
+  //
+  // Ordering by the cited *text* was the obvious choice and it was wrong. It
+  // made the ledger blind to a transposition: swap which lines two citations
+  // on one page point at and every (page, file) bucket holds the same blocks,
+  // so the ledger comes out byte-identical while both citations now send the
+  // reader to the other one's evidence. Appearance order pairs each block with
+  // its position on the page, which is the thing that changed.
+  return out.map((c, i) => ({ c, i })).sort((a, b) => a.c.page.localeCompare(b.c.page) || a.i - b.i).map(({ c }) => c);
 }
 
 const HEADER = [
@@ -131,6 +140,9 @@ const HEADER = [
   "#",
   "# Read a diff here as a question about the sentence doing the citing, not as",
   "# a chore. If the text under a page changed, go and re-read that page.",
+  "#",
+  "# Entries are grouped by page and kept in the order the citations appear on",
+  "# it, so two citations swapping which lines they point at moves blocks here.",
 ];
 
 /** `@ page file` followed by the cited lines, each prefixed `|`. */

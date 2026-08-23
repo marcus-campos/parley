@@ -7,71 +7,10 @@
 #
 # Read a diff here as a question about the sentence doing the citing, not as
 # a chore. If the text under a page changed, go and re-read that page.
+#
+# Entries are grouped by page and kept in the order the citations appear on
+# it, so two citations swapping which lines they point at moves blocks here.
 
-@ docs/concepts/permission.md src/cli/main.ts 10ba00db6b31
-|       case "grant": {
-|         const id = p.positional[0];
-|         if (!id) fail(p, "grant needs a request id");
-|         const r = await send({ op: "grant", request: id, scope: flagString(p.flags, "scope", "once") });
-|         if (!r.ok) fail(p, describeError(r));
-|         return out(p, "parley: granted", r);
-|       }
-|
-|       case "deny": {
-|         const id = p.positional[0];
-|         if (!id) fail(p, "deny needs a request id");
-|         const r = await send({ op: "deny", request: id, reason: flagString(p.flags, "reason") });
-|         if (!r.ok) fail(p, describeError(r));
-@ docs/concepts/permission.md src/cli/main.ts 253643ba318b
-|   } catch (e) {
-|     // parley broken must never stop the work: say so, exit clean for hooks.
-|     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
-|       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
-|       process.exit(0);
-|     }
-@ docs/concepts/permission.md src/protocol/types.ts 6d14fa41e3ec
-|   PERMISSION_TTL_MS: 5 * 60_000,
-@ docs/concepts/permission.md src/state/permissions.ts 07854a507a6f
-|         text: `${requester?.name ?? "someone"} took ${request.path} by timeout; ${owner?.name ?? "the owner"} did not answer in ${waited} min.`,
-@ docs/concepts/permission.md src/state/permissions.ts ead73426b347
-|   const held = state.claims.find((c) => c.pattern === request.path || ownerOfPath(state, request.path)?.pattern === c.pattern);
-|   if (scope === "transfer" && held) {
-|     held.ownerId = request.requesterId;
-|     held.since = ctx.now;
-|     held.auto = false;
-|     held.lastTouchMs = ctx.nowMs;
-|     held.orphanedAtMs = null;
-|   } else {
-|     // `once`: carve the single path out of the owner's territory and hand it over.
-|     state.claims.push({
-|       pattern: request.path,
-|       ownerId: request.requesterId,
-|       intent: request.reason,
-|       since: ctx.now,
-|       auto: false,
-|       lastTouchMs: ctx.nowMs,
-|       orphanedAtMs: null,
-|     });
-|   }
-@ docs/concepts/permission.md src/state/permissions.ts 9144241d36ca
-|   const owner = state.participants[request.ownerId];
-|   const event = pushEvent(state, ctx, {
-|     kind: "system",
-|     from: null,
-|     to: owner?.name ?? null,
-|     priority: "high",
-|     text: `${me.name} asks for ${path} — ${request.reason || "no reason given"} (request ${request.id}, ${Math.round(ttlMs / 1000)}s to answer)`,
-|   });
-@ docs/concepts/permission.md src/state/permissions.ts 999ffa78b13f
-|   if (state.mode === "off") {
-|     return { state, response: ok({ mode: "off", state: "granted", reason: "territory disabled" }), broadcast: [] };
-|   }
-@ docs/concepts/permission.md src/state/permissions.ts f3212eee0754
-| /**
-|  * Expiry is a grant, and it is announced by name. An idle agent is the most
-|  * expensive waste in the system; naming who failed to answer is what stops the
-|  * timeout from quietly becoming the normal path.
 @ docs/concepts/permission.md src/state/permissions.ts 7dd361c7f58e
 | export function ask(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
 |   const me = actorOf(state, actorId);
@@ -93,27 +32,15 @@
 |     // Nothing to ask: the path is free, or already yours.
 |     return { state, response: ok({ state: "granted", reason: held ? "already yours" : "unclaimed" }), broadcast: [] };
 |   }
-@ docs/concepts/permission.md src/state/permissions.ts 33b7eae0c0f5
-| export function expirePermissions(state: State, ctx: Ctx) {
-|   const broadcast = [];
-|   for (const request of Object.values(state.requests)) {
-|     if (request.state !== "pending" || ctx.nowMs < request.expiresAtMs) continue;
-|     settle(state, request, ctx, "granted_by_timeout", "once");
-|     const owner = state.participants[request.ownerId];
-|     const requester = state.participants[request.requesterId];
-|     const waited = Math.round((request.expiresAtMs - new Date(request.createdAt).getTime()) / 60000);
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system",
-|         from: null,
-|         to: null,
-|         priority: "high",
-|         text: `${requester?.name ?? "someone"} took ${request.path} by timeout; ${owner?.name ?? "the owner"} did not answer in ${waited} min.`,
-|       }),
-|     );
-|   }
-|   return broadcast;
-| }
+@ docs/concepts/permission.md src/state/permissions.ts 9144241d36ca
+|   const owner = state.participants[request.ownerId];
+|   const event = pushEvent(state, ctx, {
+|     kind: "system",
+|     from: null,
+|     to: owner?.name ?? null,
+|     priority: "high",
+|     text: `${me.name} asks for ${path} — ${request.reason || "no reason given"} (request ${request.id}, ${Math.round(ttlMs / 1000)}s to answer)`,
+|   });
 @ docs/concepts/permission.md src/state/permissions.ts f132943879b0
 | export function grant(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
 |   const me = actorOf(state, actorId);
@@ -156,73 +83,81 @@
 |   if (request.state !== "pending") {
 |     return { state, response: err("NOT_OWNER", `request already ${request.state}`), broadcast: [] };
 |   }
-@ docs/concepts/presence.md src/daemon/server.ts 9fa6c5d85cbd
-|   private dropConn(conn: Conn): void {
-|     if (!this.conns.delete(conn)) return;
-|     const p = conn.participantId ? this.state.participants[conn.participantId] : undefined;
-|     if (p) {
-|       p.connected = false;
-|       // Fall back to the lease: a dropped connection is not proof of death for
-|       // a front that also renews through the CLI.
-|       p.lastSeenMs = this.now();
-|     }
-|     this.lastActivityMs = this.now();
+@ docs/concepts/permission.md src/cli/main.ts 10ba00db6b31
+|       case "grant": {
+|         const id = p.positional[0];
+|         if (!id) fail(p, "grant needs a request id");
+|         const r = await send({ op: "grant", request: id, scope: flagString(p.flags, "scope", "once") });
+|         if (!r.ok) fail(p, describeError(r));
+|         return out(p, "parley: granted", r);
+|       }
+|
+|       case "deny": {
+|         const id = p.positional[0];
+|         if (!id) fail(p, "deny needs a request id");
+|         const r = await send({ op: "deny", request: id, reason: flagString(p.flags, "reason") });
+|         if (!r.ok) fail(p, describeError(r));
+@ docs/concepts/permission.md src/state/permissions.ts ead73426b347
+|   const held = state.claims.find((c) => c.pattern === request.path || ownerOfPath(state, request.path)?.pattern === c.pattern);
+|   if (scope === "transfer" && held) {
+|     held.ownerId = request.requesterId;
+|     held.since = ctx.now;
+|     held.auto = false;
+|     held.lastTouchMs = ctx.nowMs;
+|     held.orphanedAtMs = null;
+|   } else {
+|     // `once`: carve the single path out of the owner's territory and hand it over.
+|     state.claims.push({
+|       pattern: request.path,
+|       ownerId: request.requesterId,
+|       intent: request.reason,
+|       since: ctx.now,
+|       auto: false,
+|       lastTouchMs: ctx.nowMs,
+|       orphanedAtMs: null,
+|     });
 |   }
-@ docs/concepts/presence.md src/daemon/server.ts 403994b95104
-|   private restore(mode: Mode): State {
-|     const state = initialState(mode);
-|     const { entries, discarded } = this.journal.replay();
-|     for (const entry of entries) {
-|       const ms = Date.parse(entry.at);
-|       apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
-|     }
-|     // Nothing survives a restart connected; presence has to be re-proven.
-|     for (const p of Object.values(state.participants)) p.connected = false;
-|     if (discarded.length > 0) {
-|       process.stderr.write(
-|         `parley: discarded ${discarded.length} unreadable journal line(s); starting anyway\n`,
-|       );
-|     }
-|     return state;
-|   }
-@ docs/concepts/presence.md src/protocol/types.ts 8b91b904cde7
-|   LEASE_TTL_MS: 5 * 60_000,
-@ docs/concepts/presence.md src/state/machine.ts 6fcf2b7f98eb
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
+@ docs/concepts/permission.md src/protocol/types.ts 6d14fa41e3ec
+|   PERMISSION_TTL_MS: 5 * 60_000,
+@ docs/concepts/permission.md src/state/permissions.ts 07854a507a6f
+|         text: `${requester?.name ?? "someone"} took ${request.path} by timeout; ${owner?.name ?? "the owner"} did not answer in ${waited} min.`,
+@ docs/concepts/permission.md src/state/permissions.ts f3212eee0754
+| /**
+|  * Expiry is a grant, and it is announced by name. An idle agent is the most
+|  * expensive waste in the system; naming who failed to answer is what stops the
+|  * timeout from quietly becoming the normal path.
+@ docs/concepts/permission.md src/state/permissions.ts 33b7eae0c0f5
+| export function expirePermissions(state: State, ctx: Ctx) {
+|   const broadcast = [];
+|   for (const request of Object.values(state.requests)) {
+|     if (request.state !== "pending" || ctx.nowMs < request.expiresAtMs) continue;
+|     settle(state, request, ctx, "granted_by_timeout", "once");
+|     const owner = state.participants[request.ownerId];
+|     const requester = state.participants[request.requesterId];
+|     const waited = Math.round((request.expiresAtMs - new Date(request.createdAt).getTime()) / 60000);
 |     broadcast.push(
 |       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
+|         kind: "system",
+|         from: null,
+|         to: null,
+|         priority: "high",
+|         text: `${requester?.name ?? "someone"} took ${request.path} by timeout; ${owner?.name ?? "the owner"} did not answer in ${waited} min.`,
 |       }),
 |     );
 |   }
-@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
-|       }),
-|     );
+|   return broadcast;
+| }
+@ docs/concepts/permission.md src/cli/main.ts 253643ba318b
+|   } catch (e) {
+|     // parley broken must never stop the work: say so, exit clean for hooks.
+|     if (e instanceof ParleyUnreachable) {
+|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
+|       process.exit(0);
+|     }
+@ docs/concepts/permission.md src/state/permissions.ts 999ffa78b13f
+|   if (state.mode === "off") {
+|     return { state, response: ok({ mode: "off", state: "granted", reason: "territory disabled" }), broadcast: [] };
 |   }
 @ docs/concepts/presence.md src/state/participants.ts c4f77b8624f3
 | export function who(state: State, ctx: Ctx): Outcome {
@@ -235,6 +170,25 @@
 |     broadcast: [],
 |   };
 | }
+@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
+|   // 1. A front that stopped renewing its lease is gone. A live connection is
+|   //    proof on its own, so only lease-only participants can expire this way.
+|   for (const p of liveParticipants(state)) {
+|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
+|     p.gone = true;
+|     const held = state.claims.filter((c) => c.ownerId === p.id);
+|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
+|     broadcast.push(
+|       pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "high",
+|         text: held.length
+|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
+|           : `${p.name} dropped`,
+|       }),
+|     );
+|   }
+@ docs/concepts/presence.md src/protocol/types.ts 8b91b904cde7
+|   LEASE_TTL_MS: 5 * 60_000,
 @ docs/concepts/presence.md src/state/types.ts c8ccdbfef7ec
 | export function publicParticipant(p: Participant, state: State, ctx: Ctx) {
 |   return {
@@ -272,20 +226,55 @@
 |     idle_s: Math.max(0, Math.round((ctx.nowMs - p.lastSeenMs) / 1000)),
 |     claims: state.claims.filter((c) => c.ownerId === p.id).map((c) => c.pattern),
 |   };
-@ docs/concepts/recall.md src/brain/lexical.ts 7fd5356bdaad
-|      * A hit qualifies only if it matched a term that does not appear in a
-|      * majority of the corpus. IDF already pushes ubiquitous terms toward
-|      * zero, but never all the way there, so without this a note sharing
-|      * only a common word with the query would still outrank returning
-|      * nothing — and returning the least-bad note is worse than silence
-|      * (spec §6). Document frequency is scale-free: the same rule reads the
-@ docs/concepts/recall.md src/brain/lexical.ts 64828ad959fb
-|  * Below this many documents, "a term present in half the corpus" is not a
-|  * meaningful signal — it is one or two notes, and the threshold below would
-|  * just as easily throw away the only note there is. The rule only switches
-|  * on once the corpus is big enough for document frequency to mean something.
-|  */
-| const MIN_DOCS_FOR_THRESHOLD = 4;
+@ docs/concepts/presence.md src/state/machine.ts 6fcf2b7f98eb
+|   // 1. A front that stopped renewing its lease is gone. A live connection is
+|   //    proof on its own, so only lease-only participants can expire this way.
+@ docs/concepts/presence.md src/daemon/server.ts 9fa6c5d85cbd
+|   private dropConn(conn: Conn): void {
+|     if (!this.conns.delete(conn)) return;
+|     const p = conn.participantId ? this.state.participants[conn.participantId] : undefined;
+|     if (p) {
+|       p.connected = false;
+|       // Fall back to the lease: a dropped connection is not proof of death for
+|       // a front that also renews through the CLI.
+|       p.lastSeenMs = this.now();
+|     }
+|     this.lastActivityMs = this.now();
+|   }
+@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
+|   // 1. A front that stopped renewing its lease is gone. A live connection is
+|   //    proof on its own, so only lease-only participants can expire this way.
+|   for (const p of liveParticipants(state)) {
+|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
+|     p.gone = true;
+|     const held = state.claims.filter((c) => c.ownerId === p.id);
+|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
+|     broadcast.push(
+|       pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "high",
+|         text: held.length
+|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
+|           : `${p.name} dropped`,
+|       }),
+|     );
+|   }
+@ docs/concepts/presence.md src/daemon/server.ts 403994b95104
+|   private restore(mode: Mode): State {
+|     const state = initialState(mode);
+|     const { entries, discarded } = this.journal.replay();
+|     for (const entry of entries) {
+|       const ms = Date.parse(entry.at);
+|       apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
+|     }
+|     // Nothing survives a restart connected; presence has to be re-proven.
+|     for (const p of Object.values(state.participants)) p.connected = false;
+|     if (discarded.length > 0) {
+|       process.stderr.write(
+|         `parley: discarded ${discarded.length} unreadable journal line(s); starting anyway\n`,
+|       );
+|     }
+|     return state;
+|   }
 @ docs/concepts/recall.md src/brain/lexical.ts afa200c5f10d
 | /**
 |  * The floor. Always present, deterministic, no model, no download.
@@ -294,56 +283,6 @@
 |  * what answers if the model is missing, and what a fresh install has on day
 |  * one. The brain is strictly additive on top of this.
 |  */
-@ docs/concepts/recall.md src/brain/lexical.ts 9443fbf9894d
-| /** Rebuilt from state on daemon boot; state is itself rebuilt from the journal. */
-| export function indexFromState(state: State): LexicalIndex {
-|   const index = new LexicalIndex();
-|   for (const note of state.notes) {
-|     if (note.reversedBy !== null) continue;
-|     index.add(note.id, note.kind, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" "));
-|   }
-|   for (const result of Object.values(state.results)) {
-|     index.add(result.key, "result", [result.key, result.summary, result.paths.join(" ")].join(" "));
-|   }
-|   return index;
-| }
-@ docs/concepts/recall.md src/brain/registry.ts ec07b2909527
-|  * Fill in the real sha256 for each entry when the asset is published; the tests
-|  * assert the shape, and the downloader refuses anything that does not match.
-@ docs/concepts/recall.md src/brain/registry.ts bae3b9501ffb
-| export interface BrainModel {
-|   name: string;
-|   dims: number;
-|   /** Human-readable, shown at the prompt before anyone agrees to a download. */
-|   languages: string;
-|   bytes: number;
-|   url: string;
-|   sha256: string;
-|   /** `wordlevel` needs only a regex split. `xlmr` needs a real tokenizer. */
-|   tokenizer: "wordlevel" | "xlmr";
-| }
-|
-| /**
-|  * Static models only.
-|  *
-|  * A token lookup table plus pooling: deterministic, microseconds, and no
-|  * per-platform native runtime — which is what keeps the Windows, WSL and arm64
-|  * work intact. Transformer models are excluded on all three counts.
-|  *
-|  * Fill in the real sha256 for each entry when the asset is published; the tests
-|  * assert the shape, and the downloader refuses anything that does not match.
-|  */
-| export const MODELS: BrainModel[] = [
-|   {
-|     name: "potion-multilingual-128M-int8",
-|     dims: 256,
-|     languages: "101 languages, including Portuguese",
-|     bytes: 100 * 1024 * 1024,
-|     url: "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
-|     sha256: "0".repeat(64),
-|     tokenizer: "xlmr",
-|   },
-| ];
 @ docs/concepts/recall.md src/brain/tokenize.ts 32270cec01c1
 | /**
 |  * This corpus is notes about code: `screen_builder.html`, `select2`,
@@ -372,14 +311,50 @@
 |   // Duplicates are kept on purpose: BM25 scores on term frequency.
 |   return out;
 | }
-@ docs/concepts/recall.md src/cli/main.ts 253643ba318b
-|   } catch (e) {
-|     // parley broken must never stop the work: say so, exit clean for hooks.
-|     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
-|       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
-|       process.exit(0);
-|     }
+@ docs/concepts/recall.md src/brain/lexical.ts 7fd5356bdaad
+|      * A hit qualifies only if it matched a term that does not appear in a
+|      * majority of the corpus. IDF already pushes ubiquitous terms toward
+|      * zero, but never all the way there, so without this a note sharing
+|      * only a common word with the query would still outrank returning
+|      * nothing — and returning the least-bad note is worse than silence
+|      * (spec §6). Document frequency is scale-free: the same rule reads the
+@ docs/concepts/recall.md src/brain/lexical.ts 64828ad959fb
+|  * Below this many documents, "a term present in half the corpus" is not a
+|  * meaningful signal — it is one or two notes, and the threshold below would
+|  * just as easily throw away the only note there is. The rule only switches
+|  * on once the corpus is big enough for document frequency to mean something.
+|  */
+| const MIN_DOCS_FOR_THRESHOLD = 4;
+@ docs/concepts/recall.md src/brain/lexical.ts 9443fbf9894d
+| /** Rebuilt from state on daemon boot; state is itself rebuilt from the journal. */
+| export function indexFromState(state: State): LexicalIndex {
+|   const index = new LexicalIndex();
+|   for (const note of state.notes) {
+|     if (note.reversedBy !== null) continue;
+|     index.add(note.id, note.kind, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" "));
+|   }
+|   for (const result of Object.values(state.results)) {
+|     index.add(result.key, "result", [result.key, result.summary, result.paths.join(" ")].join(" "));
+|   }
+|   return index;
+| }
+@ docs/concepts/recall.md src/daemon/server.ts 041e9bae408b
+|       } else if (op === "reverse") {
+|         const id = typeof response.id === "string" ? response.id : null;
+|         if (id) this.index.remove(id);
+@ docs/concepts/recall.md src/state/notes.ts fec2ba968283
+|   // The daemon resolves `q` into ranked `ids` before calling `apply` — this
+|   // module has no clock and no I/O, so it cannot search on its own. A direct
+@ docs/concepts/recall.md src/daemon/server.ts 1cc10770ac0a
+|     // The journal keeps exactly the frame that came over the wire; ranking
+|     // only touches the copy handed to `apply`, so a replay never has to agree
+|     // with what the index looked like at write time.
+|     let toApply = frame;
+@ docs/concepts/recall.md src/daemon/server.ts 411d145a71d7
+|         const hits = this.index
+|           .search(frame.q, this.index.size)
+|           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
+|         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
 @ docs/concepts/recall.md src/daemon/server.ts 32292d6e5fd0
 |         // `search` ranks across every kind in one corpus-wide score, and its
 |         // distinctiveness threshold is a property of the whole corpus — a
@@ -390,39 +365,31 @@
 |         // the whole index back costs almost nothing extra, because `search`
 |         // already scores and sorts every candidate before slicing — the
 |         // kind filter below only changes where the slice happens.
-@ docs/concepts/recall.md src/daemon/server.ts 411d145a71d7
-|         const hits = this.index
-|           .search(frame.q, this.index.size)
-|           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
-|         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
 @ docs/concepts/recall.md src/daemon/server.ts 6793f9e1fc0a
 |         const k = typeof frame.k === "number" ? Math.max(1, Math.min(20, frame.k)) : 5;
+@ docs/concepts/recall.md src/state/work.ts 2c79ea7c0ba4
+| /**
+|  * What this front needs to know about the pool, in the fewest lines that can
+|  * carry it.
+|  *
+|  * Named offers, then a count. Dumping the pool into every tool call would cost
+|  * more tokens than the pool saves — the whole point of ranking anything is that
+|  * the footer carries the top of it, never the corpus.
+|  */
 @ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
 |       } catch (e) {
 |         // A broken index must never take the query down with it — the honest
 |         // degrade is the same unranked list a plain notes/results call gets.
 |         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
 |       }
-@ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
-|       } catch (e) {
-|         // A broken index must never take the query down with it — the honest
-|         // degrade is the same unranked list a plain notes/results call gets.
-|         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
-|       }
-@ docs/concepts/recall.md src/daemon/server.ts 041e9bae408b
-|       } else if (op === "reverse") {
-|         const id = typeof response.id === "string" ? response.id : null;
-|         if (id) this.index.remove(id);
-@ docs/concepts/recall.md src/daemon/server.ts 1cc10770ac0a
-|     // The journal keeps exactly the frame that came over the wire; ranking
-|     // only touches the copy handed to `apply`, so a replay never has to agree
-|     // with what the index looked like at write time.
-|     let toApply = frame;
-@ docs/concepts/recall.md src/state/machine.ts a793951a7c83
-|  * front is stuck on the floor. Turning the brain on or off is a different
-|  * matter: a ~100MB download and a model choice spend somebody's disk and
-|  * somebody's money, on somebody's machine, and an agent cannot answer the
-|  * interactive prompt that decision deserves on that person's behalf.
+@ docs/concepts/recall.md src/state/types.ts 2b5fb96f7212
+|   /**
+|    * The optional layer above the lexical floor. `active`/`model` are the
+|    * person's decision (`parley brain enable`, human-only — see machine.ts);
+|    * `askedAtMs` is parley's own nudge-once bookkeeping for the panel notice
+|    * raised the first time a front wants semantic recall while it is off.
+|    */
+|   brain: { active: boolean; model: string | null; askedAtMs: number | null };
 @ docs/concepts/recall.md src/state/machine.ts 9ef5b31ef43d
 | function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
 |   const acting = frame.enable !== undefined || frame.disable !== undefined;
@@ -462,6 +429,48 @@
 |   state.brain.askedAtMs = null;
 |   return { state, response: ok({ active: true, model: model.name }), broadcast: [] };
 | }
+@ docs/concepts/recall.md src/state/machine.ts a793951a7c83
+|  * front is stuck on the floor. Turning the brain on or off is a different
+|  * matter: a ~100MB download and a model choice spend somebody's disk and
+|  * somebody's money, on somebody's machine, and an agent cannot answer the
+|  * interactive prompt that decision deserves on that person's behalf.
+@ docs/concepts/recall.md src/brain/registry.ts bae3b9501ffb
+| export interface BrainModel {
+|   name: string;
+|   dims: number;
+|   /** Human-readable, shown at the prompt before anyone agrees to a download. */
+|   languages: string;
+|   bytes: number;
+|   url: string;
+|   sha256: string;
+|   /** `wordlevel` needs only a regex split. `xlmr` needs a real tokenizer. */
+|   tokenizer: "wordlevel" | "xlmr";
+| }
+|
+| /**
+|  * Static models only.
+|  *
+|  * A token lookup table plus pooling: deterministic, microseconds, and no
+|  * per-platform native runtime — which is what keeps the Windows, WSL and arm64
+|  * work intact. Transformer models are excluded on all three counts.
+|  *
+|  * Fill in the real sha256 for each entry when the asset is published; the tests
+|  * assert the shape, and the downloader refuses anything that does not match.
+|  */
+| export const MODELS: BrainModel[] = [
+|   {
+|     name: "potion-multilingual-128M-int8",
+|     dims: 256,
+|     languages: "101 languages, including Portuguese",
+|     bytes: 100 * 1024 * 1024,
+|     url: "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
+|     sha256: "0".repeat(64),
+|     tokenizer: "xlmr",
+|   },
+| ];
+@ docs/concepts/recall.md src/brain/registry.ts ec07b2909527
+|  * Fill in the real sha256 for each entry when the asset is published; the tests
+|  * assert the shape, and the downloader refuses anything that does not match.
 @ docs/concepts/recall.md src/state/notes.ts 4f95c6a8955f
 |   // A front asking for `semantic` recall cannot be blocked on a prompt it has
 |   // no way to answer — a model choice and a ~100MB download are the person's
@@ -478,27 +487,13 @@
 |       text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
 |     }));
 |   }
-@ docs/concepts/recall.md src/state/notes.ts fec2ba968283
-|   // The daemon resolves `q` into ranked `ids` before calling `apply` — this
-|   // module has no clock and no I/O, so it cannot search on its own. A direct
-@ docs/concepts/recall.md src/state/types.ts 2b5fb96f7212
-|   /**
-|    * The optional layer above the lexical floor. `active`/`model` are the
-|    * person's decision (`parley brain enable`, human-only — see machine.ts);
-|    * `askedAtMs` is parley's own nudge-once bookkeeping for the panel notice
-|    * raised the first time a front wants semantic recall while it is off.
-|    */
-|   brain: { active: boolean; model: string | null; askedAtMs: number | null };
-@ docs/concepts/recall.md src/state/work.ts 2c79ea7c0ba4
-| /**
-|  * What this front needs to know about the pool, in the fewest lines that can
-|  * carry it.
-|  *
-|  * Named offers, then a count. Dumping the pool into every tool call would cost
-|  * more tokens than the pool saves — the whole point of ranking anything is that
-|  * the footer carries the top of it, never the corpus.
-|  */
-@ docs/concepts/shapes.md src/cli/main.ts 253643ba318b
+@ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
+|       } catch (e) {
+|         // A broken index must never take the query down with it — the honest
+|         // degrade is the same unranked list a plain notes/results call gets.
+|         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
+|       }
+@ docs/concepts/recall.md src/cli/main.ts 253643ba318b
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
@@ -506,33 +501,41 @@
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
-@ docs/concepts/shapes.md src/protocol/types.ts 666da802ade6
-| export type Shape = "bus" | "pool" | "plan";
-| export const SHAPES = ["bus", "pool", "plan"] as const;
-@ docs/concepts/shapes.md src/protocol/types.ts 666da802ade6
-| export type Shape = "bus" | "pool" | "plan";
-| export const SHAPES = ["bus", "pool", "plan"] as const;
-@ docs/concepts/shapes.md src/state/machine.ts 126f4b9de02f
-|   if (wanted !== "bus" && wanted !== "pool" && wanted !== "plan") {
-@ docs/concepts/shapes.md src/state/machine.ts 98f8384d5d42
-|   return {
-|     state,
-|     response: ok({ shape: state.shape }),
-|     broadcast: [pushEvent(state, ctx, {
-|       kind: "system", from: null, to: null, priority: "high",
-|       text: `shape is now ${wanted} (was ${before}) — it belongs to the repository, not to a session`,
-|     })],
-|   };
-@ docs/concepts/shapes.md src/state/types.ts 4c42bd5063fd
-|     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
 @ docs/concepts/shapes.md src/state/types.ts f69f762008df
 |   /**
 |    * Where work comes from. Orthogonal to `mode`, which is how strict territory
 |    * is. Repo-scoped for the same reason: a front in `bus` inside a `plan`
 |    * would ignore dispatch, and the plan would be theatre.
 |    */
-@ docs/concepts/shapes.md src/state/types.ts 25679391e9e8
-|   origin: "discovered" | "planned";
+@ docs/concepts/shapes.md src/protocol/types.ts 666da802ade6
+| export type Shape = "bus" | "pool" | "plan";
+| export const SHAPES = ["bus", "pool", "plan"] as const;
+@ docs/concepts/shapes.md src/state/types.ts 4c42bd5063fd
+|     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
+@ docs/concepts/shapes.md src/state/work.ts fa458c7dd6b4
+| /**
+|  * A front publishes what it found. One item per path, because the unit of
+|  * territory is the path — which is what lets an owner refuse two files and keep
+|  * ten, and lets the pool receive exactly what was refused.
+|  */
+@ docs/concepts/shapes.md src/state/work.ts a05b15e02764
+| export function ownerForPath(state: State, path: string, exceptId: string): string | null {
+|   const live = new Set(liveParticipants(state).map((p) => p.id));
+|   const candidates = state.claims.filter(
+|     (c) => c.orphanedAtMs === null && c.ownerId !== exceptId && live.has(c.ownerId) && matchesPath(c.pattern, path),
+|   );
+|   if (candidates.length === 0) return null;
+|   // Specific beats broad; on a tie the older claim wins. Deterministic, and the
+|   // loser is never consulted — this is a routing hint, not a permission.
+|   const best = candidates.reduce((a, b) => {
+|     const bySegments = b.pattern.split("/").length - a.pattern.split("/").length;
+|     if (bySegments !== 0) return bySegments > 0 ? b : a;
+|     const byWildcard = (a.pattern.includes("*") ? 1 : 0) - (b.pattern.includes("*") ? 1 : 0);
+|     if (byWildcard !== 0) return byWildcard > 0 ? b : a;
+|     return a.lastTouchMs <= b.lastTouchMs ? a : b;
+|   });
+|   return best.ownerId;
+| }
 @ docs/concepts/shapes.md src/state/work.ts 3eb1f3452188
 |   const created: WorkItem[] = [];
 |   for (const path of paths) {
@@ -558,58 +561,30 @@
 |     state.work.push(item);
 |     created.push(item);
 |   }
-@ docs/concepts/shapes.md src/state/work.ts b5f091e36191
-|   const origin = frame.origin === "planned" ? "planned" : "discovered";
-@ docs/concepts/shapes.md src/state/work.ts b06aa24f19ff
-|   if (state.shape === "bus") {
 @ docs/concepts/shapes.md src/state/work.ts 95645e2cc957
 |   if (state.shape === "bus") {
 |     return { state, response: err("UNKNOWN_OP", "there is no pool in shape bus — parley shape pool"), broadcast: [] };
 |   }
-@ docs/concepts/shapes.md src/state/work.ts 9f1b47ec858e
-|   if (state.shape === "bus") return "";
 @ docs/concepts/shapes.md src/state/work.ts 9b8a3ee636f4
 |  * Possession is what routes discovered work — no plan, no parent. It buys the
 |  * first refusal and nothing more: the item is an offer, and the owner may drop
 |  * it. Otherwise the front that discovered the work would have acquired
 |  * authority over the front that holds the file, which is the hierarchy this
 |  * whole system exists to do without.
-@ docs/concepts/shapes.md src/state/work.ts fa458c7dd6b4
-| /**
-|  * A front publishes what it found. One item per path, because the unit of
-|  * territory is the path — which is what lets an owner refuse two files and keep
-|  * ten, and lets the pool receive exactly what was refused.
-|  */
-@ docs/concepts/shapes.md src/state/work.ts a05b15e02764
-| export function ownerForPath(state: State, path: string, exceptId: string): string | null {
-|   const live = new Set(liveParticipants(state).map((p) => p.id));
-|   const candidates = state.claims.filter(
-|     (c) => c.orphanedAtMs === null && c.ownerId !== exceptId && live.has(c.ownerId) && matchesPath(c.pattern, path),
-|   );
-|   if (candidates.length === 0) return null;
-|   // Specific beats broad; on a tie the older claim wins. Deterministic, and the
-|   // loser is never consulted — this is a routing hint, not a permission.
-|   const best = candidates.reduce((a, b) => {
-|     const bySegments = b.pattern.split("/").length - a.pattern.split("/").length;
-|     if (bySegments !== 0) return bySegments > 0 ? b : a;
-|     const byWildcard = (a.pattern.includes("*") ? 1 : 0) - (b.pattern.includes("*") ? 1 : 0);
-|     if (byWildcard !== 0) return byWildcard > 0 ? b : a;
-|     return a.lastTouchMs <= b.lastTouchMs ? a : b;
-|   });
-|   return best.ownerId;
-| }
-@ docs/concepts/territory.md src/adapters/hook.ts ec121c2c31ab
-|   let client: ParleyClient;
-|   try {
-|     client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir, timeoutMs: 2_000 });
-|   } catch (e) {
-|     clearTimeout(budget);
-|     // enforced degrades to advisory when the daemon is unreachable. A
-|     // coordination system that freezes the machine when it fails is worse than
-|     // no system at all.
-|     if (e instanceof ParleyUnreachable) return emit({});
-|     throw e;
-@ docs/concepts/territory.md src/cli/main.ts 253643ba318b
+@ docs/concepts/shapes.md src/protocol/types.ts 666da802ade6
+| export type Shape = "bus" | "pool" | "plan";
+| export const SHAPES = ["bus", "pool", "plan"] as const;
+@ docs/concepts/shapes.md src/state/machine.ts 126f4b9de02f
+|   if (wanted !== "bus" && wanted !== "pool" && wanted !== "plan") {
+@ docs/concepts/shapes.md src/state/work.ts b06aa24f19ff
+|   if (state.shape === "bus") {
+@ docs/concepts/shapes.md src/state/work.ts 9f1b47ec858e
+|   if (state.shape === "bus") return "";
+@ docs/concepts/shapes.md src/state/types.ts 25679391e9e8
+|   origin: "discovered" | "planned";
+@ docs/concepts/shapes.md src/state/work.ts b5f091e36191
+|   const origin = frame.origin === "planned" ? "planned" : "discovered";
+@ docs/concepts/shapes.md src/cli/main.ts 253643ba318b
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
@@ -617,10 +592,32 @@
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
-@ docs/concepts/territory.md src/protocol/types.ts a739aeb69ae4
-|   AUTO_CLAIM_TTL_MS: 15 * 60_000,
-@ docs/concepts/territory.md src/protocol/types.ts ee6591a650f7
-|   ORPHAN_GRACE_MS: 60_000,
+@ docs/concepts/shapes.md src/state/machine.ts 98f8384d5d42
+|   return {
+|     state,
+|     response: ok({ shape: state.shape }),
+|     broadcast: [pushEvent(state, ctx, {
+|       kind: "system", from: null, to: null, priority: "high",
+|       text: `shape is now ${wanted} (was ${before}) — it belongs to the repository, not to a session`,
+|     })],
+|   };
+@ docs/concepts/territory.md src/repo/paths.ts 9e51507f2261
+| function segsCompatible(a: string, b: string): boolean {
+|   const wa = WILDCARD.test(a);
+|   const wb = WILDCARD.test(b);
+|   if (!wa && !wb) return a === b;
+|   if (wa && !wb) return segRegex(a).test(b);
+|   if (!wa && wb) return segRegex(b).test(a);
+|   // Both sides carry wildcards. Deciding this exactly is regex intersection;
+|   // we answer "maybe" and let the conflict surface. Deliberately conservative:
+|   // a false conflict costs one conversation, a false clear costs two agents
+|   // editing the same file.
+|   return true;
+| }
+@ docs/concepts/territory.md src/state/territory.ts 1f15584135f9
+| export function conflictsFor(state: State, pattern: string, ownerId: string): Claim[] {
+|   return state.claims.filter((c) => c.ownerId !== ownerId && patternsOverlap(c.pattern, pattern));
+| }
 @ docs/concepts/territory.md src/repo/paths.ts 5e9a6f6f0274
 |   // Both sides carry wildcards. Deciding this exactly is regex intersection;
 |   // we answer "maybe" and let the conflict surface. Deliberately conservative:
@@ -643,36 +640,15 @@
 |   const last = segs[segs.length - 1] ?? "";
 |   return last.indexOf(".", 1) === -1;
 | }
-@ docs/concepts/territory.md src/repo/paths.ts 9e51507f2261
-| function segsCompatible(a: string, b: string): boolean {
-|   const wa = WILDCARD.test(a);
-|   const wb = WILDCARD.test(b);
-|   if (!wa && !wb) return a === b;
-|   if (wa && !wb) return segRegex(a).test(b);
-|   if (!wa && wb) return segRegex(b).test(a);
-|   // Both sides carry wildcards. Deciding this exactly is regex intersection;
-|   // we answer "maybe" and let the conflict surface. Deliberately conservative:
-|   // a false conflict costs one conversation, a false clear costs two agents
-|   // editing the same file.
-|   return true;
-| }
-@ docs/concepts/territory.md src/state/machine.ts 051c4d79b695
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
-|       }),
-|     );
-|   }
+@ docs/concepts/territory.md src/state/territory.ts 6bd533765eb2
+|     if (mine) {
+|       mine.lastTouchMs = ctx.nowMs;
+|       mine.orphanedAtMs = null;
+|       // An explicit claim over an auto-claim promotes it: it stops expiring.
+|       if (!auto) {
+|         mine.auto = false;
+|         if (intent) mine.intent = intent;
+|       }
 @ docs/concepts/territory.md src/state/machine.ts d5f88b112d0e
 |   // 2. Auto-claims decay. Without this, a front that swept the repository would
 |   //    end up owning half of it. Explicit claims never expire by inactivity.
@@ -691,24 +667,9 @@
 |       );
 |     }
 |   }
-@ docs/concepts/territory.md src/state/territory.ts 6bd533765eb2
-|     if (mine) {
-|       mine.lastTouchMs = ctx.nowMs;
-|       mine.orphanedAtMs = null;
-|       // An explicit claim over an auto-claim promotes it: it stops expiring.
-|       if (!auto) {
-|         mine.auto = false;
-|         if (intent) mine.intent = intent;
-|       }
-@ docs/concepts/territory.md src/state/territory.ts c6ba02966fcc
-|   if (state.mode === "off") {
-|     return { state, response: ok({ mode: "off", claimed: [], ignored: true }), broadcast: [] };
-|   }
-@ docs/concepts/territory.md src/state/territory.ts 1f15584135f9
-| export function conflictsFor(state: State, pattern: string, ownerId: string): Claim[] {
-|   return state.claims.filter((c) => c.ownerId !== ownerId && patternsOverlap(c.pattern, pattern));
-| }
-@ docs/concepts/work-pool.md src/cli/main.ts 253643ba318b
+@ docs/concepts/territory.md src/protocol/types.ts a739aeb69ae4
+|   AUTO_CLAIM_TTL_MS: 15 * 60_000,
+@ docs/concepts/territory.md src/cli/main.ts 253643ba318b
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
@@ -716,92 +677,64 @@
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
-@ docs/concepts/work-pool.md src/cli/main.ts ca80ad26ef47
-|   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
-@ docs/concepts/work-pool.md src/protocol/types.ts b7f7625d424d
-|   /**
-|    * How long an open item sits before the pool rings an idle front about it.
-|    * Longer than LEASE_TTL_MS, which is not incidental: a front with nothing
-|    * renewing its lease for this long is not idle capacity, it is gone — so in
-|    * practice the bell only ever reaches a front holding a live connection.
-|    */
-|   ORPHAN_POOL_MS: 10 * 60_000,
-@ docs/concepts/work-pool.md src/protocol/types.ts 8b91b904cde7
-|   LEASE_TTL_MS: 5 * 60_000,
-@ docs/concepts/work-pool.md src/protocol/types.ts 95bcbad39181
-|   OFFER_TTL_MS: 5 * 60_000,
-@ docs/concepts/work-pool.md src/protocol/types.ts ee6591a650f7
-|   ORPHAN_GRACE_MS: 60_000,
-@ docs/concepts/work-pool.md src/state/machine.ts 06453dd29b27
-|     // An offer is exclusive — only the offeree may take it — for exactly this
-|     // long. Without an expiry, one unresponsive front could hold a file's
-|     // worth of work away from everybody forever.
-|     if (item.state === "offered" && item.offeredAtMs !== null && ctx.nowMs - item.offeredAtMs > offerTtl) {
-|       const owner = state.participants[item.offeredToId ?? ""];
-|       item.state = "open";
-|       item.offeredToId = null;
-|       item.offeredAtMs = null;
-|       // An offered item cannot have been nudged (rule 6 only stamps `open`
-|       // items) — reset anyway, so no path back to `open` is left to wonder
-|       // whether leaving it out was deliberate.
-|       item.nudgedAtMs = null;
-|       broadcast.push(pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "normal",
-|         text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,
-|       }));
-|     }
-@ docs/concepts/work-pool.md src/state/machine.ts 9854d9c7fd01
-|   // 6. A pool left open beside spare capacity is the failure this whole shape
-|   //    exists to prevent: nobody blocked, nothing broken, and an idle front
-|   //    that never learns there is something to pick up. Rung once per item —
-|   //    same discipline as the question and permission nudges — so a front
-|   //    that reads nothing is never pushed round in circles.
-|   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
-|   const stale = state.work.filter(
-|     (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
-|   );
-|   if (stale.length > 0) {
-|     const idle = idleFronts(state);
-|     if (idle.length > 0) {
-|       const target = idle[0]!;
-|       for (const w of stale) w.nudgedAtMs = ctx.nowMs;
-|       broadcast.push(pushEvent(state, ctx, {
-|         // Addressed to the front it is about, same as ask/grant/deny — every
-|         // other front already gets the pool count from poolFooterFor on its
-|         // own next call, so broadcasting this too would only be noise for them.
-|         kind: "system", from: null, to: target.name, priority: "high",
-|         text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
-|       }));
-@ docs/concepts/work-pool.md src/state/machine.ts dd4ac6f215d9
-|   for (const item of state.work) {
-|     if (item.state === "done") continue;
-|
-|     if (item.state === "taken" && item.takenById) {
-|       const holder = state.participants[item.takenById];
-|       if (holder?.gone) {
-|         if (item.orphanedAtMs === null) item.orphanedAtMs = ctx.nowMs;
-|       } else {
-|         item.orphanedAtMs = null;
-|       }
-|       if (item.orphanedAtMs !== null && ctx.nowMs - item.orphanedAtMs > grace) {
-|         const name = holder?.name ?? "a front";
-|         item.state = "open";
-|         item.takenById = null;
-|         item.orphanedAtMs = null;
-|         // Same reset as a voluntary drop: back in the pool is a new episode.
-|         item.nudgedAtMs = null;
-|         broadcast.push(pushEvent(state, ctx, {
-|           kind: "system", from: null, to: null, priority: "normal",
-|           text: `${name} dropped holding ${item.paths[0]} — back in the pool`,
-|         }));
-|       }
-|       continue;
-|     }
-@ docs/concepts/work-pool.md src/state/work.ts 532a12aeb20f
-|   // Dispatch is not an offer. A planned item stays where the plan put it.
-|   if (item.origin === "planned") {
-|     return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+@ docs/concepts/territory.md src/adapters/hook.ts ec121c2c31ab
+|   let client: ParleyClient;
+|   try {
+|     client = await ParleyClient.connect({ gitCommonDir: repo.discoveryDir, busKey: repo.gitCommonDir, timeoutMs: 2_000 });
+|   } catch (e) {
+|     clearTimeout(budget);
+|     // enforced degrades to advisory when the daemon is unreachable. A
+|     // coordination system that freezes the machine when it fails is worse than
+|     // no system at all.
+|     if (e instanceof ParleyUnreachable) return emit({});
+|     throw e;
+@ docs/concepts/territory.md src/state/machine.ts 051c4d79b695
+|   // 1. A front that stopped renewing its lease is gone. A live connection is
+|   //    proof on its own, so only lease-only participants can expire this way.
+|   for (const p of liveParticipants(state)) {
+|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
+|     p.gone = true;
+|     const held = state.claims.filter((c) => c.ownerId === p.id);
+|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
+|     broadcast.push(
+|       pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "high",
+|         text: held.length
+|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
+|           : `${p.name} dropped`,
+|       }),
+|     );
 |   }
+@ docs/concepts/territory.md src/protocol/types.ts ee6591a650f7
+|   ORPHAN_GRACE_MS: 60_000,
+@ docs/concepts/territory.md src/state/territory.ts c6ba02966fcc
+|   if (state.mode === "off") {
+|     return { state, response: ok({ mode: "off", claimed: [], ignored: true }), broadcast: [] };
+|   }
+@ docs/concepts/work-pool.md src/state/work.ts fa458c7dd6b4
+| /**
+|  * A front publishes what it found. One item per path, because the unit of
+|  * territory is the path — which is what lets an owner refuse two files and keep
+|  * ten, and lets the pool receive exactly what was refused.
+|  */
+@ docs/concepts/work-pool.md src/state/work.ts a05b15e02764
+| export function ownerForPath(state: State, path: string, exceptId: string): string | null {
+|   const live = new Set(liveParticipants(state).map((p) => p.id));
+|   const candidates = state.claims.filter(
+|     (c) => c.orphanedAtMs === null && c.ownerId !== exceptId && live.has(c.ownerId) && matchesPath(c.pattern, path),
+|   );
+|   if (candidates.length === 0) return null;
+|   // Specific beats broad; on a tie the older claim wins. Deterministic, and the
+|   // loser is never consulted — this is a routing hint, not a permission.
+|   const best = candidates.reduce((a, b) => {
+|     const bySegments = b.pattern.split("/").length - a.pattern.split("/").length;
+|     if (bySegments !== 0) return bySegments > 0 ? b : a;
+|     const byWildcard = (a.pattern.includes("*") ? 1 : 0) - (b.pattern.includes("*") ? 1 : 0);
+|     if (byWildcard !== 0) return byWildcard > 0 ? b : a;
+|     return a.lastTouchMs <= b.lastTouchMs ? a : b;
+|   });
+|   return best.ownerId;
+| }
 @ docs/concepts/work-pool.md src/state/work.ts 3eb1f3452188
 |   const created: WorkItem[] = [];
 |   for (const path of paths) {
@@ -827,83 +760,6 @@
 |     state.work.push(item);
 |     created.push(item);
 |   }
-@ docs/concepts/work-pool.md src/state/work.ts b5f091e36191
-|   const origin = frame.origin === "planned" ? "planned" : "discovered";
-@ docs/concepts/work-pool.md src/state/work.ts 51aed18319ad
-|   item.nudgedAtMs = null;
-@ docs/concepts/work-pool.md src/state/work.ts 7454e1b4e435
-|   item.state = "open";
-|   item.offeredToId = null;
-|   item.offeredAtMs = null;
-|   item.takenById = null;
-|   // A front handing work back is a new stale episode, not a continuation of
-|   // whichever one earned the last nudge — drop is supposed to be free, and it
-|   // would quietly stop being free if the pool remembered past the hand-back.
-|   item.nudgedAtMs = null;
-|   me.lastSeenMs = ctx.nowMs;
-@ docs/concepts/work-pool.md src/state/work.ts 9b8a3ee636f4
-|  * Possession is what routes discovered work — no plan, no parent. It buys the
-|  * first refusal and nothing more: the item is an offer, and the owner may drop
-|  * it. Otherwise the front that discovered the work would have acquired
-|  * authority over the front that holds the file, which is the hierarchy this
-|  * whole system exists to do without.
-@ docs/concepts/work-pool.md src/state/work.ts fa458c7dd6b4
-| /**
-|  * A front publishes what it found. One item per path, because the unit of
-|  * territory is the path — which is what lets an owner refuse two files and keep
-|  * ten, and lets the pool receive exactly what was refused.
-|  */
-@ docs/concepts/work-pool.md src/state/work.ts 99f3d73bce40
-| /**
-|  * Alive fronts holding no explicit claim and no taken item — spare capacity
-|  * the doorbell may address.
-|  *
-|  * A human watching the panel is filtered out: they are not a front to
-|  * dispatch to, and counting them as idle capacity would ring the bell at
-|  * someone who was never going to pick the item up.
-|  *
-|  * An auto-claim does not count as busy either: it is the footprint of an
-|  * edit, not a declaration of what a front is doing — a session that swept
-|  * the repository would otherwise look permanently occupied.
-|  *
-|  * In practice this only ever names a front holding a live connection.
-|  * `ORPHAN_POOL_MS` is longer than `LEASE_TTL_MS` on purpose: a front that has
-|  * gone this long without renewing its lease is not idle capacity waiting to
-|  * be pinged, it is a session waiting for a person to type — the same "on its
-|  * next tool call, possibly not soon" front `tick`'s rule 1 already declares
-|  * gone before the doorbell would get the chance to ring for it.
-|  */
-@ docs/concepts/work-pool.md src/state/work.ts 579df1924479
-| /**
-|  * Notes and results named by an item, resolved once so the taker never
-|  * rediscovers. A note carries its own truth (`reversedBy` travels with it
-|  * verbatim), but a `CommandResult` does not: staleness is a read-time
-|  * function of `(state, result)`, never stamped on the stored object, which
-|  * always claims `staleBecause: null`. Handing the raw record over would let
-|  * the taker trust a green result that an intervening touch already
-|  * invalidated — so it is recomputed here, the same way `listResults` does.
-|  */
-| function evidenceFor(state: State, item: { evidenceIds: string[] }) {
-|   return {
-|     notes: state.notes.filter((n) => item.evidenceIds.includes(n.id)),
-|     results: Object.values(state.results)
-|       .filter((r) => item.evidenceIds.includes(r.key))
-|       .map((r) => ({ ...r, staleBecause: staleReason(state, r) })),
-|   };
-| }
-|
-@ docs/concepts/work-pool.md src/state/work.ts 070657cf80d7
-| /**
-|  * Possession bought the owner the first refusal, not obedience. If the owner
-|  * could not refuse, the front that discovered the work would have acquired
-|  * authority over the front that holds the file — the exact hierarchy this
-|  * system exists to do without.
-|  */
-@ docs/concepts/work-pool.md src/state/work.ts 28b7c83398cb
-| /**
-|  * Resolving the evidence here, on take, is why the front that picks the item
-|  * up does not repay the discovery. An item whose evidence does not travel is
-|  * a chat message that moved house.
 @ docs/concepts/work-pool.md src/state/work.ts 320f03609132
 | const MAX_NAMED_OFFERS = 3;
 |
@@ -934,24 +790,25 @@
 |   }
 |   return `parley pool:\n${lines.join("\n")}`;
 | }
-@ docs/concepts/work-pool.md src/state/work.ts a05b15e02764
-| export function ownerForPath(state: State, path: string, exceptId: string): string | null {
-|   const live = new Set(liveParticipants(state).map((p) => p.id));
-|   const candidates = state.claims.filter(
-|     (c) => c.orphanedAtMs === null && c.ownerId !== exceptId && live.has(c.ownerId) && matchesPath(c.pattern, path),
-|   );
-|   if (candidates.length === 0) return null;
-|   // Specific beats broad; on a tie the older claim wins. Deterministic, and the
-|   // loser is never consulted — this is a routing hint, not a permission.
-|   const best = candidates.reduce((a, b) => {
-|     const bySegments = b.pattern.split("/").length - a.pattern.split("/").length;
-|     if (bySegments !== 0) return bySegments > 0 ? b : a;
-|     const byWildcard = (a.pattern.includes("*") ? 1 : 0) - (b.pattern.includes("*") ? 1 : 0);
-|     if (byWildcard !== 0) return byWildcard > 0 ? b : a;
-|     return a.lastTouchMs <= b.lastTouchMs ? a : b;
-|   });
-|   return best.ownerId;
+@ docs/concepts/work-pool.md src/state/work.ts 579df1924479
+| /**
+|  * Notes and results named by an item, resolved once so the taker never
+|  * rediscovers. A note carries its own truth (`reversedBy` travels with it
+|  * verbatim), but a `CommandResult` does not: staleness is a read-time
+|  * function of `(state, result)`, never stamped on the stored object, which
+|  * always claims `staleBecause: null`. Handing the raw record over would let
+|  * the taker trust a green result that an intervening touch already
+|  * invalidated — so it is recomputed here, the same way `listResults` does.
+|  */
+| function evidenceFor(state: State, item: { evidenceIds: string[] }) {
+|   return {
+|     notes: state.notes.filter((n) => item.evidenceIds.includes(n.id)),
+|     results: Object.values(state.results)
+|       .filter((r) => item.evidenceIds.includes(r.key))
+|       .map((r) => ({ ...r, staleBecause: staleReason(state, r) })),
+|   };
 | }
+|
 @ docs/concepts/work-pool.md src/state/work.ts 0606db750e4a
 | export function takeWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
 |   const me = actorOf(state, actorId);
@@ -994,12 +851,152 @@
 |     })],
 |   };
 | }
-@ docs/guide/panel.md src/cli/web.ts bbdf48bb894a
-|       );
-|       process.exit(1);
+@ docs/concepts/work-pool.md src/state/work.ts 7454e1b4e435
+|   item.state = "open";
+|   item.offeredToId = null;
+|   item.offeredAtMs = null;
+|   item.takenById = null;
+|   // A front handing work back is a new stale episode, not a continuation of
+|   // whichever one earned the last nudge — drop is supposed to be free, and it
+|   // would quietly stop being free if the pool remembered past the hand-back.
+|   item.nudgedAtMs = null;
+|   me.lastSeenMs = ctx.nowMs;
+@ docs/concepts/work-pool.md src/state/work.ts 51aed18319ad
+|   item.nudgedAtMs = null;
+@ docs/concepts/work-pool.md src/cli/main.ts ca80ad26ef47
+|   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
+@ docs/concepts/work-pool.md src/state/work.ts 9b8a3ee636f4
+|  * Possession is what routes discovered work — no plan, no parent. It buys the
+|  * first refusal and nothing more: the item is an offer, and the owner may drop
+|  * it. Otherwise the front that discovered the work would have acquired
+|  * authority over the front that holds the file, which is the hierarchy this
+|  * whole system exists to do without.
+@ docs/concepts/work-pool.md src/state/work.ts 070657cf80d7
+| /**
+|  * Possession bought the owner the first refusal, not obedience. If the owner
+|  * could not refuse, the front that discovered the work would have acquired
+|  * authority over the front that holds the file — the exact hierarchy this
+|  * system exists to do without.
+|  */
+@ docs/concepts/work-pool.md src/state/work.ts 28b7c83398cb
+| /**
+|  * Resolving the evidence here, on take, is why the front that picks the item
+|  * up does not repay the discovery. An item whose evidence does not travel is
+|  * a chat message that moved house.
+@ docs/concepts/work-pool.md src/state/work.ts 99f3d73bce40
+| /**
+|  * Alive fronts holding no explicit claim and no taken item — spare capacity
+|  * the doorbell may address.
+|  *
+|  * A human watching the panel is filtered out: they are not a front to
+|  * dispatch to, and counting them as idle capacity would ring the bell at
+|  * someone who was never going to pick the item up.
+|  *
+|  * An auto-claim does not count as busy either: it is the footprint of an
+|  * edit, not a declaration of what a front is doing — a session that swept
+|  * the repository would otherwise look permanently occupied.
+|  *
+|  * In practice this only ever names a front holding a live connection.
+|  * `ORPHAN_POOL_MS` is longer than `LEASE_TTL_MS` on purpose: a front that has
+|  * gone this long without renewing its lease is not idle capacity waiting to
+|  * be pinged, it is a session waiting for a person to type — the same "on its
+|  * next tool call, possibly not soon" front `tick`'s rule 1 already declares
+|  * gone before the doorbell would get the chance to ring for it.
+|  */
+@ docs/concepts/work-pool.md src/protocol/types.ts b7f7625d424d
+|   /**
+|    * How long an open item sits before the pool rings an idle front about it.
+|    * Longer than LEASE_TTL_MS, which is not incidental: a front with nothing
+|    * renewing its lease for this long is not idle capacity, it is gone — so in
+|    * practice the bell only ever reaches a front holding a live connection.
+|    */
+|   ORPHAN_POOL_MS: 10 * 60_000,
+@ docs/concepts/work-pool.md src/protocol/types.ts 8b91b904cde7
+|   LEASE_TTL_MS: 5 * 60_000,
+@ docs/concepts/work-pool.md src/state/machine.ts 9854d9c7fd01
+|   // 6. A pool left open beside spare capacity is the failure this whole shape
+|   //    exists to prevent: nobody blocked, nothing broken, and an idle front
+|   //    that never learns there is something to pick up. Rung once per item —
+|   //    same discipline as the question and permission nudges — so a front
+|   //    that reads nothing is never pushed round in circles.
+|   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
+|   const stale = state.work.filter(
+|     (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
+|   );
+|   if (stale.length > 0) {
+|     const idle = idleFronts(state);
+|     if (idle.length > 0) {
+|       const target = idle[0]!;
+|       for (const w of stale) w.nudgedAtMs = ctx.nowMs;
+|       broadcast.push(pushEvent(state, ctx, {
+|         // Addressed to the front it is about, same as ask/grant/deny — every
+|         // other front already gets the pool count from poolFooterFor on its
+|         // own next call, so broadcasting this too would only be noise for them.
+|         kind: "system", from: null, to: target.name, priority: "high",
+|         text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
+|       }));
+@ docs/concepts/work-pool.md src/protocol/types.ts 95bcbad39181
+|   OFFER_TTL_MS: 5 * 60_000,
+@ docs/concepts/work-pool.md src/state/machine.ts 06453dd29b27
+|     // An offer is exclusive — only the offeree may take it — for exactly this
+|     // long. Without an expiry, one unresponsive front could hold a file's
+|     // worth of work away from everybody forever.
+|     if (item.state === "offered" && item.offeredAtMs !== null && ctx.nowMs - item.offeredAtMs > offerTtl) {
+|       const owner = state.participants[item.offeredToId ?? ""];
+|       item.state = "open";
+|       item.offeredToId = null;
+|       item.offeredAtMs = null;
+|       // An offered item cannot have been nudged (rule 6 only stamps `open`
+|       // items) — reset anyway, so no path back to `open` is left to wonder
+|       // whether leaving it out was deliberate.
+|       item.nudgedAtMs = null;
+|       broadcast.push(pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "normal",
+|         text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,
+|       }));
 |     }
-|     chosen = 0;
+@ docs/concepts/work-pool.md src/protocol/types.ts ee6591a650f7
+|   ORPHAN_GRACE_MS: 60_000,
+@ docs/concepts/work-pool.md src/state/machine.ts dd4ac6f215d9
+|   for (const item of state.work) {
+|     if (item.state === "done") continue;
+|
+|     if (item.state === "taken" && item.takenById) {
+|       const holder = state.participants[item.takenById];
+|       if (holder?.gone) {
+|         if (item.orphanedAtMs === null) item.orphanedAtMs = ctx.nowMs;
+|       } else {
+|         item.orphanedAtMs = null;
+|       }
+|       if (item.orphanedAtMs !== null && ctx.nowMs - item.orphanedAtMs > grace) {
+|         const name = holder?.name ?? "a front";
+|         item.state = "open";
+|         item.takenById = null;
+|         item.orphanedAtMs = null;
+|         // Same reset as a voluntary drop: back in the pool is a new episode.
+|         item.nudgedAtMs = null;
+|         broadcast.push(pushEvent(state, ctx, {
+|           kind: "system", from: null, to: null, priority: "normal",
+|           text: `${name} dropped holding ${item.paths[0]} — back in the pool`,
+|         }));
+|       }
+|       continue;
+|     }
+@ docs/concepts/work-pool.md src/cli/main.ts 253643ba318b
+|   } catch (e) {
+|     // parley broken must never stop the work: say so, exit clean for hooks.
+|     if (e instanceof ParleyUnreachable) {
+|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
+|       process.exit(0);
+|     }
+@ docs/concepts/work-pool.md src/state/work.ts 532a12aeb20f
+|   // Dispatch is not an offer. A planned item stays where the plan put it.
+|   if (item.origin === "planned") {
+|     return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
 |   }
+@ docs/concepts/work-pool.md src/state/work.ts b5f091e36191
+|   const origin = frame.origin === "planned" ? "planned" : "discovered";
 @ docs/guide/panel.md src/cli/web.ts 36c287df3ea1
 | export function defaultPortFor(repoId: string): number {
 |   const span = 200;
@@ -1012,6 +1009,12 @@
 | /** sha256 of the canonical path, truncated to 16 lowercase hex characters. */
 | export function repoId(canonicalPath: string): string {
 |   return createHash("sha256").update(canonicalPath, "utf8").digest("hex").slice(0, 16);
+@ docs/guide/panel.md src/cli/web.ts bbdf48bb894a
+|       );
+|       process.exit(1);
+|     }
+|     chosen = 0;
+|   }
 @ docs/guide/setup.md src/transport/address.ts 16f79399fa00
 | export function resolveAddress(repoId: string, env: AddrEnv): Address {
 |   if (env.platform === "win32") {
