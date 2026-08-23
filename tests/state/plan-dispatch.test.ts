@@ -64,6 +64,26 @@ describe("dispatching a plan", () => {
     expect(claim?.orphanedAtMs).toBeNull();
   });
 
+  /**
+   * "A person's front outranks the plan" is scoped to EXPLICIT claims, and the
+   * scope is the whole rule. An auto-claim is the footprint of an edit, not a
+   * declaration of what a front is doing — `idleFronts` carries the same
+   * distinction with a paragraph explaining why. Count auto-claims here and
+   * every file any session ever touched announces "task N is waiting", so the
+   * dispatch of any plan over a repository that has been worked in becomes a
+   * wall of waiting notices about nobody.
+   */
+  test("an auto-claim is not possession: the plan dispatches over it and says nothing", () => {
+    apply(state, worker, { v: 1, op: "claim", paths: ["a.ts"], auto: true }, at(50));
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])],
+    }, at(100));
+
+    expect(state.claims.find((c) => c.pattern === "a.ts")?.auto).toBe(true);
+    expect(state.work[0]!.state).toBe("open");
+    expect(out.broadcast.some((e) => e.text.includes("waiting"))).toBe(false);
+  });
+
   test("a task that would not parse is published, never dropped", () => {
     apply(state, coord, {
       v: 1, op: "plan", goal: "g", spec: null,

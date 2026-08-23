@@ -50,10 +50,21 @@ describe("shape", () => {
     expect(state.shape).toBe("bus");
   });
 
-  test("shape and mode are independent", () => {
+  // Both orders, because one order proves only half of it: setting shape then
+  // mode cannot catch `shape` resetting `mode`, and setting mode then shape
+  // cannot catch the reverse. They are two axes, and the claim is that neither
+  // touches the other.
+  test("shape and mode are independent, whichever is set second", () => {
     apply(state, core, { v: 1, op: "shape", shape: "plan" }, at(500));
     apply(state, core, { v: 1, op: "mode", mode: "enforced" }, at(600));
     expect(state.shape).toBe("plan");
     expect(state.mode).toBe("enforced");
+
+    const other = initialState("advisory");
+    const front = joined(other, "CORE", 0);
+    apply(other, front, { v: 1, op: "mode", mode: "enforced" }, at(700));
+    apply(other, front, { v: 1, op: "shape", shape: "pool" }, at(800));
+    expect(other.mode).toBe("enforced");
+    expect(other.shape).toBe("pool");
   });
 });

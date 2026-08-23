@@ -66,6 +66,9 @@ interface Row { id: string; kind: string; state: string; publishedById: string; 
 const works = async (front: string, ...args: string[]): Promise<Row[]> =>
   json<{ work: Row[] }>(await cli(front, "works", ...args, "--json")).work;
 
+/** One task per entry, one path each, no two colliding: one wave, N items. */
+const PLAN_PATHS = ["a", "b", "c", "d"] as const;
+
 /**
  * Everything that identifies WHICH item this is. What survives is the shape of
  * the output — the only thing the cases below are allowed to differ in.
@@ -73,10 +76,47 @@ const works = async (front: string, ...args: string[]): Promise<Row[]> =>
 // `w_[0-9a-z]+`, not `w_\d+`: `makeCtx` numbers items in base 36, so the tenth
 // item of a run is `w_000a` and a digits-only mask leaves a stray letter behind
 // that reads as a difference between two otherwise identical rows.
-const mask = (s: string) => s.replace(/w_[0-9a-z]+/g, "<id>").replace(/[a-d]\.ts/g, "<path>");
+//
+// The path half is BUILT from the fixture rather than written out as a range:
+// a literal `[a-d]` silently stops masking the moment the fixture grows a
+// fifth path, and an unmasked path is exactly the kind of incidental
+// difference these assertions must not see.
+const pathMask = new RegExp(PLAN_PATHS.map((p) => `${p}\\.ts`).join("|"), "g");
+const mask = (s: string) => s.replace(/w_[0-9a-z]+/g, "<id>").replace(pathMask, "<path>");
+
+/**
+ * Which front closes each review out. Two of the four are taken by the front
+ * that wrote the work and two are not, which is the whole point of the
+ * fixture — and it is declared here, once, so the last test does not have to
+ * inherit it from whether the tests before it happened to run.
+ */
+const REVIEWER_OF = ["WORKER", "COORD", "WORKER", "COORD"] as const;
 
 /** The four reviews WORKER's four finished tasks produced, in creation order. */
 let reviews: Row[] = [];
+
+/**
+ * Drive one review to `done` in the hands of a named front, from whatever
+ * state it is currently in.
+ *
+ * Every test in this file shares one daemon and one wave — `beforeAll` costs a
+ * plan, four takes and four dones — so they run in order and each leaves the
+ * bus further along. That is fine until a test *depends* on a predecessor
+ * having run, which turns `bun test -t` on that one test into a red that says
+ * nothing about the code. This reads the current state instead of assuming it.
+ */
+async function finishReview(front: string, id: string): Promise<void> {
+  const now = (await works("COORD")).find((w) => w.id === id)!;
+  if (now.state === "done") return;
+  if (now.state !== "taken") {
+    // Offered to COORD by construction, since COORD is the only other live
+    // front. WORKER reaches the review of its own work only once COORD hands
+    // it back — the two-command path, and the only path there is.
+    if (front !== "COORD") await cli("COORD", "drop", id);
+    await cli(front, "take", id);
+  }
+  await cli(front, "done", id, "--summary", "ok");
+}
 
 beforeAll(async () => {
   repo = realpathSync(mkdtempSync(join(tmpdir(), "parley-cli-")));
@@ -89,7 +129,7 @@ beforeAll(async () => {
   writeFileSync(
     join(repo, "plan.md"),
     ["**Goal:** quatro tarefas iguais", ""].concat(
-      ["a", "b", "c", "d"].flatMap((p, i) => [
+      PLAN_PATHS.flatMap((p, i) => [
         `### Task ${i + 1}: mesma coisa`,
         "**Files:**",
         `- Modify: \`${p}.ts\``,
@@ -125,7 +165,7 @@ afterAll(async () => {
 
 describe("what a front is told when it takes the review of its own work", () => {
   test("the wave produced one review per task, every one of them offered away", () => {
-    expect(reviews).toHaveLength(4);
+    expect(reviews).toHaveLength(PLAN_PATHS.length);
     expect(reviews.every((r) => r.kind === "review")).toBe(true);
   });
 
@@ -170,12 +210,13 @@ describe("what a front is told when it takes the review of its own work", () => 
   });
 
   test("the finished wave does not read the same either way in parley works", async () => {
-    for (const r of await works("COORD", "--state", "taken")) {
-      await cli(r.takenById === r.publishedById ? "WORKER" : "COORD", "done", r.id, "--summary", "ok");
-    }
+    // Driven from REVIEWER_OF rather than from whatever the tests above left
+    // behind, so this one is honest run on its own. Run in sequence it is a
+    // no-op for the four takes they already made: the assignment is the same.
+    for (const [i, r] of reviews.entries()) await finishReview(REVIEWER_OF[i]!, r.id);
 
     const rows = (await cli("COORD", "works")).split("\n").filter((l) => l.includes("review"));
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(PLAN_PATHS.length);
     expect(rows.every((r) => r.includes("done"))).toBe(true);
 
     // Every task done, every review done — this listing is the only place a

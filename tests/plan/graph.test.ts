@@ -39,6 +39,21 @@ describe("computing what may run together", () => {
     expect(out[1]!.tasks.map((t) => t.n)).toEqual([2]);
   });
 
+  // "Plan order" above means the TASK NUMBERS, not the order the headings
+  // happen to arrive in. `parse.ts` reads a file top to bottom, so the two
+  // usually coincide and every other test here is blind to the difference —
+  // reduce the sort to list order and they all stay green. A plan that
+  // numbers its tasks 1..N but writes one of them out of sequence would
+  // otherwise have Task 3's edit to a shared file run a wave before Task 1's,
+  // which is the same out-of-order execution the seating rule exists to
+  // prevent, arriving through the door nobody was watching.
+  test("waves are seated by task number, not by the order the tasks were listed in", () => {
+    const out = waves([task(3, ["src/app.ts"]), task(1, ["src/app.ts"])]);
+    expect(out).toHaveLength(2);
+    expect(out[0]!.tasks.map((t) => t.n)).toEqual([1]);
+    expect(out[1]!.tasks.map((t) => t.n)).toEqual([3]);
+  });
+
   test("a glob colliding with a file is a collision", () => {
     const out = waves([task(1, ["src/**"]), task(2, ["src/app.ts"])]);
     expect(out).toHaveLength(2);
