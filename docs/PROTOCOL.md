@@ -224,8 +224,13 @@ this is a clean exit.
     {"id":"p_0001","name":"FINANCEIRO","mission":"month-end closing",
      "harness":"claude-code","kind":"agent","connected":true,
      "since":"2026-08-18T13:50:00Z","idle_s":12,
-     "claims":["src/backend/finance/**"]}]}
+     "claims":["src/backend/finance/**"]}],
+   "births":{"allowed":true,"max":6,"live":1}}
 ```
+
+`births` is whether parley may start more fronts, the ceiling from `spawn.json`,
+and how many agent fronts are live against it — carried here so a panel showing
+that switch needs no second round trip. See `summon` in §6.9.
 
 This is the memory of "who touches what" that a markdown board never had.
 
