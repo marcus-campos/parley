@@ -28,6 +28,36 @@
 //     shows the old and new text side by side, which is the whole point: a
 //     re-pin nobody can read is a re-pin nobody checked.
 //
+// WHAT THIS CANNOT SEE. Three classes, and the third is the one that gets
+// read as covered when it is not.
+//
+//   1. Whether a citation *supports* the sentence citing it. The ledger only
+//      says the citation still points at what it pointed at when a human
+//      checked. Write-time correctness is human and stays human.
+//   2. A citation added to a page that carries none. The per-page floor in
+//      tests/docs/citations.test.ts is the guard for that, not this file.
+//   3. **Anything outside the cited window.** The ledger pins the bytes
+//      between `from` and `to` and nothing else, so a change one line above a
+//      cited range is invisible here however completely it inverts what the
+//      page claims. Proven with a one-character edit at src/state/work.ts:207
+//      (`&&` → `||`, same line count, outside all eighteen ranges cited on
+//      that file): 67 docs tests pass, ledger byte-identical. What went red
+//      was tests/state, 2 failures — so for *tested* behaviour the product
+//      suite is the backstop, and it is a good one.
+//
+//      The residual is the untested case, and its purest form is already
+//      published. `docs/concepts/shapes.md:54` and
+//      `docs/concepts/work-pool.md:88` quote `src/state/work.ts:11-15` and
+//      `186-191`, which are **comments**. A comment never executes and is
+//      never tested, so this ledger pins prose that the implementation can
+//      drift away from with nothing anywhere going red. That is not
+//      hypothetical on this repository: Task 3 of this branch found
+//      `src/hook.ts:89` describing behaviour the file does not have, and
+//      wrote the true behaviour over the comment rather than parroting it.
+//
+//      Do not read a green ledger as "the pages are right". Read it as "the
+//      pages still point where a human once looked".
+//
 // Run `bun run docs:citations` to re-pin. Nothing here may depend on the
 // clock, the environment or filesystem order — the test regenerates and
 // compares, so an unstable ledger would turn unrelated work red.
@@ -85,6 +115,13 @@ export function digest(text: string): string {
  * Reads every citation on the site and resolves it against the source tree.
  * Throws on a citation that cannot be resolved at all — a missing file or a
  * line past the end — because those are the cases with no text to pin.
+ *
+ * Raw markdown, deliberately: this reads what is on disk and never expands
+ * `<!--@include: ../../README.md#region-->`. Latent today, because the five
+ * included README regions carry no `src/…:NN` citations at all — but a
+ * citation written inside one would render on the site and be invisible here.
+ * If that day comes, expand the includes; do not add the citation to the page
+ * twice to make it visible.
  */
 export function collectCitations(root = ROOT): Citation[] {
   const sources = new Map<string, string[]>();

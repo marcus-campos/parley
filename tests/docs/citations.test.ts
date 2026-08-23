@@ -302,6 +302,38 @@ describe("the wiring that keeps the ledger honest", () => {
     expect(source).toContain(".sort(");
   });
 
+  test("no citation hides inside an included README region, where the ledger cannot see it", () => {
+    // collectCitations reads raw markdown and never expands
+    // `<!--@include: ../../README.md#region-->`. A `src/…:NN` written inside
+    // one of those regions renders on the published page and is pinned by
+    // nothing. Latent today — the five included regions carry no citations —
+    // and this is what keeps it latent rather than a comment hoping so.
+    const readme = readFileSync(join(root, "README.md"), "utf8").split("\n");
+    const included = sitePages(join(root, "docs"))
+      .flatMap((page) => [...readFileSync(join(root, page), "utf8").matchAll(/<!--@include: [^#]*#([a-z-]+)-->/g)])
+      .map((m) => m[1]!);
+    expect(included.length).toBeGreaterThanOrEqual(5);
+
+    const offenders: string[] = [];
+    for (const region of included) {
+      const from = readme.findIndex((l) => l.includes(`#region ${region}`));
+      const to = readme.findIndex((l) => l.includes(`#endregion ${region}`));
+      expect(from).toBeGreaterThanOrEqual(0);
+      expect(to).toBeGreaterThan(from);
+      for (const [i, line] of readme.slice(from, to + 1).entries()) {
+        for (const m of line.matchAll(CITATION)) {
+          offenders.push(
+            `README.md:${from + i + 1} is inside #region ${region}, which the site includes, and it ` +
+              `cites \`${m[1]}:${m[2]}\`. The ledger reads raw markdown and never expands includes, so ` +
+              `that citation is published and pinned by nothing. Expand the includes in ` +
+              `collectCitations — do not move the citation out of the region to hide it.`,
+          );
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   test("the deploy workflow refuses to publish citations it has not checked", () => {
     // docs.yml triggers on push to main with no dependency on ci.yml, so a
     // commit that reached main by a route which skipped CI would publish pages
