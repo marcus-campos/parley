@@ -11,7 +11,7 @@ import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
 import { readSpawnConfigIn, type SpawnConfig } from "../cli/spawn-config";
-import { bearFront } from "../spawn/birth";
+import { bearFront, harnessBin } from "../spawn/birth";
 import { isNewbornWorktree, nextFrontIndexIn, removeWorktreeIfClean, type WorktreeRemoval } from "../spawn/worktree";
 
 interface Conn {
@@ -80,6 +80,8 @@ export class ParleyDaemon {
   /** Fronts that said `leave` from a worktree parley made, waiting to be proven gone. */
   private readonly pendingCollection =
     new Map<string, { name: string; cwd: string; sinceMs: number; attempts: number }>();
+  /** Fronts parley started that have not reached the bus yet. */
+  private readonly pendingBirth = new Map<string, { atMs: number; mode: "panel" | "terminal" }>();
   /** Removals in flight. Nothing waits on these except `close`. */
   private readonly collecting = new Set<Promise<void>>();
   private readonly token: string | null;
@@ -317,6 +319,7 @@ export class ParleyDaemon {
     // newborn did: their first hook frame deleted the checkout they had just
     // opened.
     this.sweepCollections(ctx.nowMs);
+    this.sweepBirths(ctx.nowMs);
 
     this.send(conn, outcome.response);
     if (outcome.broadcast.length) this.push(outcome.broadcast, conn);
@@ -335,6 +338,7 @@ export class ParleyDaemon {
     this.bearFrontFor(result.birth, ctx);
     this.retireFronts(result.retire, ctx);
     this.sweepCollections(ctx.nowMs);
+    this.sweepBirths(ctx.nowMs);
 
     const idleFor = this.now() - this.lastActivityMs;
     const limit = this.opts.idleShutdownMs ?? DEFAULTS.IDLE_SHUTDOWN_MS;
@@ -373,6 +377,12 @@ export class ParleyDaemon {
       this.push([event], null);
       return;
     }
+
+    // It has a pid; it has not said anything. In terminal mode that pid is
+    // `osascript`'s, and whether the agent itself ever starts depends on a
+    // PATH the daemon cannot see. `sweepBirths` is what turns silence into a
+    // sentence.
+    this.pendingBirth.set(born.name, { atMs: ctx.nowMs, mode: born.mode });
 
     if (born.mode !== wanted) {
       // Same discipline as `enforced` degrading to `advisory` (`setMode`) or a
@@ -456,6 +466,43 @@ export class ParleyDaemon {
     // The name is copied rather than looked up later: by the time the removal
     // answers, this is the only thing left that can say whose worktree it was.
     this.pendingCollection.set(p.id, { name: p.name, cwd: p.cwd, sinceMs: this.now(), attempts: 0 });
+  }
+
+  /**
+   * A birth is not a front until it says so.
+   *
+   * `bearFront` returns as soon as it has a pid, and reports `mode:
+   * "terminal"` the moment `osascript` reports one — the launcher's pid, not
+   * the agent's. Since the daemon's environment no longer travels into that
+   * window (`terminalCommand`, and deliberately so), the harness resolves from
+   * the person's own interactive shell: a PATH or an auth difference yields a
+   * window printing `command not found`, and parley counted a front it had
+   * successfully started.
+   *
+   * It costs no capacity — `canBearFront` and `summon` both count live
+   * participants, and a front that never joins never becomes one — so this is
+   * not a leak. What it was, was silent: `state.lastBirthMs` is stamped at the
+   * intent, so the pool waits out a whole BIRTH_COOLDOWN_MS, opens another
+   * window that fails the same way, and repeats, with nobody told. Said once
+   * per birth, like every other thing this daemon has to report.
+   */
+  private sweepBirths(nowMs: number): void {
+    if (this.pendingBirth.size === 0) return;
+    for (const [name, pending] of [...this.pendingBirth]) {
+      // Any participant that has ever carried the name, not just a live one:
+      // a newborn that joined, worked and left did reach the bus.
+      if (Object.values(this.state.participants).some((p) => p.name === name)) {
+        this.pendingBirth.delete(name);
+        continue;
+      }
+      if (nowMs - pending.atMs < DEFAULTS.BIRTH_JOIN_GRACE_MS) continue;
+      this.pendingBirth.delete(name);
+      const hint =
+        pending.mode === "terminal"
+          ? `the window it opened runs your shell, so \`${harnessBin(this.spawnConfig.harness)}\` has to be on *your* PATH`
+          : "its harness did not start";
+      this.announce(makeCtx(nowMs, this.counter), `${name} was started and never joined — ${hint}`);
+    }
   }
 
   /**

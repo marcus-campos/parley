@@ -51,6 +51,23 @@ describe("a worktree for a newborn front", () => {
     expect(readFileSync(join(repo, ".parley", ".gitignore"), "utf8")).toContain("scratch/");
   });
 
+  test("an ignore file that never mentioned worktrees is appended to, not skipped", () => {
+    // The guard was `existsSync(file) -> return`, so any `.parley/.gitignore`
+    // already in the repository — written by a person, by an older parley, by
+    // anything — meant no ignore was ever written and the checkout landed in
+    // `git status` as an embedded git repository. Existing is not the same as
+    // saying what this needs it to say.
+    mkdirSync(join(repo, ".parley"), { recursive: true });
+    writeFileSync(join(repo, ".parley", ".gitignore"), "*.log\n");
+    const wt = addWorktree(repo, "pool-1");
+
+    const status = execFileSync("git", ["status", "--porcelain", "-uall"], { cwd: repo, encoding: "utf8" });
+    expect(existsSync(wt.path)).toBe(true);
+    expect(status).not.toContain("worktrees");
+    // Appended, so whatever was in there is still in there.
+    expect(readFileSync(join(repo, ".parley", ".gitignore"), "utf8")).toContain("*.log");
+  });
+
   test("two newborns never collide", () => {
     const a = addWorktree(repo, "pool-1");
     const b = addWorktree(repo, "pool-2");

@@ -305,6 +305,49 @@ describe("the newborn's worktree", () => {
     expect(existsSync(join(worktree, "a.txt"))).toBe(true);
   });
 
+  test("a person who walks into the worktree mid-session keeps it too", async () => {
+    // The same hazard reached through `join`'s other branch. A person's
+    // session starts at the repository root and later `cd`s into
+    // `.parley/worktrees/pool-1` to look at what POOL-1 did. Every tool call
+    // re-joins on the same session id with the new cwd — and the reattach
+    // branch read `branch`, `wake`, `connected` and `mission` off that frame
+    // and dropped `cwd` on the floor.
+    //
+    // So parley still believed they were standing at the root, the sweep's
+    // "is anybody in there" answered no, and the checkout went out from under
+    // a live session. Cancelling on the participant's own id cannot help
+    // here: the pending collection belongs to POOL-1, and POOL-1 really has
+    // gone.
+    const repo = gitRepo();
+    const { env, worktree } = bearOne(repo);
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+
+    savedEnv = { ...process.env };
+    delete process.env.PARLEY_BORN;
+    process.env.PARLEY_NAME = "DEVELOP";
+    const person = await connectTo(endpoint.address);
+    await person.send(joinFrame(resolveIdentity(repo, repo), { cwd: repo, kind: "agent", session: "s-person" }));
+
+    const pool = await connectTo(endpoint.address);
+    await pool.send(joinAsNewborn(env, worktree, "session-pool-1"));
+    await pool.send({ op: "leave" });
+
+    // They walk in. Same session, new directory.
+    delete process.env.PARLEY_BORN;
+    process.env.PARLEY_NAME = "DEVELOP";
+    clock += 1_000;
+    const back = await person.send(
+      joinFrame(resolveIdentity(worktree, worktree), { cwd: worktree, kind: "agent", session: "s-person" }),
+    );
+    expect(back.reattached).toBe(true);
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await person.send({ op: "who" });
+    await daemon.close();
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+
   test("a person opening a session inside a departed newborn's worktree keeps it", async () => {
     // The other half of the same defect, and a different branch of the sweep:
     // not the front reattaching to its own participant, but somebody new
@@ -461,6 +504,35 @@ describe("the newborn's worktree", () => {
   });
 });
 
+/**
+ * A birth driven all the way through the daemon: a stale pool, no idle front,
+ * `tick` raising an intent and `bearFrontFor` turning it into a worktree and a
+ * process. Nothing here may start a real agent, so `claude` is a stub on PATH
+ * that exits immediately — which is also, conveniently, exactly what a harness
+ * the person's shell cannot find looks like from the daemon's side.
+ */
+async function bearThroughDaemon(repo: string, clockRef: { ms: number }) {
+  savedEnv = { ...process.env };
+  const binDir = mkdtempSync(join(tmpdir(), "parley-stub-bin-"));
+  dirs.push(binDir);
+  writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+  chmodSync(join(binDir, "claude"), 0o755);
+  process.env.PATH = `${binDir}:${process.env.PATH}`;
+
+  const { daemon, endpoint } = await daemonFor(repo, () => clockRef.ms);
+  const front = await connectTo(endpoint.address);
+  await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
+  await front.send({ op: "shape", shape: "pool" });
+  // An explicit claim is what makes CORE busy rather than idle capacity —
+  // otherwise the pool rings its doorbell and never asks to be born.
+  await front.send({ op: "claim", paths: ["src/**"] });
+  await front.send({ op: "work", title: "the thing nobody picked up", paths: ["a.ts"] });
+
+  clockRef.ms += DEFAULTS.ORPHAN_POOL_MS + 1;
+  await front.send({ op: "who" });
+  return { daemon, endpoint, front, said: () => daemon.snapshot().events.map((e) => e.text).join("\n") };
+}
+
 describe("which index the daemon's next newborn gets", () => {
   test("a branch a previous daemon left behind is not asked for twice", async () => {
     // The whole birth path through the daemon, which nothing exercised before:
@@ -479,33 +551,66 @@ describe("which index the daemon's next newborn gets", () => {
     // `git branch -d` refused the branch because it holds commits.
     execFileSync("git", ["branch", "parley/pool-1"], { cwd: repo, stdio: "ignore" });
 
-    savedEnv = { ...process.env };
-    const binDir = mkdtempSync(join(tmpdir(), "parley-stub-bin-"));
-    dirs.push(binDir);
-    // The daemon spawns `claude` for real. Nothing here may start an agent.
-    writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
-    chmodSync(join(binDir, "claude"), 0o755);
-    process.env.PATH = `${binDir}:${process.env.PATH}`;
-
-    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
-    const { daemon, endpoint } = await daemonFor(repo, () => clock);
-    const front = await connectTo(endpoint.address);
-    await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
-    await front.send({ op: "shape", shape: "pool" });
-    // An explicit claim is what makes CORE busy rather than idle capacity —
-    // otherwise the pool rings its doorbell and never asks to be born.
-    await front.send({ op: "claim", paths: ["src/**"] });
-    await front.send({ op: "work", title: "the thing nobody picked up", paths: ["a.ts"] });
-
-    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
-    await front.send({ op: "who" });
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, said } = await bearThroughDaemon(repo, clock);
     await daemon.close();
 
-    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
-    expect(said).toContain("providing a front");
-    expect(said).not.toContain("could not be started");
+    expect(said()).toContain("providing a front");
+    expect(said()).not.toContain("could not be started");
     expect(existsSync(join(repo, ".parley", "worktrees", "pool-2"))).toBe(true);
     expect(existsSync(join(repo, ".parley", "worktrees", "pool-1"))).toBe(false);
+  });
+});
+
+describe("a front parley started that never reached the bus", () => {
+  test("is said out loud, instead of being counted as a success forever", async () => {
+    // `bearFront` returns as soon as it has a pid, and in terminal mode that
+    // pid belongs to `osascript`, not to the agent. The window runs the
+    // person's shell, so the harness resolves from *their* PATH and auth —
+    // neither of which the daemon can see — and one that prints `command not
+    // found` was a birth parley believed in and nobody else ever saw. The
+    // stub `claude` here exits immediately, which is the same thing from the
+    // daemon's side.
+    //
+    // It costs no capacity: `canBearFront` counts live participants, and a
+    // front that never joins never becomes one. What it cost was silence —
+    // `lastBirthMs` is stamped at the intent, so the pool waits out a whole
+    // BIRTH_COOLDOWN_MS, tries again, fails the same way, forever.
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, front, said } = await bearThroughDaemon(repo, clock);
+    expect(said()).toContain("providing a front");
+    // Not yet. A cold harness is allowed to take a while.
+    expect(said()).not.toContain("never joined");
+
+    clock.ms += DEFAULTS.BIRTH_JOIN_GRACE_MS + 1;
+    await front.send({ op: "who" });
+    expect(said()).toContain("POOL-1 was started and never joined");
+
+    // Said once. A second frame does not repeat it.
+    const before = said().split("never joined").length;
+    clock.ms += DEFAULTS.BIRTH_JOIN_GRACE_MS + 1;
+    await front.send({ op: "who" });
+    expect(said().split("never joined").length).toBe(before);
+    await daemon.close();
+  });
+
+  test("a newborn that does join is never accused of it", async () => {
+    const repo = gitRepo();
+    const clock = { ms: Date.UTC(2026, 7, 20, 12, 0, 0) };
+    const { daemon, endpoint, front, said } = await bearThroughDaemon(repo, clock);
+
+    const worktree = join(repo, ".parley", "worktrees", "pool-1");
+    const newborn = await connectTo(endpoint.address);
+    await newborn.send(joinAsNewborn(
+      { PARLEY_NAME: "POOL-1", PARLEY_MISSION: "pool: x", PARLEY_BORN: "parley" },
+      worktree, "session-pool-1",
+    ));
+
+    clock.ms += DEFAULTS.BIRTH_JOIN_GRACE_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
+    expect(said()).not.toContain("never joined");
   });
 });
 

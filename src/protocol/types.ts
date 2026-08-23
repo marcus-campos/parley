@@ -88,6 +88,21 @@ export const DEFAULTS = {
    */
   RETIRE_GRACE_MS: 60_000,
   /**
+   * How long a front parley started has to reach the bus before parley says
+   * it never did.
+   *
+   * A birth reports success as soon as it has a pid, and in terminal mode that
+   * pid belongs to the launcher — `osascript` — not to the agent. The window
+   * it opens runs the *person's* shell, so the harness resolves from their
+   * PATH and their auth, neither of which the daemon has any view of. A
+   * window that prints `claude: command not found` is a birth parley believes
+   * in and nobody else ever sees.
+   *
+   * Inside BIRTH_COOLDOWN_MS on purpose: whoever is watching learns why
+   * nothing happened before the next attempt is made.
+   */
+  BIRTH_JOIN_GRACE_MS: 2 * 60_000,
+  /**
    * How long a newborn's worktree is left alone after its front said `leave`.
    *
    * `leave` is not proof that a process has exited. The retirement notice
@@ -112,6 +127,16 @@ export const DEFAULTS = {
   COLLECT_MAX_ATTEMPTS: 3,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
-  /** Hard budget for the hook query path. Overrun means let go, never block. */
-  HOOK_BUDGET_MS: 30,
+  /**
+   * Hard budget for the hook query path. Overrun means let go, never block.
+   *
+   * This is the number the hook actually arms its timer with. It used to be
+   * 30, and the one line that reads it multiplied by 40 — so the constant, its
+   * comment and the comment at the call site all called 30ms a *hard budget*
+   * while the enforced deadline was 1200ms, and anything measured against 30
+   * (`addWorktree` at 29-60ms, say) was being judged against a limit forty
+   * times stricter than the one that exists. The value the hook enforces is
+   * unchanged; only the two places that lied about it are.
+   */
+  HOOK_BUDGET_MS: 1_200,
 } as const;

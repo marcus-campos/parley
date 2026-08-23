@@ -60,7 +60,7 @@ export async function runHook(event: string): Promise<void> {
   const name = input.hook_event_name ?? event;
 
   // Hard budget. Overrun means let go — the agent never waits for parley.
-  const budget = setTimeout(() => { emit({}); process.exit(0); }, DEFAULTS.HOOK_BUDGET_MS * 40);
+  const budget = setTimeout(() => { emit({}); process.exit(0); }, DEFAULTS.HOOK_BUDGET_MS);
 
   let repo;
   try { repo = locateRepo(input.cwd ?? process.cwd()); } catch { clearTimeout(budget); return emit({}); }

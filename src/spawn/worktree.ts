@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, sep } from "node:path";
 
 export interface Worktree {
@@ -123,22 +123,39 @@ export function isNewbornWorktree(repoRoot: string, cwd: string): boolean {
  * Scoped to `worktrees/`, never `.parley/`: `.parley/notes.md` is meant to be
  * committed — it is the shared memory of the repository — and an unqualified
  * ignore would hide the one artefact the design says to keep.
+ *
+ * A file that is already there is *read*, not skipped. The guard used to be
+ * `existsSync(file) -> return`, and existing is not the same as saying what
+ * this needs it to say: a `.parley/.gitignore` holding `*.log` and nothing
+ * else left the checkout sitting in `git status` as an embedded git
+ * repository. Appended to, never rewritten — whatever somebody else put in
+ * there is theirs.
  */
+function mentionsWorktrees(contents: string): boolean {
+  return contents.split("\n").some((line) => {
+    const pattern = line.trim().replace(/^\//, "");
+    return pattern === "worktrees" || pattern.startsWith("worktrees/");
+  });
+}
+
 function ignoreNewbornWorktrees(repoRoot: string): void {
   const file = join(repoRoot, ".parley", ".gitignore");
-  if (existsSync(file)) return;
+  const preamble = [
+    "# Written by parley the first time it bore a front here.",
+    "# Each newborn gets a full checkout with its own .git; none of that is yours to commit.",
+    "# Scoped on purpose: .parley/notes.md is meant to be committed.",
+    "worktrees/",
+    "",
+  ].join("\n");
   try {
-    mkdirSync(join(repoRoot, ".parley"), { recursive: true });
-    writeFileSync(
-      file,
-      [
-        "# Written by parley the first time it bore a front here.",
-        "# Each newborn gets a full checkout with its own .git; none of that is yours to commit.",
-        "# Scoped on purpose: .parley/notes.md is meant to be committed.",
-        "worktrees/",
-        "",
-      ].join("\n"),
-    );
+    if (!existsSync(file)) {
+      mkdirSync(join(repoRoot, ".parley"), { recursive: true });
+      writeFileSync(file, preamble);
+      return;
+    }
+    const existing = readFileSync(file, "utf8");
+    if (mentionsWorktrees(existing)) return;
+    appendFileSync(file, `${existing.endsWith("\n") ? "" : "\n"}${preamble}`);
   } catch {
     // An ignore file that could not be written is untidy, never a reason to
     // refuse a birth.

@@ -48,6 +48,15 @@ function harnessCommand(harness: string | undefined): { bin: string; args: strin
   }
 }
 
+/**
+ * The binary a harness resolves to on PATH. Exported so the daemon can name it
+ * when a front it started never reaches the bus — `claude-code` is the config
+ * word, `claude` is what the person's shell has to be able to find.
+ */
+export function harnessBin(harness: string | undefined): string {
+  return harnessCommand(harness).bin;
+}
+
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }

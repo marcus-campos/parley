@@ -45,6 +45,14 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
       known.gone = false;
       known.lastSeenMs = ctx.nowMs;
       if (typeof frame.branch === "string" && frame.branch) known.branch = frame.branch;
+      // Where it is *now*. A session's cwd is not fixed for its lifetime — a
+      // person walks from the repository root into `.parley/worktrees/pool-1`
+      // to read what a newborn did, and every tool call after that re-joins
+      // from there. This branch read `branch`, `wake`, `connected` and
+      // `mission` off the frame and dropped `cwd`, so `src/daemon/server.ts`'s
+      // sweep — whose whole question is "is anybody still standing in that
+      // directory" — was answering it from an address the front had left.
+      if (typeof frame.cwd === "string" && frame.cwd) known.cwd = frame.cwd;
       if (typeof frame.wake === "string" && frame.wake) known.wake = frame.wake;
       if (frame.connected === true) known.connected = true;
       // Coming back renews the territory. A front that paused — thinking, or
