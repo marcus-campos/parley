@@ -35,14 +35,14 @@ describe("a worktree for a newborn front", () => {
 
   test("an unchanged worktree is removed", async () => {
     const wt = addWorktree(repo, "pool-1");
-    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(true);
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe("removed");
     expect(existsSync(wt.path)).toBe(false);
   });
 
   test("a worktree with work in it is kept — nobody's changes are thrown away", async () => {
     const wt = addWorktree(repo, "pool-1");
     writeFileSync(join(wt.path, "b.txt"), "work happened\n");
-    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(false);
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe("dirty");
     expect(existsSync(wt.path)).toBe(true);
   });
 
@@ -56,7 +56,29 @@ describe("a worktree for a newborn front", () => {
     const git = (...args: string[]) => execFileSync("git", args, { cwd: wt.path, stdio: "ignore" });
     git("add", "-A");
     git("commit", "-qm", "the front's work");
-    expect(await removeWorktreeIfClean(repo, wt.path)).toBe(true);
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe("removed");
+  });
+
+  test("a git that could not run is not proof the tree is clean", async () => {
+    // The one guarantee git's own refusal cannot provide: it refuses a *dirty*
+    // worktree, and it can only do that once you have already attempted the
+    // removal. `git status` failing is a different thing, and the difference
+    // between "unknown" and "clean" is somebody's uncommitted work.
+    //
+    // No fake git, and nothing injected: a directory outside any repository is
+    // a path where `git status` genuinely cannot run.
+    const outside = mkdtempSync(join(tmpdir(), "parley-not-a-repo-"));
+    let insideSomeRepo = true;
+    try { execFileSync("git", ["rev-parse", "--git-dir"], { cwd: outside, stdio: "ignore" }); }
+    catch { insideSomeRepo = false; }
+    expect(insideSomeRepo).toBe(false);
+
+    try {
+      expect(await removeWorktreeIfClean(repo, outside)).toBe("unknown");
+      expect(existsSync(outside)).toBe(true);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   test("removal never blocks the caller: git runs off the event loop", async () => {

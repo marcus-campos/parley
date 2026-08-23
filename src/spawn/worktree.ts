@@ -83,6 +83,29 @@ export function addWorktree(repoRoot: string, name: string): Worktree {
 }
 
 /**
+ * What became of a worktree that was offered up for collection.
+ *
+ * A boolean could not tell "there was nothing to remove" from "we could not
+ * find out", and those are the two ends of the one guarantee this module has:
+ * **a git that failed is not proof that a tree is clean**. Mutating that
+ * branch — treating a failed or timed-out `git status` as clean — left the
+ * whole suite green, because with git's own refusal still in place the
+ * *outcome* was identical and only an attempted subprocess differed. Naming
+ * the outcomes makes the guarantee assertable from outside, with no fake git
+ * anywhere: a path where `git status` genuinely cannot run is a directory
+ * outside any repository.
+ */
+export type WorktreeRemoval =
+  /** Gone — or already absent, which is the same thing to a caller. */
+  | "removed"
+  /** It holds changes. Nobody's work is thrown away. */
+  | "dirty"
+  /** `git status` failed or timed out. Nothing was attempted, nothing is known. */
+  | "unknown"
+  /** Clean, and `git worktree remove` refused it anyway. */
+  | "failed";
+
+/**
  * Removed only when it holds nothing. A front's work is never thrown away.
  *
  * Asynchronous on purpose. This is two subprocesses, and it is called from the
@@ -93,13 +116,16 @@ export function addWorktree(repoRoot: string, name: string): Worktree {
  * — a front with uncommitted work, the case most worth being gentle about —
  * the full cost repeated on every tick forever.
  */
-export async function removeWorktreeIfClean(repoRoot: string, path: string): Promise<boolean> {
-  if (!existsSync(path)) return true;
+export async function removeWorktreeIfClean(repoRoot: string, path: string): Promise<WorktreeRemoval> {
+  if (!existsSync(path)) return "removed";
   const status = await gitAsync(path, ["status", "--porcelain"]);
-  // `null` is a git that failed or timed out — not proof the tree is clean.
-  if (status === null || status !== "") return false;
+  // `null` is a git that failed or timed out — not proof the tree is clean,
+  // and the one thing git's own refusal cannot cover, because you would have
+  // to attempt the removal to find out.
+  if (status === null) return "unknown";
+  if (status !== "") return "dirty";
   const removed = await gitAsync(repoRoot, ["worktree", "remove", path]);
   // A worktree that will not come off is left where it is. Losing disk is
   // cheaper than losing somebody's changes.
-  return removed !== null;
+  return removed === null ? "failed" : "removed";
 }
