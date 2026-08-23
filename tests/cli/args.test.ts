@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { flagBool, flagString, parseArgs } from "../../src/cli/args";
 
 describe("parseArgs", () => {
@@ -69,6 +71,76 @@ describe("flagBool", () => {
   test("anything else counts as meant, because silently ignoring it is worse", () => {
     expect(bool(["watch", "--no-open=yes"])).toBe(true);
     expect(bool(["watch", "--no-open=1"])).toBe(true);
+  });
+});
+
+/**
+ * Every boolean flag the CLI documents, read by one accessor.
+ *
+ * `--no-open` was fixed on its own last round, on the argument that it is the
+ * only flag whose name is a negation and therefore the only one people write a
+ * value onto. That argument does not survive contact with `--check=true` and
+ * `--json=true`, which are at least as natural, especially from a script — and
+ * `--check` was the worse instance by a long way: `parley update [--check]` is
+ * the first line of USAGE, and `parley update --check=true` fell straight past
+ * the dry run into a real replacement of the binary. With `--yes=true` also
+ * dropped, it did that without asking.
+ *
+ * The generator's fourth flag check cannot see any of this: it catches a flag
+ * that is documented and never read, and all ten of these were read. It is the
+ * layer below.
+ */
+describe("the boolean flags of the CLI", () => {
+  const main = readFileSync(join(import.meta.dir, "..", "..", "src", "cli", "main.ts"), "utf8");
+  // Line comments quote the old idioms on purpose; the rule is about code.
+  const code = main.replace(/^\s*\/\/.*$/gm, "");
+
+  test("none is read with `=== true`, which drops `--flag=true` on the floor", () => {
+    const reads = [
+      ...code.matchAll(/\b(?:parsed|p)\.flags\.[A-Za-z][\w$]*\s*===\s*true/g),
+      ...code.matchAll(/\b(?:parsed|p)\.flags\[[^\]]*\]\s*===\s*true/g),
+    ].map((m) => m[0]);
+    expect(reads).toEqual([]);
+  });
+
+  test("none is read by bare truthiness either, which is the same defect mirrored", () => {
+    // `flags.x` is true for the string "false", so `--json=false` printed
+    // JSON. Harmless typed by hand, not harmless in `--json=$WANT_JSON`.
+    // A comparison against a string literal is a string flag and is fine.
+    const bare = [...code.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z][\w$]*)(\s*===\s*"[^"]*")?/g)]
+      .filter((m) => !m[2])
+      .map((m) => `--${m[1]}`);
+    expect(bare).toEqual([]);
+  });
+
+  test("`parley update --check=true` is a dry run, as the first line of USAGE says", () => {
+    const flags = parseArgs(["update", "--check=true", "--yes=true"]).flags;
+    // What the parser actually stores, which is the root of all of this.
+    expect(flags.check).toBe("true");
+    expect(flags.check === true).toBe(false);
+    expect(flagBool(flags, "check")).toBe(true);
+    expect(flagBool(flags, "yes")).toBe(true);
+  });
+
+  test("every documented boolean flag reads a written value the same way", () => {
+    for (const flag of ["check", "yes", "json", "global", "all", "auto", "fresh", "mine", "active", "web", "detach", "stop", "export", "import", "quiet", "human", "workspace"]) {
+      expect(flagBool(parseArgs(["x"]).flags, flag)).toBe(false);
+      expect(flagBool(parseArgs(["x", `--${flag}`]).flags, flag)).toBe(true);
+      expect(flagBool(parseArgs(["x", `--${flag}=true`]).flags, flag)).toBe(true);
+      expect(flagBool(parseArgs(["x", `--${flag}=false`]).flags, flag)).toBe(false);
+    }
+  });
+
+  test("--detach=true does not detach forever, because the child no longer keeps it", () => {
+    const argv = ["watch", "--web", "--detach=true"];
+    expect(flagBool(parseArgs(argv).flags, "detach")).toBe(true);
+    // The detached child is spawned with the parent's argv minus the flag. The
+    // old filter was `a !== "--detach"`, which leaves `--detach=true` in place:
+    // the child detaches too, and the one after it, and no generation ever
+    // reaches runWebPanel — so the panel never starts and the chain does not
+    // end. Bare `--detach` was always stripped, which is why nobody hit it.
+    expect(argv.filter((a) => a !== "--detach")).toContain("--detach=true");
+    expect(code).toContain('a !== "--detach" && !a.startsWith("--detach=")');
   });
 });
 

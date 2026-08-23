@@ -138,12 +138,12 @@ Global flags: --json (machine output), --as NAME, --quiet
 `;
 
 function out(parsed: Parsed, human: string, payload: unknown): void {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify(payload)}\n`);
-  else if (!parsed.flags.quiet) process.stdout.write(`${human}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify(payload)}\n`);
+  else if (!flagBool(parsed.flags, "quiet")) process.stdout.write(`${human}\n`);
 }
 
 function fail(parsed: Parsed, message: string, code = 1): never {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
   else process.stderr.write(`parley: ${message}\n`);
   process.exit(code);
 }
@@ -166,7 +166,7 @@ async function withSession(
   } catch (e) {
     // parley broken must never stop the work: say so, exit clean for hooks.
     if (e instanceof ParleyUnreachable) {
-      if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+      if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
       process.exit(0);
     }
@@ -180,7 +180,7 @@ async function withSession(
     mission: flagString(parsed.flags, "mission", identity.mission),
     harness: identity.harness,
     cwd: repo.cwd,
-    kind: parsed.flags.human ? "human" : "agent",
+    kind: flagBool(parsed.flags, "human") ? "human" : "agent",
     branch: identity.branch,
     wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
@@ -280,18 +280,18 @@ async function main(): Promise<void> {
 
   // `--help` and `--version` are consumed as the command name by the parser, so
   // they are matched here explicitly. Both must work outside a git repository.
-  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || parsed.flags.help) {
+  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || flagBool(parsed.flags, "help")) {
     process.stdout.write(USAGE);
     return;
   }
-  if (["version", "--version", "-v"].includes(parsed.command) || parsed.flags.version) {
+  if (["version", "--version", "-v"].includes(parsed.command) || flagBool(parsed.flags, "version")) {
     process.stdout.write(`parley ${VERSION} (protocol v${PROTOCOL_VERSION})\n`);
     return;
   }
 
   // Marking a workspace happens before repository lookup, because the whole
   // point is that the directory is not itself a repository.
-  if (parsed.command === "init" && parsed.flags.workspace) {
+  if (parsed.command === "init" && flagBool(parsed.flags, "workspace")) {
     const {
       findWorkspaceRoot, markAsWorkspace, membersOf, readWorkspaceFile, workspaceFilesIn,
     } = await import("../repo/workspace");
@@ -369,9 +369,9 @@ async function main(): Promise<void> {
       discoveryDir = found.discoveryDir;
     } catch { /* updating from anywhere is fine */ }
     return runUpdate({
-      checkOnly: parsed.flags.check === true,
-      assumeYes: parsed.flags.yes === true,
-      json: parsed.flags.json === true,
+      checkOnly: flagBool(parsed.flags, "check"),
+      assumeYes: flagBool(parsed.flags, "yes"),
+      json: flagBool(parsed.flags, "json"),
       gitCommonDir,
       repoRoot,
       discoveryDir,
@@ -392,14 +392,14 @@ async function main(): Promise<void> {
     case "init": {
       const { runInit } = await import("../adapters/install");
       return runInit(repo, {
-        assumeYes: parsed.flags.yes === true,
-        json: parsed.flags.json === true,
-        global: parsed.flags.global === true,
+        assumeYes: flagBool(parsed.flags, "yes"),
+        json: flagBool(parsed.flags, "json"),
+        global: flagBool(parsed.flags, "global"),
       });
     }
     case "uninit": {
       const { runUninit } = await import("../adapters/install");
-      return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
+      return runUninit(repo, { json: flagBool(parsed.flags, "json"), global: flagBool(parsed.flags, "global") });
     }
 
     case "buses": {
@@ -535,13 +535,13 @@ async function main(): Promise<void> {
       process.env.PARLEY_PANEL_NAME ||
       readPanelConfig(repo.gitCommonDir).name ||
       "PANEL";
-    if (parsed.flags.web) {
+    if (flagBool(parsed.flags, "web")) {
       const { clearRunningPanel, defaultPortFor, readRunningPanel, runWebPanel } = await import("./web");
       const explicitPort = flagString(parsed.flags, "port");
       const port = explicitPort ? Number(explicitPort) : defaultPortFor(repo.repoId);
       const running = readRunningPanel(repo.gitCommonDir);
 
-      if (parsed.flags.stop) {
+      if (flagBool(parsed.flags, "stop")) {
         if (!running) return out(parsed, "parley: no web panel running for this repository", { ok: true, stopped: false });
         try { process.kill(running.pid, "SIGTERM"); } catch { /* already gone */ }
         clearRunningPanel(repo.gitCommonDir);
@@ -555,9 +555,12 @@ async function main(): Promise<void> {
         return out(parsed, `parley: web panel already running on ${running.url}`, { ok: true, url: running.url, reused: true });
       }
 
-      if (parsed.flags.detach) {
+      if (flagBool(parsed.flags, "detach")) {
         const { spawn } = await import("node:child_process");
-        const args = process.argv.slice(1).filter((a) => a !== "--detach");
+        // Every spelling of the flag, not just the bare one. `--detach=true` left
+        // in the child's argv makes the child detach too, and the one after it:
+        // no generation ever reaches runWebPanel, so the panel never starts.
+        const args = process.argv.slice(1).filter((a) => a !== "--detach" && !a.startsWith("--detach="));
         const child = spawn(process.execPath, COMPILED_CLI ? args.slice(1) : args, {
           detached: true, stdio: "ignore", windowsHide: true,
         });
@@ -578,10 +581,10 @@ async function main(): Promise<void> {
       }
 
       // `--no-open` is the spelling the help text offers, and `flagBool` is
-      // what reads it: the old `parsed.flags.open !== false` was true for every
-      // input, and `parsed.flags["no-open"] !== true` was still true for
-      // `--no-open=true` and `--no-open true`, which parseArgs stores as the
-      // string `"true"`. See flagBool in ./args for why this one flag needs it.
+      // what reads it — as it now reads every boolean flag here. The old
+      // `parsed.flags.open !== false` was true for every input, and
+      // `parsed.flags["no-open"] !== true` was still true for `--no-open=true`
+      // and `--no-open true`, which parseArgs stores as the string `"true"`.
       return runWebPanel(repo, panelName, port, !flagBool(parsed.flags, "no-open"), explicitPort !== "");
     }
     return runWatch(repo, panelName);
@@ -772,11 +775,11 @@ async function main(): Promise<void> {
 
       case "claim": {
         if (p.positional.length === 0) fail(p, "claim needs at least one path");
-        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: p.flags.auto === true });
+        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: flagBool(p.flags, "auto") });
         if (!r.ok) {
           const conflicts = (r as unknown as { conflicts?: { path: string; owner: { name: string; mission: string }; since: string }[] }).conflicts ?? [];
           const detail = conflicts.map((c) => `  ${c.path} held by ${c.owner.name} (${c.owner.mission || "no mission"}) since ${c.since}`).join("\n");
-          if (p.flags.json) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
+          if (flagBool(p.flags, "json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
           process.stderr.write(`parley: CONFLICT\n${detail}\nAsk for it:  parley ask ${conflicts[0]?.path ?? p.positional[0]} --reason "..."\n`);
           process.exit(1);
         }
@@ -785,7 +788,7 @@ async function main(): Promise<void> {
       }
 
       case "release": {
-        const r = await send({ op: "release", paths: p.positional, all: p.flags.all === true });
+        const r = await send({ op: "release", paths: p.positional, all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const released = (r as unknown as { released: string[] }).released;
         return out(p, released.length ? `parley: released ${released.join(", ")}` : "parley: nothing to release", r);
@@ -808,7 +811,7 @@ async function main(): Promise<void> {
       }
 
       case "requests": {
-        const r = await send({ op: "requests", all: p.flags.all === true });
+        const r = await send({ op: "requests", all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
         if (list.length === 0) return out(p, "parley: nothing pending", r);
@@ -872,7 +875,7 @@ async function main(): Promise<void> {
         const r = await send({
           op: "results",
           key: flagString(p.flags, "key") || undefined,
-          fresh: p.flags.fresh === true,
+          fresh: flagBool(p.flags, "fresh"),
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
         });
@@ -889,7 +892,7 @@ async function main(): Promise<void> {
       }
 
       case "notes": {
-        if (p.flags.import) {
+        if (flagBool(p.flags, "import")) {
           const fromDisk = readExportedNotes(repo.root);
           if (fromDisk.length === 0) {
             return out(p, "parley: nothing to import — no .parley/notes.md in this repository", { ok: true, imported: 0 });
@@ -919,13 +922,13 @@ async function main(): Promise<void> {
           tag: flagString(p.flags, "tag") || undefined,
           path: flagString(p.flags, "path") || undefined,
           kind: flagString(p.flags, "kind") || undefined,
-          active: p.flags.active === true,
+          active: flagBool(p.flags, "active"),
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
-        if (p.flags.export) {
+        if (flagBool(p.flags, "export")) {
           const written = exportNotes(notes, repo.root);
           return out(p, `parley: wrote ${written} (${notes.length} note(s)) — commit it when you are ready`, { ok: true, path: written });
         }
@@ -985,7 +988,7 @@ async function main(): Promise<void> {
         const r = await send({
           op: "works",
           state: ["open", "offered", "taken", "done"].includes(stateFilter) ? stateFilter : undefined,
-          mine: p.flags.mine === true,
+          mine: flagBool(p.flags, "mine"),
         });
         if (!r.ok) fail(p, describeError(r));
         const work = (r as unknown as { work: { id: string; paths: string[]; title: string; state: string }[] }).work;

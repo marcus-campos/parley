@@ -147,11 +147,11 @@
 |   }
 |   return broadcast;
 | }
-@ docs/concepts/permission.md src/cli/main.ts 253643ba318b
+@ docs/concepts/permission.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
@@ -493,11 +493,11 @@
 |         // degrade is the same unranked list a plain notes/results call gets.
 |         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
 |       }
-@ docs/concepts/recall.md src/cli/main.ts 253643ba318b
+@ docs/concepts/recall.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
@@ -584,11 +584,11 @@
 |   origin: "discovered" | "planned";
 @ docs/concepts/shapes.md src/state/work.ts b5f091e36191
 |   const origin = frame.origin === "planned" ? "planned" : "discovered";
-@ docs/concepts/shapes.md src/cli/main.ts 253643ba318b
+@ docs/concepts/shapes.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
@@ -669,11 +669,11 @@
 |   }
 @ docs/concepts/territory.md src/protocol/types.ts a739aeb69ae4
 |   AUTO_CLAIM_TTL_MS: 15 * 60_000,
-@ docs/concepts/territory.md src/cli/main.ts 253643ba318b
+@ docs/concepts/territory.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
@@ -982,11 +982,11 @@
 |       }
 |       continue;
 |     }
-@ docs/concepts/work-pool.md src/cli/main.ts 253643ba318b
+@ docs/concepts/work-pool.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
 |     if (e instanceof ParleyUnreachable) {
-|       if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+|       if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
