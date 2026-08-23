@@ -562,15 +562,19 @@ deliberately:
   cosine 0.85 or higher, and exactly where they land drifts with how long the
   texts are. So enabling a model does two things before it will answer
   anything. It subtracts the table's own centre of mass from every vector,
-  document and query alike, which is what stops that drift — measured, the
-  score of unrelated text goes from *"0.80 to 0.86, depending on length"* to
-  *"0.00 ± 0.06, regardless"*. Then it measures what unrelated text actually
-  scores on that table, over hundreds of disjoint slices of the model's own
-  vocabulary, and keeps `mean + 4σ` of that as an absolute floor. A hit clears
-  that one number or it is not returned — the same verdict whether it is the
-  only candidate or one of forty, and regardless of what anything else scored.
-  Two notes that match equally well both come back; a corpus where everything
-  is equally irrelevant returns none of it.
+  document and query alike, which is what stops that drift — measured across
+  every text-length regime, the score of unrelated text goes from *"0.76 to
+  0.85, which is 5 to 12σ of movement from length alone"* to *"0.00, ±0.06 at
+  256 dimensions and ±0.09 at 128, with 0.1 to 0.35σ of residual drift left"*.
+  Not perfectly still, and worth saying so; still a different universe. Then
+  it measures what unrelated text actually scores on that table, over at least
+  256 disjoint slices of the model's own vocabulary — a table too small for
+  that many is refused rather than estimated from a handful — and keeps
+  `mean + 4σ` of that as an absolute floor. A hit clears that one number or it
+  is not returned: the same verdict whether it is the only candidate or one of
+  forty, and regardless of what anything else scored. Two notes that match
+  equally well both come back; a corpus where everything is equally irrelevant
+  returns none of it.
 - **A model that cannot be measured does not get a guessed floor.** If the
   table is too small to measure a null distribution over, or the measurement
   comes back degenerate, the brain does not come up: the lexical floor answers

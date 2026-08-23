@@ -36,11 +36,11 @@ export interface Calibration {
 /**
  * The pseudo-documents the null is measured on: a few tokens on one side (a
  * query), a couple of dozen on the other (a note), pooled exactly the way
- * `embed` pools real text. Length matters on the raw vectors — the null
- * cosine drifts about 4σ between a one-token query and an eight-token one —
- * but after debiasing it stops mattering almost entirely, which is the whole
+ * `embed` pools real text. Length matters enormously on the raw vectors — the
+ * null cosine travels 5 to 12σ between the shortest and longest regimes,
+ * measured — but after debiasing it is down to 0.07-0.35σ, which is the whole
  * reason the debias step exists and the reason one stored number can be
- * honest for every query.
+ * honest for every query. `debias` in embed.ts carries the table.
  */
 const QUERY_TOKENS = 4;
 const DOC_TOKENS = 20;
@@ -87,6 +87,21 @@ const MAX_PAIRS = 512;
  * between 78% and 100% in five of six. At 3σ recall gains almost nothing and
  * junk reappears in up to 18% of fifty-note queries. See the floor-fix report
  * for the full table.
+ *
+ * "4σ" is a name, not a promise of one-in-31,000. The debiased cosine's tail
+ * is heavier than a Gaussian's: over 300,000 unrelated pairs on a 128-
+ * dimension table, 0.006% cleared the population's own 4σ boundary against a
+ * Gaussian's 0.003%, and at 5σ 0.0003% against 0.00003%. What the floor
+ * promises is a boundary measured on the distribution that actually exists,
+ * which is the thing neither previous attempt had.
+ *
+ * Two things push the measurement toward silence rather than noise, which is
+ * the direction this repository prefers. The pseudo-documents below are
+ * *incoherent* — words drawn from across the vocabulary — while real notes
+ * are coherent, and the incoherent null is the wider of the two (sd 0.0910
+ * against 0.0880 on the test fixture, matched lengths), so the floor comes
+ * out slightly high. And a pair that happens to be genuinely related raises
+ * the measured null, which raises the floor too.
  */
 const FLOOR_SIGMAS = 4;
 

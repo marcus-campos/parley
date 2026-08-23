@@ -112,9 +112,21 @@ function cosine(a: Float32Array, b: Float32Array): number {
  * shared direction, so two texts with nothing in common still land at cosine
  * 0.85 and up, and where exactly they land drifts with how many tokens each
  * side pooled. Subtracting the mean row (`calibrate.ts`) removes that shared
- * direction, and with it the drift — measured, the null cosine goes from
- * "0.80 to 0.86 depending on text length" to "0.00 +/- 0.06 regardless." That
- * invariance is what lets one stored floor be honest for every query.
+ * direction, and with it almost all of the drift.
+ *
+ * Measured across every length regime from one token against one to eight
+ * against sixty, on a 256-dimension table: raw, the null mean travels 0.758
+ * to 0.854 against a σ of 0.011-0.020 — **5 to 9 σ of movement driven by
+ * text length alone**, and 6 to 12 σ on a more anisotropic table, which is
+ * why no single raw floor can be right for both short and long text.
+ * Centered, the σ is what stops moving: 0.061-0.064 in every regime, and
+ * 0.086-0.091 on a 128-dimension table (it is `1/sqrt(dims)`, not a
+ * constant). The centered *mean* is not perfectly still — it carries a small
+ * residual, measured between 0.07 σ and 0.35 σ depending on how many
+ * independent topic directions the table has, and it moves toward zero from
+ * below, which is toward silence. Not nothing, and stated rather than
+ * rounded away; against raw's 5-12 σ it is a different universe, and that is
+ * what lets one stored floor be honest for every query.
  *
  * The zero vector stays the zero vector, deliberately. Text with no known
  * token has nothing to compare, and `-mean` would be a real direction
