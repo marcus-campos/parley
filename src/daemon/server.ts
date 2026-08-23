@@ -8,7 +8,8 @@ import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
 import type { ConvEvent, Outcome, State } from "../state/types";
 import { indexFromState, type LexicalIndex } from "../brain/lexical";
-import { embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
+import { debias, embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
+import { calibrate, type Calibration } from "../brain/calibrate";
 import { loadVectors, saveVectors } from "../brain/vectors";
 import { findModel } from "../brain/registry";
 import { modelPath } from "../brain/download";
@@ -101,7 +102,7 @@ export class ParleyDaemon {
    * one of those degrades silently to the floor rather than erroring, so
    * this field being `null` is never itself a failure state.
    */
-  private brain: { model: StaticModel; vectors: VectorIndex } | null = null;
+  private brain: { model: StaticModel; calibration: Calibration; vectors: VectorIndex } | null = null;
   /**
    * Whether the bus has already been told, for the *current* activation
    * attempt, that this daemon cannot actually load what `state.brain`
@@ -153,31 +154,56 @@ export class ParleyDaemon {
       const staticModel = loadStaticModel(modelPath(model, this.opts.modelsDir));
       if (!staticModel) return;
 
+      // No calibration, no brain. A model that cannot say what unrelated text
+      // scores like on its own table has not earned the right to say what
+      // related text scores like, and inventing a boundary for it would be
+      // the exact mistake the two previous floors made. Degrading here is the
+      // same honest degrade as a missing file: `reconcileBrainAnnouncement`
+      // and `maybeNudgeBrainLoadFailure` already tell the bus about it.
+      const calibration = calibrate(staticModel);
+      if (!calibration) {
+        process.stderr.write(
+          `parley: ${model.name} could not be calibrated (its vocabulary is too small to measure a ` +
+            `relevance floor against) — the lexical floor is answering instead\n`,
+        );
+        return;
+      }
+
       const dir = dirname(this.opts.journalPath);
-      let vectors = loadVectors(dir, staticModel.dims);
+      let vectors = loadVectors(dir, staticModel.dims, calibration.floor);
       if (!vectors) {
-        vectors = new VectorIndex(staticModel.dims);
+        vectors = new VectorIndex(staticModel.dims, calibration.floor);
         for (const note of this.state.notes) {
           if (note.reversedBy !== null) continue;
           vectors.add(
             note.id,
-            embed(staticModel, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" ")),
+            this.vectorFor(staticModel, calibration, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" ")),
             note.kind,
           );
         }
         for (const result of Object.values(this.state.results)) {
           vectors.add(
             result.key,
-            embed(staticModel, [result.key, result.summary, result.paths.join(" ")].join(" ")),
+            this.vectorFor(staticModel, calibration, [result.key, result.summary, result.paths.join(" ")].join(" ")),
             "result",
           );
         }
         saveVectors(dir, vectors);
       }
-      this.brain = { model: staticModel, vectors };
+      this.brain = { model: staticModel, calibration, vectors };
     } catch (e) {
       process.stderr.write(`parley: brain load failed, falling back to the lexical floor: ${(e as Error).message}\n`);
     }
+  }
+
+  /**
+   * The one place text becomes a comparable vector: pool it, then take the
+   * table's own centre of mass back out (`debias`, embed.ts). Everything
+   * stored in the index and everything searched against it goes through here,
+   * so a document and a query are never compared in two different spaces.
+   */
+  private vectorFor(model: StaticModel, calibration: Calibration, text: string): Float32Array {
+    return debias(embed(model, text), calibration.mean);
   }
 
   /** Persists the vector index beside the journal; a failure here never surfaces as a write failure. */
@@ -435,7 +461,10 @@ export class ParleyDaemon {
         // `vectorHits` is empty and `fuse` degrades to exactly the lexical
         // ranking — the same floor this daemon has always answered from.
         const vectorHits = this.brain
-          ? this.brain.vectors.search(embed(this.brain.model, frame.q), this.brain.vectors.size)
+          ? this.brain.vectors.search(
+              this.vectorFor(this.brain.model, this.brain.calibration, frame.q),
+              this.brain.vectors.size,
+            )
           : [];
         const hits = fuse(lexicalHits, vectorHits, this.index.size + vectorHits.length)
           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
@@ -508,7 +537,7 @@ export class ParleyDaemon {
           const text = [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" ");
           this.index.add(entry.id, entry.kind, text);
           if (this.brain) {
-            this.brain.vectors.add(entry.id, embed(this.brain.model, text), entry.kind);
+            this.brain.vectors.add(entry.id, this.vectorFor(this.brain.model, this.brain.calibration, text), entry.kind);
             this.saveBrainVectors();
           }
         }
@@ -528,7 +557,7 @@ export class ParleyDaemon {
           const text = [entry.key, entry.summary, entry.paths.join(" ")].join(" ");
           this.index.add(entry.key, "result", text);
           if (this.brain) {
-            this.brain.vectors.add(entry.key, embed(this.brain.model, text), "result");
+            this.brain.vectors.add(entry.key, this.vectorFor(this.brain.model, this.brain.calibration, text), "result");
             this.saveBrainVectors();
           }
         }

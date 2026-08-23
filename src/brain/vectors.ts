@@ -18,7 +18,15 @@ const FILE_NAME = "vectors.json";
  * noise rather than clipping.
  */
 interface StoredEntry { id: string; kind: Hit["kind"]; scale: number; values: number[] }
-interface StoredFile { dims: number; entries: StoredEntry[] }
+/**
+ * `floor` rides along as a fingerprint of the model these vectors were built
+ * with, not as a setting. The stored vectors are debiased (`debias`,
+ * embed.ts), so they are only meaningful against the same table's mean row —
+ * and `dims` alone cannot tell two different 256-dimension models apart. The
+ * floor is derived from the whole vocabulary, so an exact match is cheap
+ * evidence that the model on disk is still the one that wrote this file.
+ */
+interface StoredFile { dims: number; floor: number; entries: StoredEntry[] }
 
 const INT8_MAX = 127;
 
@@ -40,15 +48,15 @@ export function saveVectors(dir: string, index: VectorIndex): void {
     const { scale, values } = quantize(vec);
     return { id, kind, scale, values };
   });
-  const file: StoredFile = { dims: index.dims, entries };
+  const file: StoredFile = { dims: index.dims, floor: index.floor, entries };
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, FILE_NAME), JSON.stringify(file), "utf8");
 }
 
-function isStoredFile(value: unknown, dims: number): value is StoredFile {
+function isStoredFile(value: unknown, dims: number, floor: number): value is StoredFile {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
-  if (v.dims !== dims || !Array.isArray(v.entries)) return false;
+  if (v.dims !== dims || v.floor !== floor || !Array.isArray(v.entries)) return false;
   const validKinds: readonly string[] = ["note", "decision", "result"];
   return v.entries.every(
     (e): e is StoredEntry =>
@@ -67,19 +75,20 @@ function isStoredFile(value: unknown, dims: number): value is StoredFile {
 }
 
 /**
- * `dims` is the caller's own expectation — the active model's — not a value
- * trusted from the file. A file saved by a different model (a different
- * `dims`) is refused wholesale rather than partially misread: reloading it
- * quietly would mix vectors from two different embedding spaces into one
- * index, corrupting every similarity score it produces from then on.
+ * `dims` and `floor` are the caller's own expectations — the active model's —
+ * never values trusted from the file. A file saved by a different model is
+ * refused wholesale rather than partially misread: reloading it quietly would
+ * mix vectors from two different embedding spaces into one index, corrupting
+ * every similarity score it produces from then on. Refusing costs one
+ * re-embedding pass; accepting costs every answer afterwards.
  */
-export function loadVectors(dir: string, dims: number): VectorIndex | null {
+export function loadVectors(dir: string, dims: number, floor: number): VectorIndex | null {
   try {
     const path = join(dir, FILE_NAME);
     if (!existsSync(path)) return null;
     const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
-    if (!isStoredFile(parsed, dims)) return null;
-    const index = new VectorIndex(dims);
+    if (!isStoredFile(parsed, dims, floor)) return null;
+    const index = new VectorIndex(dims, floor);
     for (const entry of parsed.entries) index.add(entry.id, dequantize(entry, dims), entry.kind);
     return index;
   } catch {

@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { loadVectors, saveVectors } from "../../src/brain/vectors";
 import { VectorIndex } from "../../src/brain/embed";
 
+/**
+ * A stand-in for a real model's measured floor (`calibrate.ts`). Nothing here
+ * is testing the floor itself — these tests are about bytes surviving a round
+ * trip — but an index cannot exist without one, and it rides into the file as
+ * the fingerprint that says which model wrote it.
+ */
+const FLOOR = 0.25;
+
 // Every test injects its own throwaway directory — never the real
 // machine-local state dir, the same discipline `download.ts` already keeps.
 const dirs: string[] = [];
@@ -20,12 +28,12 @@ afterEach(() => {
 describe("persisting the int8 vectors beside the journal", () => {
   test("a saved index reloads with the same neighbours", () => {
     const dir = tempDir();
-    const index = new VectorIndex(2);
+    const index = new VectorIndex(2, FLOOR);
     index.add("n_1", new Float32Array([1, 0]), "note");
     index.add("n_2", new Float32Array([0, 1]), "result");
     saveVectors(dir, index);
 
-    const reloaded = loadVectors(dir, 2);
+    const reloaded = loadVectors(dir, 2, FLOOR);
     expect(reloaded).not.toBeNull();
     expect(reloaded!.search(new Float32Array([1, 0]), 1)[0]!.id).toBe("n_1");
     expect(reloaded!.search(new Float32Array([1, 0]), 1)[0]!.kind).toBe("note");
@@ -35,7 +43,7 @@ describe("persisting the int8 vectors beside the journal", () => {
 
   test("removing an id and re-saving is honoured on reload", () => {
     const dir = tempDir();
-    const index = new VectorIndex(2);
+    const index = new VectorIndex(2, FLOOR);
     // Both share a positive-cosine direction with the query below, so a
     // failure to actually remove `n_1` (rather than the query simply not
     // matching it) is what this test would catch.
@@ -44,28 +52,47 @@ describe("persisting the int8 vectors beside the journal", () => {
     index.remove("n_1");
     saveVectors(dir, index);
 
-    const reloaded = loadVectors(dir, 2);
+    const reloaded = loadVectors(dir, 2, FLOOR);
     expect(reloaded!.search(new Float32Array([1, 1]), 5).map((h) => h.id)).toEqual(["n_2"]);
   });
 
   test("nothing on disk yet degrades to null, not a throw", () => {
     const dir = tempDir();
-    expect(loadVectors(dir, 2)).toBeNull();
+    expect(loadVectors(dir, 2, FLOOR)).toBeNull();
   });
 
   test("a dims mismatch against the requested model refuses the file rather than misreading it", () => {
     const dir = tempDir();
-    const index = new VectorIndex(2);
+    const index = new VectorIndex(2, FLOOR);
     index.add("n_1", new Float32Array([1, 0]));
     saveVectors(dir, index);
 
-    expect(loadVectors(dir, 3)).toBeNull();
+    expect(loadVectors(dir, 3, FLOOR)).toBeNull();
+  });
+
+  /**
+   * `dims` alone cannot tell two different 256-dimension models apart, and the
+   * stored vectors are debiased against one particular table's mean — so a
+   * model swapped in place would have this daemon comparing vectors from two
+   * different embedding spaces and never noticing. The floor is derived from
+   * the whole vocabulary, so requiring it to match is cheap evidence that the
+   * model on disk is still the one that wrote this file. Refusing costs one
+   * re-embedding pass; accepting costs every answer afterwards.
+   */
+  test("a floor mismatch refuses the file too — the model changed under the same dims", () => {
+    const dir = tempDir();
+    const index = new VectorIndex(2, FLOOR);
+    index.add("n_1", new Float32Array([1, 0]));
+    saveVectors(dir, index);
+
+    expect(loadVectors(dir, 2, FLOOR + 0.01)).toBeNull();
+    expect(loadVectors(dir, 2, FLOOR)).not.toBeNull();
   });
 
   test("a corrupt file loads as null instead of throwing", () => {
     const dir = tempDir();
     writeFileSync(join(dir, "vectors.json"), "{ not json", "utf8");
-    expect(loadVectors(dir, 2)).toBeNull();
+    expect(loadVectors(dir, 2, FLOOR)).toBeNull();
   });
 
   /**
@@ -80,9 +107,9 @@ describe("persisting the int8 vectors beside the journal", () => {
     const dir = tempDir();
     writeFileSync(
       join(dir, "vectors.json"),
-      JSON.stringify({ dims: 2, entries: [{ id: "n_1", kind: "note", scale: 1, values: ["x", "y"] }] }),
+      JSON.stringify({ dims: 2, floor: FLOOR, entries: [{ id: "n_1", kind: "note", scale: 1, values: ["x", "y"] }] }),
       "utf8",
     );
-    expect(loadVectors(dir, 2)).toBeNull();
+    expect(loadVectors(dir, 2, FLOOR)).toBeNull();
   });
 });

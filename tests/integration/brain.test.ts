@@ -3,7 +3,9 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { modelPath } from "../../src/brain/download";
 import { MODELS } from "../../src/brain/registry";
+import { calibrate } from "../../src/brain/calibrate";
 import { loadVectors } from "../../src/brain/vectors";
+import { DIMS, FIXTURE_MODEL } from "../brain/fixtures/model";
 import { RawClient, daemons, dirs, startDaemon, tempRepo } from "./harness";
 
 afterEach(async () => {
@@ -14,31 +16,31 @@ afterEach(async () => {
 const REGISTERED = MODELS[0]!;
 
 /**
- * A tiny, self-contained model — same shape as `tests/brain/fixtures/tiny-model.json`
- * — dropped at the path the real registry entry resolves to, so the daemon's
- * registry -> modelPath -> loadStaticModel chain is exercised end to end
+ * The generated model fixture (`tests/brain/fixtures/model.ts`) dropped at the
+ * path the real registry entry resolves to, so the daemon's registry ->
+ * modelPath -> loadStaticModel -> calibrate chain is exercised end to end
  * without a real ~100MB download.
+ *
+ * It is a generated table rather than a handful of hand-written rows because
+ * a hand-written one cannot fail honestly: the fixture this replaced had
+ * every vector at exactly `[1,0]` or `[0,1]`, so every cosine was a bit-exact
+ * tie and the floor's own constant could be set to anything without a single
+ * test noticing. This one is anisotropic, has no ties, and is large enough for
+ * `calibrate` to measure a null distribution over.
  */
 function plantFixtureModel(modelsDir: string): void {
   const path = modelPath(REGISTERED, modelsDir);
   mkdirSync(join(path, ".."), { recursive: true });
-  writeFileSync(
-    path,
-    JSON.stringify({
-      dims: 2,
-      vocab: {
-        select2: [1, 0], hidden: [1, 0], menu: [0, 1], lateral: [0, 1],
-        // "kubernetes" and "helm" point the same biased direction on
-        // purpose — simulating the anisotropy a real dense embedding table
-        // has, where two unrelated words still land close together. Used by
-        // the relevance-floor test below; unrelated to every other test in
-        // this file.
-        kubernetes: [1, 1], helm: [1, 1],
-      },
-    }),
-    "utf8",
-  );
+  writeFileSync(path, JSON.stringify(FIXTURE_MODEL), "utf8");
 }
+
+/** What the daemon will measure off that file — the tests need the same number. */
+const FIXTURE_FLOOR = calibrate(FIXTURE_MODEL)!.floor;
+
+// Portuguese prose, English query, not one shared token: the case the lexical
+// channel cannot answer and the brain exists for.
+const NOTE_PT = "o menu lateral oculto do painel";
+const QUERY_EN = "hidden sidebar";
 
 describe("the brain, wired into a real daemon", () => {
   test("off: a query sharing no token with any note finds nothing", async () => {
@@ -46,9 +48,9 @@ describe("the brain, wired into a real daemon", () => {
     const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));
     const a = await RawClient.connect(endpoint.address);
     await a.send({ op: "join", name: "CORE", mission: "m" });
-    await a.send({ op: "note", title: "o menu do sistema" });
+    await a.send({ op: "note", title: NOTE_PT });
 
-    const out = await a.send({ op: "notes", q: "lateral" });
+    const out = await a.send({ op: "notes", q: QUERY_EN });
     expect((out as unknown as { notes: unknown[] }).notes).toEqual([]);
     a.close();
   });
@@ -64,16 +66,16 @@ describe("the brain, wired into a real daemon", () => {
     const core = await RawClient.connect(endpoint.address);
     await core.send({ op: "join", name: "CORE", mission: "m" });
 
-    await core.send({ op: "note", title: "o menu do sistema" });
+    await core.send({ op: "note", title: NOTE_PT });
     const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
     expect(enabled.ok).toBe(true);
 
-    // "lateral" shares no token with "o menu do sistema" at all, so a purely
-    // lexical search returns nothing (proved above) — this can only succeed
-    // through the vector ranking, fused in.
-    const out = await core.send({ op: "notes", q: "lateral" });
+    // "hidden sidebar" shares no token with the Portuguese note at all, so a
+    // purely lexical search returns nothing (proved above) — this can only
+    // succeed through the vector ranking, fused in.
+    const out = await core.send({ op: "notes", q: QUERY_EN });
     const notes = (out as unknown as { notes: { title: string }[] }).notes;
-    expect(notes.map((n) => n.title)).toEqual(["o menu do sistema"]);
+    expect(notes.map((n) => n.title)).toEqual([NOTE_PT]);
 
     human.close();
     core.close();
@@ -98,11 +100,11 @@ describe("the brain, wired into a real daemon", () => {
     const core = await RawClient.connect(endpoint.address);
     await core.send({ op: "join", name: "CORE", mission: "m" });
 
-    await core.send({ op: "note", title: "o menu do sistema" });
+    await core.send({ op: "note", title: NOTE_PT });
     const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
     expect(enabled.ok).toBe(true);
 
-    // Neither "opentelemetry" nor "zzyzx" is in the tiny vocabulary or the
+    // Neither "opentelemetry" nor "zzyzx" is in the fixture vocabulary or the
     // corpus's text — zero signal on both channels at once.
     const out = await core.send({ op: "notes", q: "opentelemetry zzyzx" });
     expect((out as unknown as { notes: unknown[] }).notes).toEqual([]);
@@ -112,19 +114,16 @@ describe("the brain, wired into a real daemon", () => {
   });
 
   /**
-   * The review's exact reproduction, run against a real daemon: a 4-note
-   * corpus and a query — "kubernetes helm chart" — that shares no lexical
-   * token with any of them. Before the relevance floor (`VectorIndex.search`,
-   * `embed.ts`), a fixed `MIN_SIMILARITY = 0` let every document that scored
-   * above zero cosine straight through, and because dense embedding tables
-   * are anisotropic — "kubernetes" and "helm" are planted pointing the same
-   * biased direction as every note's real vocabulary (see
-   * `plantFixtureModel`) — the query ties all four notes at cosine 1/√2, a
-   * real, non-zero vector, not the zero-vector short-circuit the previous
-   * test exercises. Reproduces the review's own finding verbatim: without the
-   * floor, all four notes came back; with it, none should.
+   * The review's exact reproduction, run against a real daemon. Four notes,
+   * and a query that shares no lexical token with any of them and no topic
+   * either. Before the floor, a fixed `MIN_SIMILARITY = 0` let every document
+   * scoring above zero cosine straight through, and on an anisotropic table
+   * that is all of them; the relative floor that replaced it let them through
+   * too, whenever one was marginally less irrelevant than the rest. The query
+   * embeds to a real, non-zero vector — asserted below — so this is the floor
+   * being tested, not the zero-vector short-circuit.
    */
-  test("on: an anisotropic tie across a 4-note corpus still finds nothing — the floor, not the least-bad note", async () => {
+  test("on: a query unrelated to a 4-note corpus still finds nothing — the floor, not the least-bad note", async () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
@@ -135,18 +134,78 @@ describe("the brain, wired into a real daemon", () => {
     const core = await RawClient.connect(endpoint.address);
     await core.send({ op: "join", name: "CORE", mission: "m" });
 
-    await core.send({ op: "note", title: "o menu do sistema" });
-    await core.send({ op: "note", title: "select2 dropdown" });
-    await core.send({ op: "note", title: "hidden trap" });
-    await core.send({ op: "note", title: "lateral padding" });
+    await core.send({ op: "note", title: NOTE_PT });
+    await core.send({ op: "note", title: "a barra lateral colapsada" });
+    await core.send({ op: "note", title: "o drawer oculto do painel" });
+    await core.send({ op: "note", title: "collapse do menu" });
     const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
     expect(enabled.ok).toBe(true);
 
-    const out = await core.send({ op: "notes", q: "kubernetes helm chart" });
+    const out = await core.send({ op: "notes", q: "kubectl ingress replica" });
     expect((out as unknown as { notes: unknown[] }).notes).toEqual([]);
 
     human.close();
     core.close();
+  });
+
+  /**
+   * The other direction, which the previous floor got catastrophically wrong:
+   * two identical notes masked each other under a per-query z-score and BOTH
+   * were rejected, cosine 1.0 and all. An absolute floor judges each candidate
+   * alone, so both come back.
+   */
+  test("on: two identical notes both come back — neither masks the other", async () => {
+    const dir = tempRepo();
+    const modelsDir = tempRepo();
+    plantFixtureModel(modelsDir);
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+    await human.send({ op: "note", title: NOTE_PT });
+    await human.send({ op: "note", title: NOTE_PT, body: "escrito duas vezes" });
+    await human.send({ op: "note", title: "rollout do pod no namespace do cluster" });
+    await human.send({ op: "note", title: "a migration do schema no postgres" });
+    await human.send({ op: "brain", enable: REGISTERED.name });
+
+    const out = await human.send({ op: "notes", q: QUERY_EN });
+    const notes = (out as unknown as { notes: { title: string }[] }).notes;
+    expect(notes.map((n) => n.title)).toEqual([NOTE_PT, NOTE_PT]);
+
+    human.close();
+  });
+
+  /**
+   * A model this build can parse but cannot measure a null distribution over
+   * — too little vocabulary — must not get a guessed floor. It degrades to
+   * the lexical floor and says so, exactly like a missing file.
+   */
+  test("a model too small to calibrate degrades to the lexical floor instead of guessing one", async () => {
+    const dir = tempRepo();
+    const modelsDir = tempRepo();
+    const path = modelPath(REGISTERED, modelsDir);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, JSON.stringify({ dims: 2, vocab: { menu: [1, 0], lateral: [0, 1] } }), "utf8");
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+    const other = await RawClient.connect(endpoint.address);
+    await other.send({ op: "join", name: "OTHER", mission: "m" });
+
+    await human.send({ op: "note", title: NOTE_PT });
+    const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
+    expect(enabled.ok).toBe(true);
+    expect((enabled as unknown as { loaded?: boolean }).loaded).toBe(false);
+
+    // The lexical floor still answers, and the vector channel contributes
+    // nothing rather than something invented.
+    const out = await human.send({ op: "notes", q: "menu lateral" });
+    expect(out.ok).toBe(true);
+    expect((out as unknown as { notes: { title: string }[] }).notes.map((n) => n.title)).toEqual([NOTE_PT]);
+
+    human.close();
+    other.close();
   });
 
   test("activating later backfills every note already in state, not just future ones", async () => {
@@ -159,12 +218,12 @@ describe("the brain, wired into a real daemon", () => {
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
 
     // Written *before* the brain is ever turned on.
-    await human.send({ op: "note", title: "o menu do sistema" });
+    await human.send({ op: "note", title: NOTE_PT });
     await human.send({ op: "brain", enable: REGISTERED.name });
 
-    const out = await human.send({ op: "notes", q: "lateral" });
+    const out = await human.send({ op: "notes", q: QUERY_EN });
     const notes = (out as unknown as { notes: { title: string }[] }).notes;
-    expect(notes.map((n) => n.title)).toEqual(["o menu do sistema"]);
+    expect(notes.map((n) => n.title)).toEqual([NOTE_PT]);
     human.close();
   });
 
@@ -177,13 +236,16 @@ describe("the brain, wired into a real daemon", () => {
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
-    await human.send({ op: "note", title: "o menu do sistema" });
+    await human.send({ op: "note", title: NOTE_PT });
     await human.send({ op: "brain", enable: REGISTERED.name });
     human.close();
 
-    const persisted = loadVectors(dir, 2);
+    const persisted = loadVectors(dir, DIMS, FIXTURE_FLOOR);
     expect(persisted).not.toBeNull();
-    expect(persisted!.search(new Float32Array([0, 1]), 5).length).toBeGreaterThan(0);
+    // Its own vector back, which is cosine 1 against itself and therefore
+    // above any valid floor — the round trip kept the geometry.
+    const own = persisted!.all()[0]!;
+    expect(persisted!.search(own.vec, 5).map((h) => h.id)).toEqual([own.id]);
   });
 
   test("enabling and disabling announce it to every other front on the bus", async () => {
@@ -220,7 +282,7 @@ describe("the brain, wired into a real daemon", () => {
     const enabled = await human.send({ op: "brain", enable: REGISTERED.name });
     expect(enabled.ok).toBe(true);
 
-    await human.send({ op: "note", title: "o menu do sistema" });
+    await human.send({ op: "note", title: NOTE_PT });
     const out = await human.send({ op: "notes", q: "menu" });
     expect(out.ok).toBe(true);
     human.close();

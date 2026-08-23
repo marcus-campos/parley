@@ -105,73 +105,51 @@ function cosine(a: Float32Array, b: Float32Array): number {
 }
 
 /**
- * A fixed cosine boundary cannot be the floor: dense static embedding tables
- * are anisotropic — arbitrary, unrelated text pairs land at high positive
- * cosine, which is what a real `potion` model is — so a constant of `0`
- * excludes only the exactly-orthogonal case and lets an anisotropic corpus
- * rank and pass in full, every time. There is no positive float worth
- * hand-picking instead either: there is no deployed model yet to calibrate
- * one against (the one registry entry is `xlmr`, which this build cannot
- * load — see `isLoadable`), and a guess made without that evidence would be
- * worse than none.
+ * Take the table's centre of mass out of a vector, so what is left is the
+ * text rather than the table.
  *
- * So the floor is computed from the distribution THIS query actually
- * produces over THIS index — the direct analogue of `requireDistinctive` on
- * the lexical side (lexical.ts): distinctively similar, not similar at all.
- * A hit must beat the mean and spread of every OTHER scored document by
- * `FLOOR_Z` standard deviations, on top of still needing a genuinely
- * positive cosine (never just "less negative than the rest" — the same
- * boundary the old constant drew, kept here as a floor under the floor).
+ * A dense static embedding table is anisotropic: most of every row is one
+ * shared direction, so two texts with nothing in common still land at cosine
+ * 0.85 and up, and where exactly they land drifts with how many tokens each
+ * side pooled. Subtracting the mean row (`calibrate.ts`) removes that shared
+ * direction, and with it the drift — measured, the null cosine goes from
+ * "0.80 to 0.86 depending on text length" to "0.00 +/- 0.06 regardless." That
+ * invariance is what lets one stored floor be honest for every query.
  *
- * "Every OTHER document" — leave-one-out — is load-bearing, not a stylistic
- * choice: folding a candidate's own score into the mean and standard
- * deviation it is then compared against lets a genuine, dominant match drag
- * its own threshold up as it drags the mean up (a real match at 0.95 among
- * three unrelated hits at 0.05 raises the whole-population mean enough that
- * a plain, single mean+2σ excludes the 0.95 hit too — outlier detection
- * calls this masking). Scoring each candidate against the *rest* of the
- * field, never against a distribution its own value has already polluted,
- * is what lets a real standout still clear the bar while a merely
- * anisotropic tie to the whole corpus never does — both directions proved in
- * embed.test.ts.
- *
- * Below `MIN_CANDIDATES_FOR_FLOOR`, "distinctively above the rest" cannot be
- * asked of one or two points (mean and spread over a single peer are not a
- * distribution) — the same discipline `LexicalIndex.search` already applies
- * to document frequency before treating a term's rarity as signal
- * (`MIN_DOCS_FOR_THRESHOLD`, lexical.ts). Below the gate, a hit qualifies on
- * the old absolute rule alone: a genuinely positive cosine.
+ * The zero vector stays the zero vector, deliberately. Text with no known
+ * token has nothing to compare, and `-mean` would be a real direction
+ * pointing nowhere in particular — precisely the "least-bad note over
+ * silence" answer the whole floor exists to refuse.
  */
-const FLOOR_Z = 2;
-const MIN_CANDIDATES_FOR_FLOOR = 4;
+export function debias(vec: Float32Array, mean: Float32Array): Float32Array {
+  if (norm(vec) === 0) return vec;
+  const out = new Float32Array(vec.length);
+  for (let i = 0; i < vec.length; i++) out[i] = vec[i]! - mean[i]!;
+  return out;
+}
 
 /**
- * Which of `scores` are distinctively similar, not merely similar at all —
- * one boolean per input score, same order. Exported so the floor's
- * statistics are assertable directly, on plain numbers, without having to
- * reverse-engineer a cosine geometry that produces them (`VectorIndex.search`
- * below is the only caller in production).
+ * Which of `scores` clear the floor — one boolean per input score, same
+ * order.
+ *
+ * Absolute, and that is the entire point. The floor is a number about the
+ * model (`calibrate.ts`), measured from what unrelated text actually scores
+ * against unrelated text on that table, so a candidate is judged alone:
+ * never against how many other candidates there are, never against how they
+ * compare to each other.
+ *
+ * Two earlier shapes are both refused by that sentence. A fixed `> 0` is not
+ * a floor at all on an anisotropic table, where every cosine is positive. A
+ * per-query z-score is an outlier detector, and an outlier detector answers
+ * "is this score unusual among the others?", never "is this document
+ * relevant?" — so it passes a whole corpus of equally-irrelevant notes
+ * whenever one of them is marginally less irrelevant, and rejects two
+ * identical perfect matches because neither stands out against the other.
+ * Both directions were wrong, and both are gone: identical matches all
+ * qualify or all do not, together, exactly as their score deserves.
  */
-export function aboveRelevanceFloor(scores: number[]): boolean[] {
-  if (scores.length < MIN_CANDIDATES_FOR_FLOOR) return scores.map((s) => s > 0);
-
-  const sum = scores.reduce((a, b) => a + b, 0);
-  const sumSq = scores.reduce((a, b) => a + b * b, 0);
-  const n = scores.length;
-
-  return scores.map((x) => {
-    if (x <= 0) return false;
-    const othersN = n - 1;
-    const othersMean = (sum - x) / othersN;
-    // Population variance of the n-1 peers, from the running sums rather
-    // than a second pass per candidate — the same one-pass-stats trick, just
-    // with this candidate's own contribution subtracted back out first.
-    // Clamped at 0 for the floating-point sliver that can otherwise land
-    // just under it when every peer is identical.
-    const othersVar = Math.max(0, (sumSq - x * x) / othersN - othersMean * othersMean);
-    const floor = othersMean + FLOOR_Z * Math.sqrt(othersVar);
-    return x > floor;
-  });
+export function aboveRelevanceFloor(scores: number[], floor: number): boolean[] {
+  return scores.map((s) => s > floor);
 }
 
 interface Entry { vec: Float32Array; kind: Hit["kind"] }
@@ -185,7 +163,15 @@ interface Entry { vec: Float32Array; kind: Hit["kind"] }
 export class VectorIndex {
   private readonly entries = new Map<string, Entry>();
 
-  constructor(public readonly dims: number) {}
+  /**
+   * `floor` is the model's own measured relevance boundary (`calibrate.ts`).
+   * It is required, not optional with a default: a default would be a guessed
+   * constant, and a guessed constant is what the two previous attempts at
+   * this were. An index that cannot be told what unrelated looks like is not
+   * built at all — the daemon leaves the brain off and the lexical floor
+   * answers instead.
+   */
+  constructor(public readonly dims: number, public readonly floor: number) {}
 
   get size(): number { return this.entries.size; }
 
@@ -204,15 +190,15 @@ export class VectorIndex {
 
   search(vec: Float32Array, k: number): Hit[] {
     // A query with no known token at all embeds to the zero vector — there is
-    // nothing to compare, not universal agreement. Without this, every
-    // document would tie at `cosine(zero, x) === 0`, get ranked, and receive
-    // a positive RRF bump once fused — resurrecting "least-bad note over
-    // silence" through the one channel the lexical floor already closed it
-    // on (Task 2's distinctiveness threshold). Silence is the honest answer.
+    // nothing to compare, not universal agreement. `cosine` already answers 0
+    // for it, and 0 is below every valid floor, so this is belt and braces
+    // rather than the load-bearing rule it was when the floor was 0 itself.
+    // It stays because it says the honest thing out loud: silence, not
+    // universal agreement.
     if (norm(vec) === 0) return [];
 
     const scored = [...this.entries.entries()].map(([id, e]) => ({ id, score: cosine(vec, e.vec), kind: e.kind }));
-    const qualifies = aboveRelevanceFloor(scored.map((h) => h.score));
+    const qualifies = aboveRelevanceFloor(scored.map((h) => h.score), this.floor);
 
     return scored
       .filter((_, i) => qualifies[i])
