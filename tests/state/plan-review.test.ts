@@ -10,6 +10,13 @@ function joined(state: State, name: string, ms = 0): string {
   const out = apply(state, null, { v: 1, op: "join", name, mission: `${name} mission` }, at(ms));
   return (out.response as unknown as { id: string }).id;
 }
+/** `parley watch` and the web panel both join exactly like this. */
+function joinedAsHuman(state: State, name: string, ms: number): string {
+  const out = apply(state, null, {
+    v: 1, op: "join", name, mission: "watching", harness: "panel", kind: "human", connected: true,
+  }, at(ms));
+  return (out.response as unknown as { id: string }).id;
+}
 const task = (n: number, paths: string[]) => ({ n, title: `Task ${n}`, paths, parseError: null });
 
 let state: State;
@@ -103,6 +110,56 @@ describe("review after every task", () => {
     const review = solo.work.find((w) => w.kind === "review" && w.reviewOf === item.id)!;
     expect(review.state).toBe("open");
     expect(review.offeredToId).toBeNull();
+  });
+
+  /**
+   * The reviewer is picked from live AGENTS, and the filter is load-bearing in
+   * the ordinary setup rather than in a corner: `parley watch` and the web
+   * panel both join `kind: "human"`, so a person following along is a live
+   * participant on every bus somebody is actually watching.
+   *
+   * Offer them a review and it stalls the wave for `OFFER_TTL_MS` — the offer
+   * is exclusive, the panel has no way to take it, and every agent that tries
+   * is refused until `tick`'s rule 5 lets go five minutes later. A person
+   * watching their own plan run would be the thing that stopped it.
+   */
+  test("a review is never offered to a person watching the panel, even when they joined first", () => {
+    const watched = initialState("advisory");
+    apply(watched, null, { v: 1, op: "shape", shape: "plan" }, at(1000));
+    // Joined before the agent on purpose: participant order is join order, so
+    // a selection that only skipped the author would land on the panel here.
+    const panel = joinedAsHuman(watched, "PANEL", 1010);
+    const hand = joined(watched, "HAND", 1020);
+    const other = joined(watched, "OTHER", 1030);
+
+    apply(watched, hand, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(1100));
+    const item = watched.work[0]!;
+    apply(watched, hand, { v: 1, op: "take", id: item.id }, at(1200));
+    apply(watched, hand, { v: 1, op: "done", id: item.id }, at(1300));
+
+    const review = watched.work.find((w) => w.kind === "review")!;
+    expect(watched.participants[panel]!.kind).toBe("human");
+    expect(review.offeredToId).toBe(other);
+  });
+
+  test("with nobody live but a person, the review is open — an offer they cannot answer is worse than none", () => {
+    const watched = initialState("advisory");
+    apply(watched, null, { v: 1, op: "shape", shape: "plan" }, at(1000));
+    const panel = joinedAsHuman(watched, "PANEL", 1010);
+    const hand = joined(watched, "HAND", 1020);
+
+    apply(watched, hand, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(1100));
+    const item = watched.work[0]!;
+    apply(watched, hand, { v: 1, op: "take", id: item.id }, at(1200));
+    const out = apply(watched, hand, { v: 1, op: "done", id: item.id }, at(1300));
+
+    const review = watched.work.find((w) => w.kind === "review")!;
+    expect(watched.participants[panel]!.kind).toBe("human");
+    expect(review.state).toBe("open");
+    expect(review.offeredToId).toBeNull();
+    // And the announcement says so, rather than naming a front nobody can act as.
+    expect(out.broadcast.some((e) => e.text.includes("review needed") && e.text.includes("open"))).toBe(true);
+    expect(out.broadcast.some((e) => e.text.includes("PANEL"))).toBe(false);
   });
 
   // C1: a review is `origin: "planned"`, and `drop` used to refuse every

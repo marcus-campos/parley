@@ -175,6 +175,18 @@ describe("dispatching a plan", () => {
     const review2 = state.work.find((w) => w.kind === "review" && w.reviewOf === item2.id)!;
     apply(state, coord, { v: 1, op: "take", id: review1.id }, at(600));
     apply(state, coord, { v: 1, op: "done", id: review1.id }, at(700));
+
+    // The discriminating moment, and the only one in this wave's life where
+    // task 1 is entirely finished and task 2 is not: both tasks done, review 1
+    // done, review 2 still standing. A gate that read only the FIRST task
+    // number of the wave — `wave.taskNumbers.slice(0, 1)` — sees nothing but
+    // task 1's two done items here and opens wave 1 early. Every other
+    // assertion in this file is taken either with both reviews outstanding or
+    // after both are done, where such a gate and the real one agree.
+    expect(state.plan!.waveIndex).toBe(0);
+    expect(review2.state).toBe("offered");
+    expect(state.work.find((w) => w.title === "Task 3")).toBeUndefined();
+
     apply(state, coord, { v: 1, op: "take", id: review2.id }, at(800));
     apply(state, coord, { v: 1, op: "done", id: review2.id }, at(900));
 
