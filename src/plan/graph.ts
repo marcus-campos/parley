@@ -22,6 +22,13 @@ function tasksCollide(a: PlanTask, b: PlanTask): boolean {
  * independent. This is the same question, answered from the paths the plan
  * already declares.
  *
+ * Read by tests and kept as the named thing the design spec argues from; the
+ * shipped dispatcher calls `waves` below, which asks `tasksCollide` directly
+ * rather than going through this Map. So this has no production caller today —
+ * it is the graph, in the shape a response would carry if one ever reported
+ * it, and the place the collision rule is stated on its own rather than folded
+ * into a seating loop.
+ *
  * A plan is expected to give every task a distinct number, since that number
  * is the key this Map is returned under. Task 1's parser reads what is
  * written and does not enforce uniqueness; a plan that still repeats a

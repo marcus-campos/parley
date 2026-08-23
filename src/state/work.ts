@@ -236,6 +236,9 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
   };
 }
 
+/** What stands in for `paths[0]` on a task that declared no files. Not a path. */
+const NO_DECLARED_PATH = "(no declared path)";
+
 /**
  * Publish every item of one wave.
  *
@@ -257,12 +260,21 @@ function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): { events: Conv
   for (const task of waveTasks) {
     const label = task.title || `task ${task.n}`;
     const title = task.parseError ? `${label} — ${task.parseError}` : label;
-    const paths = task.paths.length > 0 ? task.paths : ["(no declared path)"];
+    // A task that declared nothing still gets an item — never dropping a task
+    // is the rule — but it holds no territory, so `paths[0]` is a label rather
+    // than a path. Parenthesised and spaced so no reader mistakes it for one,
+    // and deliberately never matched against a claim: `matchesPath("**", …)`
+    // says true for any string, so a front holding a broad claim would be
+    // announced as "waiting" on a path that does not exist.
+    const declared = task.paths.length > 0;
+    const paths = declared ? task.paths : [NO_DECLARED_PATH];
     for (const path of paths) {
       // Ruling: dispatch authority covers fronts working the plan, never a
       // front a person is directing by hand — so a held path is published
       // open and announced as waiting, not taken from its owner.
-      const holder = state.claims.find((c) => c.orphanedAtMs === null && !c.auto && matchesPath(c.pattern, path));
+      const holder = declared
+        ? state.claims.find((c) => c.orphanedAtMs === null && !c.auto && matchesPath(c.pattern, path))
+        : undefined;
       const item: WorkItem = {
         id: ctx.nextId("w"),
         paths: [path],

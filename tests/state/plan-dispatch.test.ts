@@ -84,6 +84,38 @@ describe("dispatching a plan", () => {
     expect(out.broadcast.some((e) => e.text.includes("waiting"))).toBe(false);
   });
 
+  /**
+   * A task that declared no files still gets an item — never dropping a task
+   * is the rule — but the label standing in for its path is not territory.
+   * `matchesPath("**", s)` is true for any string at all, so a front holding a
+   * broad explicit claim was announced as holding "(no declared path)": a
+   * waiting notice about a file that does not exist, naming a real person, in
+   * the one announcement the plan makes about possession.
+   */
+  test("the placeholder path of a task that declared none is never matched against a claim", () => {
+    apply(state, worker, { v: 1, op: "claim", paths: ["**"], intent: "everything" }, at(50));
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [
+        { n: 1, title: "Task 1", paths: [], parseError: "no **Files:** block" },
+        { n: 2, title: "Task 2", paths: ["a.ts"], parseError: null },
+      ],
+    }, at(100));
+
+    const waiting = out.broadcast.filter((e) => e.text.includes("waiting"));
+    // The control: task 2 declared a real path under the same broad claim, so
+    // the announcement must still happen — the fix is "not that string", not
+    // "never announce".
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]!.text).toContain("a.ts");
+    expect(waiting[0]!.text).toContain("task 2");
+    expect(out.broadcast.some((e) => e.text.includes("(no declared path)"))).toBe(false);
+    // And the item still exists, still open, still carrying its reason.
+    const orphan = state.work.find((w) => w.title.startsWith("Task 1"))!;
+    expect(orphan.state).toBe("open");
+    expect(orphan.paths).toEqual(["(no declared path)"]);
+  });
+
   test("a task that would not parse is published, never dropped", () => {
     apply(state, coord, {
       v: 1, op: "plan", goal: "g", spec: null,

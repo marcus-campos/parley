@@ -72,7 +72,12 @@ describe("computing what may run together", () => {
     expect(collisions(out.flatMap((w) => w.tasks)).get(1)).toContain(2);
   });
 
-  test("the graph is reported, not just the waves", () => {
+  // `collisions` has no production caller (see its doc): `waves` asks
+  // `tasksCollide` directly. This pins the graph on its own terms anyway,
+  // because it is where the rule is stated without a seating loop wrapped
+  // around it — and because a task that collides with nobody must come back
+  // with an empty list, not be missing from the Map.
+  test("the graph answers for every task, including the ones that collide with nobody", () => {
     const map = collisions([task(1, ["src/app.ts"]), task(2, ["src/app.ts"]), task(3, ["other.ts"])]);
     expect(map.get(1)).toEqual([2]);
     expect(map.get(2)).toEqual([1]);
