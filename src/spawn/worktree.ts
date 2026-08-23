@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, sep } from "node:path";
+import { basename, join, sep } from "node:path";
 
 export interface Worktree {
   path: string;
@@ -37,6 +37,51 @@ function gitAsync(cwd: string, args: string[]): Promise<string | null> {
 /** Where every newborn's directory goes. The one place that decides so. */
 function worktreeHome(repoRoot: string): string {
   return join(repoRoot, ".parley", "worktrees");
+}
+
+/**
+ * The branch a newborn's directory sits on. The one place that decides so,
+ * read by `addWorktree` when it creates it and by `removeWorktreeIfClean` when
+ * it takes it away, for the same reason `isNewbornWorktree` reads
+ * `worktreeHome` instead of restating the path.
+ */
+function branchForWorktree(path: string): string {
+  return `parley/${basename(path)}`;
+}
+
+/**
+ * Where the next newborn's index starts, read from what git already has.
+ *
+ * `git worktree remove` does not delete the branch it was on, and the daemon's
+ * counter lived in memory and restarted at 1. So the first birth of every
+ * daemon lifetime after the first asked for `-b parley/pool-1` against a
+ * branch that was already there: `git` refused, `bearFront` caught it and
+ * returned `null`, and the daemon announced "a front could not be started" and
+ * then burned a whole `BIRTH_COOLDOWN_MS` — five minutes — before index 2 got
+ * through. One phantom failure and a five-minute delay per restart, forever.
+ *
+ * Read from branches rather than from directories on disk, because the branch
+ * is the thing git refuses on and a branch outlives its directory: removal
+ * deletes only branches git agrees are fully merged, which is exactly the ones
+ * holding nothing. A newborn that committed something keeps its branch, keeps
+ * its index reserved, and is counted here.
+ *
+ * Called once, when the daemon boots. Any failure answers 1, which is both the
+ * answer for a repository that has never borne a front and the behaviour that
+ * was there before.
+ */
+export function nextFrontIndexIn(repoRoot: string): number {
+  try {
+    const listed = git(repoRoot, ["branch", "--list", "--format=%(refname:short)", "parley/pool-*"]);
+    let highest = 0;
+    for (const line of listed.split("\n")) {
+      const found = /^parley\/pool-(\d+)$/.exec(line.trim());
+      if (found) highest = Math.max(highest, Number(found[1]));
+    }
+    return highest + 1;
+  } catch {
+    return 1;
+  }
 }
 
 /**
@@ -118,7 +163,7 @@ function ignoreNewbornWorktrees(repoRoot: string): void {
  */
 export function addWorktree(repoRoot: string, name: string): Worktree {
   const dir = join(worktreeHome(repoRoot), name);
-  const branch = `parley/${name}`;
+  const branch = branchForWorktree(dir);
   git(repoRoot, ["worktree", "add", "-b", branch, dir, "HEAD"]);
   // After the checkout, never before: writing it first would create
   // `<repoRoot>/.parley` for a `repoRoot` that does not exist, and a birth
@@ -163,7 +208,7 @@ export type WorktreeRemoval =
  * the full cost repeated on every tick forever.
  */
 export async function removeWorktreeIfClean(repoRoot: string, path: string): Promise<WorktreeRemoval> {
-  if (!existsSync(path)) return "removed";
+  if (!existsSync(path)) return collectBranch(repoRoot, path);
   const status = await gitAsync(path, ["status", "--porcelain"]);
   // `null` is a git that failed or timed out — not proof the tree is clean,
   // and the one thing git's own refusal cannot cover, because you would have
@@ -173,5 +218,27 @@ export async function removeWorktreeIfClean(repoRoot: string, path: string): Pro
   const removed = await gitAsync(repoRoot, ["worktree", "remove", path]);
   // A worktree that will not come off is left where it is. Losing disk is
   // cheaper than losing somebody's changes.
-  return removed === null ? "failed" : "removed";
+  if (removed === null) return "failed";
+  return collectBranch(repoRoot, path);
+}
+
+/**
+ * The other half of "removed on death" (§4.4). `git worktree remove` takes the
+ * directory and leaves the branch, so `parley/pool-*` accumulated in every
+ * repository without bound and the index that made it could never be used
+ * again.
+ *
+ * `-d`, never `-D`. Git refuses a branch that is not fully merged, which is
+ * the same discipline one level up: a newborn that committed its work has a
+ * *clean* tree, so cleanliness alone would have thrown those commits away.
+ * Git's refusal is what keeps them, and the branch that survives keeps its
+ * index reserved for `nextFrontIndexIn`.
+ *
+ * The outcome is "removed" either way: what this reports on is the worktree.
+ * A branch git would not delete is a branch holding work, which is a reason to
+ * keep it, not a failure to report.
+ */
+async function collectBranch(repoRoot: string, path: string): Promise<"removed"> {
+  await gitAsync(repoRoot, ["branch", "-d", branchForWorktree(path)]);
+  return "removed";
 }

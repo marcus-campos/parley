@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addWorktree, isNewbornWorktree, removeWorktreeIfClean } from "../../src/spawn/worktree";
+import { addWorktree, isNewbornWorktree, nextFrontIndexIn, removeWorktreeIfClean } from "../../src/spawn/worktree";
 
 let repo: string;
 beforeEach(() => {
@@ -58,10 +58,18 @@ describe("a worktree for a newborn front", () => {
     expect(a.branch).not.toBe(b.branch);
   });
 
-  test("an unchanged worktree is removed", async () => {
+  const branches = () =>
+    execFileSync("git", ["branch", "--list", "--format=%(refname:short)", "parley/*"], { cwd: repo, encoding: "utf8" });
+
+  test("an unchanged worktree is removed, and its branch goes with it", async () => {
     const wt = addWorktree(repo, "pool-1");
+    expect(branches()).toContain("parley/pool-1");
     expect(await removeWorktreeIfClean(repo, wt.path)).toBe("removed");
     expect(existsSync(wt.path)).toBe(false);
+    // `git worktree remove` takes the directory and leaves the branch. Left
+    // there, `parley/pool-*` accumulates in every repository forever and the
+    // index that made it can never be used again — see `nextFrontIndexIn`.
+    expect(branches()).not.toContain("parley/pool-1");
   });
 
   test("a worktree with work in it is kept — nobody's changes are thrown away", async () => {
@@ -82,6 +90,14 @@ describe("a worktree for a newborn front", () => {
     git("add", "-A");
     git("commit", "-qm", "the front's work");
     expect(await removeWorktreeIfClean(repo, wt.path)).toBe("removed");
+
+    // And the commits survive the collection. Cleanliness is what lets the
+    // *directory* go; it says nothing about the branch, which is now the only
+    // place that work exists. `git branch -d` refuses a branch that is not
+    // fully merged, and `-D` would not have.
+    expect(branches()).toContain("parley/pool-1");
+    const log = execFileSync("git", ["log", "--oneline", "parley/pool-1"], { cwd: repo, encoding: "utf8" });
+    expect(log).toContain("the front's work");
   });
 
   test("a git that could not run is not proof the tree is clean", async () => {
@@ -139,6 +155,51 @@ describe("a worktree for a newborn front", () => {
  * parley made — and `git worktree remove`'s own refusal is not what this is
  * for.
  */
+describe("which index the next newborn gets", () => {
+  test("a repository that has never borne a front starts at 1", () => {
+    expect(nextFrontIndexIn(repo)).toBe(1);
+  });
+
+  test("a live newborn's index is not handed out twice", () => {
+    addWorktree(repo, "pool-1");
+    expect(nextFrontIndexIn(repo)).toBe(2);
+  });
+
+  test("the phantom failure: a branch git kept is an index that cannot be reused", async () => {
+    // The whole point, and the thing that made this reachable only now that
+    // collection works. A newborn commits something, goes home, and its
+    // worktree is collected — but `git branch -d` refuses a branch holding
+    // unmerged work, so `parley/pool-1` stays. The daemon's counter is in
+    // memory and restarts at 1, so the next daemon's first birth asked git for
+    // a branch that was already there, `bearFront` returned null, and the pool
+    // waited out a full BIRTH_COOLDOWN_MS for nothing.
+    const wt = addWorktree(repo, "pool-1");
+    writeFileSync(join(wt.path, "b.txt"), "work the front committed\n");
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: wt.path, stdio: "ignore" });
+    git("add", "-A");
+    git("commit", "-qm", "the front's work");
+    expect(await removeWorktreeIfClean(repo, wt.path)).toBe("removed");
+
+    // This is the failure, reproduced: starting over at 1 throws.
+    expect(() => addWorktree(repo, "pool-1")).toThrow();
+    // And this is the fix: the index is read from git, which is what refuses.
+    expect(nextFrontIndexIn(repo)).toBe(2);
+    expect(addWorktree(repo, `pool-${nextFrontIndexIn(repo)}`).branch).toBe("parley/pool-2");
+  });
+
+  test("a repository whose branches cannot be read still bears a front", () => {
+    // A birth is never refused because a `git` did not answer. Outside any
+    // repository there is nothing to list, and the answer is the same one an
+    // untouched repository gives.
+    const outside = mkdtempSync(join(tmpdir(), "parley-not-a-repo-"));
+    try {
+      expect(nextFrontIndexIn(outside)).toBe(1);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("what parley made, and what it did not", () => {
   const root = join(tmpdir(), "some-repo");
   const home = join(root, ".parley", "worktrees");

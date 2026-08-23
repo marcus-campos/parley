@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ParleyDaemon } from "../../src/daemon/server";
@@ -458,6 +458,54 @@ describe("the newborn's worktree", () => {
     await front.send({ op: "who" });
     await daemon.close();
     expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+  });
+});
+
+describe("which index the daemon's next newborn gets", () => {
+  test("a branch a previous daemon left behind is not asked for twice", async () => {
+    // The whole birth path through the daemon, which nothing exercised before:
+    // a stale pool, no idle front, `tick` raising an intent, `bearFrontFor`
+    // turning it into a worktree and a process.
+    //
+    // And the defect it was hiding. `git worktree remove` does not delete the
+    // branch, and the daemon's index lived in memory and restarted at 1 — so
+    // the first birth of every daemon lifetime after the first asked git for
+    // `parley/pool-1`, which was already there. `bearFront` caught the
+    // failure and returned null, the daemon announced "a front could not be
+    // started", and the pool then waited out a full BIRTH_COOLDOWN_MS — five
+    // minutes — before index 2 got through. Every restart, forever.
+    const repo = gitRepo();
+    // A newborn that committed its work: the worktree was collected, and
+    // `git branch -d` refused the branch because it holds commits.
+    execFileSync("git", ["branch", "parley/pool-1"], { cwd: repo, stdio: "ignore" });
+
+    savedEnv = { ...process.env };
+    const binDir = mkdtempSync(join(tmpdir(), "parley-stub-bin-"));
+    dirs.push(binDir);
+    // The daemon spawns `claude` for real. Nothing here may start an agent.
+    writeFileSync(join(binDir, "claude"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(binDir, "claude"), 0o755);
+    process.env.PATH = `${binDir}:${process.env.PATH}`;
+
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const front = await connectTo(endpoint.address);
+    await front.send({ op: "join", name: "CORE", cwd: repo, kind: "agent" });
+    await front.send({ op: "shape", shape: "pool" });
+    // An explicit claim is what makes CORE busy rather than idle capacity —
+    // otherwise the pool rings its doorbell and never asks to be born.
+    await front.send({ op: "claim", paths: ["src/**"] });
+    await front.send({ op: "work", title: "the thing nobody picked up", paths: ["a.ts"] });
+
+    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await front.send({ op: "who" });
+    await daemon.close();
+
+    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).toContain("providing a front");
+    expect(said).not.toContain("could not be started");
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-2"))).toBe(true);
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-1"))).toBe(false);
   });
 });
 

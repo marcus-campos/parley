@@ -12,7 +12,7 @@ import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint
 import type { Address } from "../transport/address";
 import { readSpawnConfigIn, type SpawnConfig } from "../cli/spawn-config";
 import { bearFront } from "../spawn/birth";
-import { isNewbornWorktree, removeWorktreeIfClean, type WorktreeRemoval } from "../spawn/worktree";
+import { isNewbornWorktree, nextFrontIndexIn, removeWorktreeIfClean, type WorktreeRemoval } from "../spawn/worktree";
 
 interface Conn {
   socket: Socket;
@@ -87,7 +87,7 @@ export class ParleyDaemon {
   /** Read once at boot, re-read whenever `parley/spawn.json` changes underneath us. */
   private spawnConfig: SpawnConfig;
   private spawnConfigWatcher: FSWatcher | null = null;
-  private nextFrontIndex = 1;
+  private nextFrontIndex: number;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
@@ -98,6 +98,14 @@ export class ParleyDaemon {
     // below) — a state reconstruction is only lossless if it re-derives what
     // happened, not what would happen under today's hardcoded default.
     this.spawnConfig = readSpawnConfigIn(opts.gitCommonDir);
+    // Read from git, not started at 1. The counter is in memory and the branch
+    // a collected worktree was on is not deleted by `git worktree remove`, so
+    // restarting the count meant the first birth of every daemon lifetime
+    // after the first collided with a branch that was already there — a
+    // phantom "a front could not be started" and a full BIRTH_COOLDOWN_MS of
+    // delay, every time.
+    const root = this.repoRootForExport();
+    this.nextFrontIndex = root ? nextFrontIndexIn(root) : 1;
     this.state = this.restore(opts.mode ?? "advisory");
     this.lastActivityMs = this.now();
   }
