@@ -644,6 +644,24 @@ export function finishWork(state: State, actorId: string | null, frame: Record<s
   if (item.takenById !== me.id) {
     return { state, response: err("NOT_TAKEN", "you are not holding this item"), broadcast: [] };
   }
+  // done is terminal here too, and `done` never clears `takenById` — so without
+  // this the finisher, and only the finisher, can send `done` again and get a
+  // second review filed under the same task. Two ways that hurts, both
+  // reproduced: while the plan runs, the wave gate then waits for a review
+  // nobody asked for and the next wave never opens; after `--replace`, the
+  // second review is filed under a task number the new plan no longer tracks,
+  // so it is live work that `livePlanItems` cannot see and no future
+  // `--replace` can withdraw. Retry-after-timeout is the reachable input:
+  // nothing else can reach this line.
+  //
+  // Refused rather than absorbed as a no-op. The silent `ok` is what let this
+  // live: it told a retrying front that a second `done` had landed when what
+  // had landed was a duplicate review. `takeWork` and `dropWork` both already
+  // refuse a done item; this is the third of three, worded exactly like
+  // `dropWork`'s so the closed list in docs/PROTOCOL.md stays one rule.
+  if (item.state === "done") {
+    return { state, response: err("NOT_TAKEN", "already done"), broadcast: [] };
+  }
 
   item.state = "done";
   me.lastSeenMs = ctx.nowMs;

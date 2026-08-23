@@ -180,6 +180,54 @@ describe("a plan, over the wire", () => {
     });
   });
 
+  /**
+   * `--replace` keeps what the old plan FINISHED, on purpose: it is history
+   * and nothing waits on it. A kept `done` item still carries `takenById`,
+   * so its holder could send `done` again — and the review that fired was
+   * filed under a task number the new plan does not track, which made it live
+   * work no `livePlanItems` could see and no later `--replace` could withdraw.
+   * The residue accumulated one item per repeat.
+   */
+  test("--replace leaves nothing behind, including through a repeated done", async () => {
+    await withDaemon(async (connect) => {
+      const coord = await connect("COORD");
+      const worker = await connect("WORKER");
+      await coord.send({ v: 1, op: "shape", shape: "plan" });
+      await coord.send({
+        v: 1, op: "plan", goal: "g", spec: null,
+        tasks: [task(1, "A", ["a.ts"]), task(2, "B", ["b.ts"])],
+      });
+
+      const a = items(await worker.send({ v: 1, op: "works", state: "open" }))
+        .find((w) => w.paths[0] === "a.ts")!;
+      await worker.send({ v: 1, op: "take", id: a.id });
+      await worker.send({ v: 1, op: "done", id: a.id });
+      const [review] = items(await coord.send({ v: 1, op: "works", state: "offered" })) as [Item];
+      await coord.send({ v: 1, op: "take", id: review.id });
+      await coord.send({ v: 1, op: "done", id: review.id });
+
+      // `a.ts` is done and kept; `b.ts` is withdrawn.
+      const replaced = await coord.send({
+        v: 1, op: "plan", goal: "g2", spec: null, replace: true, tasks: [task(9, "Z", ["z.ts"])],
+      });
+      expect(replaced.withdrawn).toBe(1);
+
+      const repeat = await worker.send({ v: 1, op: "done", id: a.id });
+      expect(repeat.ok).toBe(false);
+
+      const live = items(await coord.send({ v: 1, op: "works" })).filter((w) => w.state !== "done");
+      expect(live.map((w) => w.paths[0])).toEqual(["z.ts"]);
+
+      // And the next re-sequence really does clear everything it left: an
+      // untracked item would survive here, which is how the residue showed.
+      await coord.send({
+        v: 1, op: "plan", goal: "g3", spec: null, replace: true, tasks: [task(9, "Y", ["y.ts"])],
+      });
+      const after = items(await coord.send({ v: 1, op: "works" })).filter((w) => w.state !== "done");
+      expect(after.map((w) => w.paths[0])).toEqual(["y.ts"]);
+    });
+  });
+
   test("the bus is told, not only the front that took it", async () => {
     await withDaemon(async (connect) => {
       const coord = await connect("COORD");

@@ -340,3 +340,64 @@ describe("review after every task", () => {
     expect(state.work.filter((w) => w.kind === "review" && w.reviewOf === review.id)).toHaveLength(0);
   });
 });
+
+/**
+ * A retried `done` — the front sent it, the answer was lost, it sent it again.
+ * `done` never clears `takenById`, so the finisher is the ONLY front that can
+ * reach the branch at all: there is no third party to protect here, only the
+ * duplicate to refuse.
+ */
+describe("done is terminal: a second done files no second review", () => {
+  test("the retry is refused, not absorbed", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    expect(apply(state, worker, { v: 1, op: "done", id: item.id }, at(300)).response.ok).toBe(true);
+
+    const again = apply(state, worker, { v: 1, op: "done", id: item.id }, at(400));
+    expect(again.response.ok).toBe(false);
+    expect(again.response).toMatchObject({ error: { code: "NOT_TAKEN" } });
+    expect(state.work.filter((w) => w.kind === "review" && w.reviewOf === item.id)).toHaveLength(1);
+    expect(again.broadcast).toHaveLength(0);
+  });
+
+  // The expensive half. A second review under the same task is a review the
+  // wave gate then waits for and nobody asked for, so the next wave never
+  // opens — a plan wedged by a retry, with every response `ok`.
+  test("a retried done does not wedge the next wave", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["a.ts"])],
+    }, at(100));
+    const item = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: item.id }, at(200));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(300));
+    apply(state, worker, { v: 1, op: "done", id: item.id }, at(310));
+
+    const reviews = state.work.filter((w) => w.kind === "review" && w.reviewOf === item.id);
+    expect(reviews).toHaveLength(1);
+    const review = reviews[0]!;
+    const reviewer = review.offeredToId!;
+    apply(state, reviewer, { v: 1, op: "take", id: review.id }, at(400));
+    apply(state, reviewer, { v: 1, op: "done", id: review.id }, at(500));
+
+    expect(state.plan!.waveIndex).toBe(1);
+    expect(state.work.some((w) => w.title === "Task 2" && w.state === "open")).toBe(true);
+  });
+
+  // The control, so the refusal cannot be mistaken for "done never answers
+  // twice about anything": a DIFFERENT item the same front holds still closes.
+  test("it refuses the duplicate, not the front", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), task(2, ["b.ts"])],
+    }, at(100));
+    const [one, two] = [state.work[0]!, state.work[1]!];
+    apply(state, worker, { v: 1, op: "take", id: one.id }, at(200));
+    apply(state, worker, { v: 1, op: "take", id: two.id }, at(210));
+    apply(state, worker, { v: 1, op: "done", id: one.id }, at(300));
+    apply(state, worker, { v: 1, op: "done", id: one.id }, at(310));
+
+    const second = apply(state, worker, { v: 1, op: "done", id: two.id }, at(400));
+    expect(second.response.ok).toBe(true);
+    expect(two.state).toBe("done");
+  });
+});
