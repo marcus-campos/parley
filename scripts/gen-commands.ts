@@ -29,19 +29,24 @@
 // CI regenerates the file and fails on any diff, so an unstable generator
 // would turn every unrelated pull request red.
 //
-// One consequence of `docs:commands` being a shell redirect: the shell
-// truncates docs/reference/commands.md before this script runs, so a run that
-// throws leaves the file empty. That is loud rather than dangerous — CI fails
-// either way, and `git checkout docs/reference/commands.md` puts it back — but
-// it is worth knowing before you wonder where the page went.
+// `docs:commands` passes --write and this script does the writing, rather than
+// the shell redirecting stdout into the page. With a redirect the shell empties
+// docs/reference/commands.md before bun even starts, so any run that threw left
+// a zero-byte page behind; CI caught it, but docs.yml deploys on push to main
+// with no dependency on ci.yml, so an empty page reaching main by a route that
+// skipped CI would publish as a blank Commands page. Writing after rendering
+// means a failed run changes nothing at all.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 
 /** The file that holds both sources of truth. */
 export const MAIN_PATH = join(ROOT, "src", "cli", "main.ts");
+
+/** The page this generator owns. */
+export const PAGE_PATH = join(ROOT, "docs", "reference", "commands.md");
 
 /**
  * Entry points that dispatch on a name but are not commands people run.
@@ -507,7 +512,10 @@ export function renderCommandReference(source?: string): string {
     "command that exists but is not in the help text, or is in the help text but does",
     "not exist, fails the generator rather than producing a page that quietly lies.",
     "",
-    "It is the same text `parley --help` prints, so the two cannot disagree.",
+    "Every invocation, flag and description below is the text `parley --help`",
+    "prints, so the two cannot disagree. It opens on the same line:",
+    "",
+    `> ${escapeProse(usage.tagline)}`,
     "",
   ];
 
@@ -534,5 +542,9 @@ export function renderCommandReference(source?: string): string {
 }
 
 if (import.meta.main) {
-  process.stdout.write(renderCommandReference());
+  const text = renderCommandReference();
+  // Render first, write second. Nothing touches the page until the generator
+  // has produced a whole one.
+  if (process.argv.includes("--write")) writeFileSync(PAGE_PATH, text);
+  else process.stdout.write(text);
 }

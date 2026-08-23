@@ -9,7 +9,10 @@ it, and CI fails when the committed copy does not match what the CLI offers. A
 command that exists but is not in the help text, or is in the help text but does
 not exist, fails the generator rather than producing a page that quietly lies.
 
-It is the same text `parley --help` prints, so the two cannot disagree.
+Every invocation, flag and description below is the text `parley --help`
+prints, so the two cannot disagree. It opens on the same line:
+
+> parley — coordination bus for concurrent agent sessions in one repository
 
 ## Setting up and keeping current
 

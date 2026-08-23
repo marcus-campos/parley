@@ -34,6 +34,15 @@ describe("the command reference", () => {
   test("it says the file is generated, so nobody edits it by hand", () => {
     expect(renderCommandReference()).toContain("generated");
   });
+
+  test("it carries the tagline, which is the first thing --help prints", () => {
+    // The page claimed to be the same text `parley --help` prints while
+    // dropping the one line that opens it: `parseUsage` extracted the tagline
+    // and stored it, and the renderer never emitted it.
+    const usage = parseUsage(mainSource);
+    expect(usage.tagline).toContain("coordination bus");
+    expect(renderCommandReference()).toContain(usage.tagline);
+  });
 });
 
 // The three tests above are the brief's, and on their own they are weak: the
@@ -399,9 +408,43 @@ describe("the generated file is byte-stable", () => {
 describe("the wiring that keeps it fresh", () => {
   test("package.json regenerates the file the test above compares against", () => {
     const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    expect(pkg.scripts["docs:commands"]).toBe(
-      "bun run scripts/gen-commands.ts > docs/reference/commands.md",
-    );
+    expect(pkg.scripts["docs:commands"]).toBe("bun run scripts/gen-commands.ts --write");
+  });
+
+  test("a failed generator leaves the page alone instead of emptying it", () => {
+    // A shell redirect truncates the page before bun starts, so a run that
+    // threw left a zero-byte Commands page behind. CI caught that; docs.yml
+    // deploys on push to main independently of ci.yml, so a blank page could
+    // reach the published site by a route that skipped CI.
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    expect(pkg.scripts["docs:commands"]).not.toContain(">");
+    const generator = readFileSync(join(root, "scripts", "gen-commands.ts"), "utf8");
+    // Rendering must happen before the write, not inside it.
+    const render = generator.indexOf("const text = renderCommandReference();");
+    const write = generator.indexOf("writeFileSync(PAGE_PATH, text)");
+    expect(render).toBeGreaterThan(0);
+    expect(write).toBeGreaterThan(render);
+  });
+
+  test("the deploy workflow refuses to publish a stale reference", () => {
+    // docs.yml triggers on push to main on its own and never ran the
+    // generator, so a stale page deployed even though a *broken build* could
+    // not. Bounded to staleness, and staleness is the one thing this branch
+    // claims is impossible.
+    const docs = readFileSync(join(root, ".github", "workflows", "docs.yml"), "utf8");
+    expect(docs).toContain("bun run docs:commands");
+    expect(docs).toContain("git diff --exit-code docs/reference/commands.md");
+  });
+
+  test("the deploy workflow configures Pages before it builds", () => {
+    // Harmless while `base` is hardcoded, and a silent breakage the day it is
+    // not: configure-pages is what resolves the base path a build would read.
+    const docs = readFileSync(join(root, ".github", "workflows", "docs.yml"), "utf8");
+    const configure = docs.indexOf("actions/configure-pages");
+    const build = docs.indexOf("bun run docs:build");
+    expect(configure).toBeGreaterThan(0);
+    expect(build).toBeGreaterThan(0);
+    expect(configure).toBeLessThan(build);
   });
 
   test("CI regenerates and fails on a diff", () => {

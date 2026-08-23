@@ -30,8 +30,25 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
-      - run: bun run docs:build
+
+      # Configure before building, not after: `configure-pages` is what resolves
+      # the base path a build would need. It is harmless today because base is
+      # hardcoded to "/parley/" in docs/.vitepress/config.ts, and it is a silent
+      # breakage the day that becomes dynamic.
       - uses: actions/configure-pages@v5
+
+      # This workflow triggers on push to main on its own, with no dependency on
+      # ci.yml, and ci.yml is the only other place the reference is regenerated.
+      # Without this step a commit that reached main by any route which skipped
+      # CI deploys a stale Commands page — on the branch whose whole premise is
+      # that the reference cannot go stale. A broken *build* already refuses to
+      # deploy; a merely out-of-date page did not.
+      - name: Command reference is current
+        run: |
+          bun run docs:commands
+          git diff --exit-code docs/reference/commands.md
+
+      - run: bun run docs:build
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/.vitepress/dist
