@@ -51,7 +51,7 @@ immediately (see below).
 If the daemon cannot be reached at all, a direct CLI command like
 `parley claim` says so on stderr with a message of the shape
 `parley: <reason> — continuing without coordination`, and exits clean
-rather than blocking (`src/cli/main.ts:120-126`). The Claude Code hook
+rather than blocking (`src/cli/main.ts:165-171`). The Claude Code hook
 takes the quieter path
 that a background tool call needs: it emits an empty response and the edit
 proceeds unclaimed, with no coordination and no warning in the transcript
