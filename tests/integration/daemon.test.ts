@@ -106,6 +106,63 @@ describe("a real daemon over a real socket", () => {
     expect(second.daemon.snapshot().claims).toHaveLength(1);
   });
 
+  /**
+   * A line that will not parse is already handled one layer down, and
+   * `Journal.replay` gives the reason: a bus that will not boot because of one
+   * torn line is worse than a bus missing its final event. An entry that
+   * parses and then THROWS inside the reducer is the same damage one layer up,
+   * and strictly worse — the journal is written before the frame is applied,
+   * so a poisoned frame reaches disk before anyone can know it is poison, and
+   * every subsequent start replays it. Refusing to boot would make the
+   * repository undispatchable permanently, since the restart is the thing that
+   * replays it.
+   *
+   * The poison here is `frame: null`, which throws for a reason nothing is
+   * going to fix out from under this test: `apply` reads `frame.v` on the way
+   * in, and `typeof null === "object"` is the whole of what `replay` checks
+   * before handing the entry over. The stderr assertion pins WHICH layer
+   * absorbed it — if `replay` is ever tightened to reject a null frame, this
+   * goes red rather than passing vacuously.
+   */
+  test("a journal entry that throws is skipped, and the bus still boots", async () => {
+    const dir = tempRepo();
+    const journal = join(dir, "journal.ndjson");
+    const first = await startDaemon(dir, journal);
+    const a = await RawClient.connect(first.endpoint.address);
+    await a.send({ op: "join", name: "FIN", cwd: "/wt/a" });
+    await a.send({ op: "claim", paths: ["src/app.ts"] });
+    await a.send({ op: "note", title: "CI runs tsc -b here", body: "solution-style tsconfig" });
+    a.close();
+    await first.daemon.close();
+
+    // Spliced BETWEEN good entries, not appended: the entries after it are
+    // what an abort-on-first-failure would have thrown away.
+    const good = (await Bun.file(journal).text()).trimEnd().split("\n");
+    const poison = JSON.stringify({ at: "2026-08-20T12:00:00.000Z", actorId: null, frame: null });
+    await Bun.write(journal, [good[0], poison, ...good.slice(1), ""].join("\n"));
+
+    const written: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    (process.stderr as unknown as { write: unknown }).write = (chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    };
+    let second: Awaited<ReturnType<typeof startDaemon>>;
+    try {
+      second = await startDaemon(dir, journal);
+    } finally {
+      (process.stderr as unknown as { write: unknown }).write = original;
+    }
+
+    const state = second.daemon.snapshot();
+    expect(state.claims).toHaveLength(1);
+    expect(state.claims[0]!.pattern).toBe("src/app.ts");
+    expect(state.notes).toHaveLength(1);
+    expect(written.join("")).toContain("skipped 1 journal entry");
+    // Named, not just counted: repairing this by hand means knowing which one.
+    expect(written.join("")).toContain("2026-08-20T12:00:00.000Z");
+  });
+
   test("an unknown op is refused without dropping the connection", async () => {
     const dir = tempRepo();
     const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));

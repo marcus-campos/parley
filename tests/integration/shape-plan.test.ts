@@ -228,6 +228,36 @@ describe("a plan, over the wire", () => {
     });
   });
 
+  /**
+   * The frame is journaled BEFORE it is applied — deliberately, that ordering
+   * is the whole crash story — so a frame that throws inside the daemon is on
+   * disk before anyone learns it is poison, and `restore` replays it on the
+   * next start. One `{op:"plan", tasks:[{}]}` used to leave the repository
+   * with a bus that never came up again: the runtime throw was contained, and
+   * that is exactly what hid it.
+   */
+  test("a malformed plan frame is refused, and the next boot is unharmed", async () => {
+    await withDaemon(async (connect, restart) => {
+      const coord = await connect("COORD");
+      await coord.send({ v: 1, op: "shape", shape: "plan" });
+
+      const bad = await coord.send({ v: 1, op: "plan", goal: "g", spec: null, tasks: [{}] });
+      expect(bad.ok).toBe(false);
+      // Answered at all, which is the runtime half: the sender used to get
+      // nothing back until its own timeout gave up.
+      expect((bad as unknown as { error: { code: string } }).error.code).toBe("UNKNOWN_OP");
+
+      // A good plan on the same bus, so the restart has something to prove.
+      await coord.send({ v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, "A", ["a.ts"])] });
+
+      await restart({ hard: true });
+
+      const after = await connect("AGAIN");
+      expect((await after.send({ v: 1, op: "status" })).ok).toBe(true);
+      expect(items(await after.send({ v: 1, op: "works" })).map((w) => w.paths[0])).toEqual(["a.ts"]);
+    });
+  });
+
   test("the bus is told, not only the front that took it", async () => {
     await withDaemon(async (connect) => {
       const coord = await connect("COORD");

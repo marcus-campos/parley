@@ -128,6 +128,58 @@ function livePlanItems(state: State): WorkItem[] {
 }
 
 /**
+ * The tasks of a `plan` frame, read rather than cast.
+ *
+ * This used to be `frame.tasks as PlanTask[]`, and a cast is not a check. A
+ * task without `paths` threw inside `openWave` — contained at runtime (the
+ * daemon kept serving every other front; only the sender lost that one reply,
+ * bounded by the client's own timeout) which is exactly what hid it, because
+ * `handleFrame` journals BEFORE applying. The poisoned frame was on disk, and
+ * the next start replayed it: the bus never came up at all.
+ *
+ * `readPathList` next door already states the rule this restores — a frame is
+ * whatever a harness on the other end sent, and never a reason for the daemon
+ * to throw. So everything that can be coerced is coerced, exactly the way that
+ * function coerces a path list, and `paths` is read THROUGH it: `tasks:
+ * [{n:1, paths:"nope"}]` used to iterate the string and open four items, one
+ * per character.
+ *
+ * `n` is the one exception, and it is refused rather than invented. It is the
+ * only field the plan's arithmetic keys on — `waves()` seats by it,
+ * `itemsByTask` is keyed by it, `taskNumberOf` reads it back, and every "task
+ * N is waiting" prints it. Supplying a number the caller did not send would be
+ * inventing the plan, which is the same fabrication as merging two plans'
+ * waves: a number shaped like an answer, standing for nothing.
+ *
+ * The shipped CLI cannot send any of this — `parsePlan` always emits
+ * well-formed tasks. The wire can: unix transport has no auth, and a
+ * version-skewed parley on the same socket is an ordinary thing to have in a
+ * checkout running several worktrees.
+ */
+type ReadTasks = { ok: true; tasks: PlanTask[] } | { ok: false; why: string };
+
+function readPlanTasks(value: unknown): ReadTasks {
+  if (!Array.isArray(value)) return { ok: true, tasks: [] };
+  const tasks: PlanTask[] = [];
+  for (const [i, raw] of value.entries()) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return { ok: false, why: `task at position ${i + 1} is not an object` };
+    }
+    const t = raw as Record<string, unknown>;
+    if (typeof t.n !== "number" || !Number.isFinite(t.n)) {
+      return { ok: false, why: `task at position ${i + 1} has no task number` };
+    }
+    tasks.push({
+      n: t.n,
+      title: typeof t.title === "string" ? t.title : "",
+      paths: readPathList(t.paths),
+      parseError: typeof t.parseError === "string" ? t.parseError : null,
+    });
+  }
+  return { ok: true, tasks };
+}
+
+/**
  * A superpowers plan is dispatched one wave at a time: only the first wave's
  * tasks become work now, and every later wave waits for `finishWork` to open
  * it once its predecessor is entirely done.
@@ -163,7 +215,12 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
   if (state.shape !== "plan") {
     return { state, response: err("UNKNOWN_OP", "plans are dispatched in shape plan — parley shape plan"), broadcast: [] };
   }
-  const tasks = (Array.isArray(frame.tasks) ? frame.tasks : []) as PlanTask[];
+  // Both of these refuse BEFORE anything is withdrawn, which is the whole
+  // reason they sit above the `running` check: `parley plan typo.md --replace`
+  // must not destroy the running plan on its way to saying no.
+  const read = readPlanTasks(frame.tasks);
+  if (!read.ok) return { state, response: err("UNKNOWN_OP", `malformed plan: ${read.why}`), broadcast: [] };
+  const tasks = read.tasks;
   // Load-bearing, not defensive: `openWave` is called with `tasksByWave[0]!`
   // below, and `computeWaves([])` returns no waves at all — so without this a
   // markdown file with no `### Task` heading in it throws inside the daemon.

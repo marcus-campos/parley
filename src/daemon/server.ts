@@ -11,6 +11,9 @@ import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
 
+/** How many skipped journal entries are named before the rest become a count. */
+const MAX_NAMED_FAILURES = 3;
+
 interface Conn {
   socket: Socket;
   decoder: Decoder;
@@ -88,19 +91,65 @@ export class ParleyDaemon {
   /**
    * Rebuild from the journal. The whole point of writing before responding is
    * that this reconstruction is lossless up to the last completed line.
+   *
+   * An entry that THROWS is skipped and reported, not allowed to abort the
+   * boot. `Journal.replay` already decided this question one layer down for a
+   * line that will not parse — "a bus that will not boot because of one torn
+   * line is worse than a bus missing its final event" — and an entry that
+   * parses and then throws is the same damage one layer up. It is strictly
+   * worse, in fact: the journal is written BEFORE the frame is applied, so a
+   * frame that throws is on disk before anyone learns it is poison, and
+   * without this a single such frame makes the repository undispatchable
+   * forever. Restarting replays it. "A broken parley must never stop the work"
+   * is the rule that outranks everything here, and not booting at all is the
+   * most literal way there is to violate it.
+   *
+   * Three alternatives were weighed and rejected. Refusing to boot with a
+   * repair message is the current behaviour with better prose, and the repair
+   * is hand-editing the journal. Aborting the replay at the first failure
+   * silently drops every event after it, which costs territory and history
+   * that were never in question. Snapshotting the state before each entry so a
+   * failure could be rolled back is O(state) per entry on the one structure
+   * that grows without bound.
+   *
+   * So the cost is named instead of paid: `apply` mutates in place, so an
+   * entry that throws part-way leaves what it had already written. Every
+   * reducer that reads a frame is expected to validate at its boundary rather
+   * than rely on this — `dispatchPlan` and `readPathList` both do, and the
+   * plan hazard that motivated this refuses before it mutates anything.
    */
   private restore(mode: Mode): State {
     const state = initialState(mode);
     const { entries, discarded } = this.journal.replay();
-    for (const entry of entries) {
+    const failed: string[] = [];
+    entries.forEach((entry, index) => {
       const ms = Date.parse(entry.at);
-      apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
-    }
+      try {
+        apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
+      } catch (e) {
+        // Read through `?.`, because the reason an entry throws may be that
+        // its frame is not an object at all — a reporting line that reads it
+        // the direct way throws inside the handler and takes the boot down
+        // anyway, which is the whole defect this exists to end.
+        const op = String((entry.frame as Record<string, unknown> | null)?.op ?? "?");
+        failed.push(`entry ${index + 1} (op ${op}, at ${entry.at}): ${(e as Error).message}`);
+      }
+    });
     // Nothing survives a restart connected; presence has to be re-proven.
     for (const p of Object.values(state.participants)) p.connected = false;
     if (discarded.length > 0) {
       process.stderr.write(
         `parley: discarded ${discarded.length} unreadable journal line(s); starting anyway\n`,
+      );
+    }
+    if (failed.length > 0) {
+      // Named, not counted: the operator repairing this needs to know which
+      // op poisoned the log, and the journal is never rewritten from here —
+      // that would destroy the evidence while it is still the only copy.
+      process.stderr.write(
+        `parley: skipped ${failed.length} journal entry(ies) that could not be replayed; starting anyway\n` +
+          failed.slice(0, MAX_NAMED_FAILURES).map((f) => `  ${f}\n`).join("") +
+          (failed.length > MAX_NAMED_FAILURES ? `  ...and ${failed.length - MAX_NAMED_FAILURES} more\n` : ""),
       );
     }
     return state;

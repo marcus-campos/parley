@@ -358,3 +358,88 @@ describe("a second plan while the first is still running", () => {
     expect(state.work.filter((w) => w.state === "open")).toHaveLength(1);
   });
 });
+
+/**
+ * `op: "plan"` is the only operation on this branch that takes an array of
+ * structured objects off the wire, and it used to CAST rather than read them.
+ * The shipped CLI cannot send anything malformed — `parsePlan` always emits
+ * well-formed tasks — but the unix socket has no auth and no version gate, so
+ * "the CLI is fine" is not a property of the wire.
+ *
+ * Every frame here threw inside the daemon before this was read instead of
+ * cast, and the frame is journaled BEFORE it is applied, so each of them also
+ * left the next start unable to boot at all.
+ */
+describe("a plan frame is read, not cast", () => {
+  test("a task with no paths is refused work, not a throw", () => {
+    const out = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [{}] }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(out.response).toMatchObject({ error: { code: "UNKNOWN_OP" } });
+    expect(state.plan).toBeNull();
+    expect(state.work).toHaveLength(0);
+  });
+
+  test("a task missing only its paths still dispatches — the number is what cannot be invented", () => {
+    const out = apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [{ n: 1, title: "A" }] }, at(100));
+    expect(out.response).toMatchObject({ ok: true, opened: 1 });
+    // One item, holding the placeholder rather than a path — the same answer
+    // `parsePlan` produces for a task whose **Files:** block is missing.
+    expect(state.work).toHaveLength(1);
+    expect(state.work[0]!.paths).toEqual(["(no declared path)"]);
+  });
+
+  test("paths that are not a list of paths open no items at all", () => {
+    // `paths: "nope"` used to be iterated as a STRING: four items, one per
+    // character, each holding a one-letter path.
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [{ n: 1, title: "A", paths: "nope" }],
+    }, at(100));
+    expect(state.work).toHaveLength(1);
+    expect(state.work[0]!.paths).toEqual(["(no declared path)"]);
+  });
+
+  test("one malformed task refuses the whole frame, without dispatching the well-formed ones", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), { paths: ["b.ts"] }],
+    }, at(100));
+    expect(out.response.ok).toBe(false);
+    expect(state.work).toHaveLength(0);
+  });
+
+  test("a task that is not an object at all is named by position", () => {
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"]), null],
+    }, at(100));
+    expect(out.response).toMatchObject({ error: { code: "UNKNOWN_OP" } });
+    expect((out.response as unknown as { error: { message: string } }).error.message).toContain("position 2");
+  });
+
+  // The guard sits above the `running` check for the same reason the
+  // empty-plan guard does: refusing must never cost the running plan.
+  test("a malformed --replace refuses without withdrawing anything", () => {
+    apply(state, coord, { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, ["a.ts"])] }, at(100));
+    const one = state.work[0]!;
+    apply(state, worker, { v: 1, op: "take", id: one.id }, at(200));
+
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g2", spec: null, replace: true, tasks: [{ n: 9 }, "not a task"],
+    }, at(300));
+    expect(out.response.ok).toBe(false);
+    expect(state.work.find((w) => w.id === one.id)?.state).toBe("taken");
+    expect(state.plan!.goal).toBe("g");
+  });
+
+  // Reading rather than casting must be the identity on everything the CLI
+  // actually sends, or the fix would be a behaviour change wearing a guard.
+  test("a well-formed task survives the read untouched", () => {
+    apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [{ n: 4, title: "Refactor", paths: ["src/a.ts", "src/b.ts"], parseError: "capture is partial" }],
+    }, at(100));
+    expect(state.plan!.tasksByWave[0]![0]).toEqual({
+      n: 4, title: "Refactor", paths: ["src/a.ts", "src/b.ts"], parseError: "capture is partial",
+    });
+    expect(state.work.map((w) => w.paths[0])).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(state.work[0]!.title).toBe("Refactor — capture is partial");
+  });
+});
