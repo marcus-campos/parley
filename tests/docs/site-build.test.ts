@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { sitePages } from "../../scripts/gen-citations";
 
 const root = join(import.meta.dir, "..", "..");
 
@@ -198,10 +199,49 @@ describe("the documentation site", () => {
     // starts warning, this test should be the thing that says so.
     expect(hook).toContain("return emit({})");
 
-    for (const page of ["docs/index.md", "README.md", "docs/guide/what-it-is.md"]) {
+    // The page list was three names written by hand, which is how a fourth
+    // page states it wrong: `docs/PROTOCOL.md:657` said the degradation came
+    // "with a loud warning" while `README.md#one-rule`, published two sidebar
+    // entries away at /guide/what-it-is, said silence. Both this branch's
+    // output, both in the sidebar — spec against spec, not spec against code.
+    // So the list is now every page the site publishes, plus the README the
+    // site includes from.
+    const pages = ["README.md", ...sitePages(join(root, "docs"))];
+    expect(pages.length).toBeGreaterThanOrEqual(15);
+    for (const page of pages) {
       const text = readFileSync(join(root, page), "utf8");
-      expect(text).not.toMatch(/degrades to .?advisory.? and says so/i);
+      expect({ page, saysSo: /degrades to .?advisory.? and says so/i.test(text) }).toEqual({
+        page,
+        saysSo: false,
+      });
     }
+    // And the negative alone is whack-a-mole — "with a loud warning" is a
+    // different sentence with the same defect, and it survived a whole-branch
+    // review and four fix rounds. So the requirement is positive: wherever a
+    // page describes the degradation at all, it has to say what the *hook*
+    // does, because the hook is the half that is silent and the half that runs
+    // while somebody is editing. Describing only the CLI path is the failure.
+    let described = 0;
+    for (const page of pages) {
+      const text = readFileSync(join(root, page), "utf8");
+      for (const m of text.matchAll(/degrades to \*{0,2}`?advisory`?/gi)) {
+        described++;
+        // Windowed to the sentence, not to a fixed 400 characters: a table row
+        // ends at the next `\n|` and a paragraph at the next blank line, and
+        // without that the row below ("Hook slow | …") lends this one the word
+        // "hook" it failed to say for itself.
+        const rest = text.slice(m.index);
+        const stops = [rest.indexOf("\n\n"), rest.indexOf("\n|")].filter((i) => i > 0);
+        const window = rest.slice(0, Math.min(...stops, 400));
+        expect({
+          page,
+          names: /hook/i.test(window),
+          silent: /nothing|silen|quiet/i.test(window),
+        }).toEqual({ page, names: true, silent: true });
+      }
+    }
+    // A regex that stopped matching would make the loop vacuous and green.
+    expect(described).toBeGreaterThanOrEqual(1);
     // And the correction has to actually say what happens instead.
     expect(readFileSync(join(root, "README.md"), "utf8")).toContain("unclaimed");
   });
