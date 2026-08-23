@@ -139,6 +139,47 @@ describe("a plan, over the wire", () => {
     });
   });
 
+  /**
+   * The guarantee `parley plan` exists to compute is "two tasks touching the
+   * same file never open in the same wave", and it is a proof over the tasks
+   * one dispatch was handed. A second dispatch used to publish a second set of
+   * open items over the same paths — two takeable items on `a.ts`, taken by
+   * two fronts at once — while the first plan's items stayed in the pool with
+   * nothing tracking them and `drop` refusing every hand-back.
+   */
+  test("a second plan is refused while the first is running, and --replace clears it", async () => {
+    await withDaemon(async (connect) => {
+      const coord = await connect("COORD");
+      const worker = await connect("WORKER");
+      await coord.send({ v: 1, op: "shape", shape: "plan" });
+
+      const plan = { v: 1, op: "plan", goal: "g", spec: null, tasks: [task(1, "A", ["a.ts"]), task(2, "B", ["b.ts"])] };
+      await coord.send(plan);
+      const held = items(await worker.send({ v: 1, op: "works", state: "open" }))
+        .find((w) => w.paths[0] === "a.ts")!;
+      await worker.send({ v: 1, op: "take", id: held.id });
+
+      const again = await coord.send(plan);
+      expect(again.ok).toBe(false);
+      expect((again as unknown as { error: { code: string } }).error.code).toBe("CONFLICT");
+      // The count is what matters, not the code: one path, one live item.
+      const live = items(await coord.send({ v: 1, op: "works" })).filter((w) => w.state !== "done");
+      expect(live.filter((w) => w.paths[0] === "a.ts")).toHaveLength(1);
+      expect(live).toHaveLength(2);
+
+      const replaced = await coord.send({ ...plan, replace: true, tasks: [task(9, "Z", ["z.ts"])] });
+      expect(replaced.ok).toBe(true);
+      expect(replaced.withdrawn).toBe(2);
+
+      // WORKER's item is gone rather than stranded: a planned task cannot be
+      // dropped, so if it survived here nothing would ever clear it.
+      const orphaned = await worker.send({ v: 1, op: "done", id: held.id });
+      expect(orphaned.ok).toBe(false);
+      const after = items(await coord.send({ v: 1, op: "works" }));
+      expect(after.map((w) => w.paths[0])).toEqual(["z.ts"]);
+    });
+  });
+
   test("the bus is told, not only the front that took it", async () => {
     await withDaemon(async (connect) => {
       const coord = await connect("COORD");
