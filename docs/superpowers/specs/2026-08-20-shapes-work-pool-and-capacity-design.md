@@ -368,7 +368,9 @@ deterministic unit test.
 
 A task whose `**Files:**` block is missing or unparseable is dispatched like any
 other — published `open` into its wave, with the parse failure **appended to its
-title** (the whole title only when the heading carried none). An earlier draft
+title** — appended to `task N` when the heading carried no title, since
+`openWave` falls back to that label first and so the reason is never the whole
+of what the item is called. An earlier draft
 of this line said such a task is "not dispatched", using the word in the
 assigned-to-an-owner sense §5.3(4) has since dropped; nothing about the item
 differs from a task that parsed, and the README's Shape plan section says it

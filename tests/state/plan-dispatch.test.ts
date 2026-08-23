@@ -116,6 +116,21 @@ describe("dispatching a plan", () => {
     expect(orphan.paths).toEqual(["(no declared path)"]);
   });
 
+  // The same assumption, entered through the other door. `openWave` guarded the
+  // placeholder it creates itself — "did this task declare anything" — which
+  // says nothing about a client that sends the label string AS a path. The
+  // question has to be asked about the path, not about the task.
+  test("the placeholder is not territory even when a client sends it as a path", () => {
+    apply(state, worker, { v: 1, op: "claim", paths: ["**"], intent: "everything" }, at(50));
+    const out = apply(state, coord, {
+      v: 1, op: "plan", goal: "g", spec: null,
+      tasks: [{ n: 1, title: "Task 1", paths: ["(no declared path)"], parseError: null }],
+    }, at(100));
+
+    expect(out.response.ok).toBe(true);
+    expect(out.broadcast.some((e) => e.text.includes("waiting"))).toBe(false);
+  });
+
   test("a task that would not parse is published, never dropped", () => {
     apply(state, coord, {
       v: 1, op: "plan", goal: "g", spec: null,
@@ -293,6 +308,12 @@ describe("a second plan while the first is still running", () => {
     expect(state.work.filter((w) => w.paths[0] === "a.ts" && w.state !== "done")).toHaveLength(1);
     expect(state.work.map((w) => w.id)).toEqual(before);
     expect(again.broadcast).toHaveLength(0);
+    // The wave is stated as the plan's POSITION, never as where the items are:
+    // `livePlanItems` spans every wave the plan opened, so "2 item(s) of wave 1"
+    // was a claim the refusal could not make.
+    const message = (again.response as unknown as { error: { message: string } }).error.message;
+    expect(message).toContain("on wave 1 of 1");
+    expect(message).toContain("2 item(s) not done");
   });
 
   test("the refusal names the way through, and it is a command that exists", () => {
@@ -494,6 +515,10 @@ describe("a second dispatch answers for every wave, not only the current one", (
     const next = apply(state, coord, { v: 1, op: "plan", goal: "g2", spec: null, tasks: [task(9, ["z.ts"])] }, at(700));
     expect(next.response.ok).toBe(false);
     expect(next.response).toMatchObject({ error: { code: "CONFLICT" } });
+    // No wave is named here: the plan is past its last one, and "wave 3 of 2"
+    // is the kind of number that looks like an answer and is not one.
+    expect((next.response as unknown as { error: { message: string } }).error.message)
+      .not.toContain("wave");
     // And it is withdrawn by `--replace`, which is the point of seeing it at
     // all: an item no dispatch can see is an item no dispatch can clear.
     const replaced = apply(state, coord, {

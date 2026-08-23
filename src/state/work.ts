@@ -21,6 +21,16 @@ import {
  * serves permissions and may lean on the no-overlapping-live-claims invariant
  * `claim` enforces, while this one must still answer correctly when a replayed
  * journal has broken it. Different correctness contracts, so not collapsed.
+ *
+ * A path that does not exist yet is still a path. `parley work "…" TBD` routes
+ * the item at whoever holds `**`, because `matchesPath("**", …)` is true for
+ * any string — and that is the tolerance being chosen rather than an accident.
+ * Work is published about a file that is about to be created all the time, and
+ * nothing here could tell that apart from a placeholder somebody typed. The
+ * cost is bounded and clears itself: an offer, exclusive only for
+ * `OFFER_TTL_MS`, which its holder may drop. The one string exempted is
+ * `openWave`'s "(no declared path)", and it is exempted THERE rather than
+ * here, because it is a label parley writes — never something a person typed.
  */
 export function ownerForPath(state: State, path: string, exceptId: string): string | null {
   const live = new Set(liveParticipants(state).map((p) => p.id));
@@ -223,6 +233,19 @@ function readPlanTasks(value: unknown): ReadTasks {
  * not finished — including items a front is holding, announced by name — and
  * dispatches the new plan from wave 0. A plan whose every item is done is not
  * running, so a fresh dispatch after it needs no flag.
+ *
+ * **`replace` is not gated on who dispatched the plan, and that is a ruling
+ * rather than an inherited default.** It does not get to borrow `take`'s
+ * argument for being ungated — that one was "this is non-destructive", and
+ * withdrawing work another front is holding is not. Its own argument is that
+ * the gate would put the release valve behind the participant most likely to
+ * be gone. A front that dispatched a plan and then died leaves items nothing
+ * can clear: `droppable` refuses every hand-back, no wave will advance, and
+ * restarting the daemon replays the same journal into the same state. So the
+ * gate would re-create, in exactly the case that matters most, the wedge this
+ * flag exists to open. It is paid for the way parley pays for everything else
+ * it declines to police — the withdrawal is broadcast at `priority: "high"`,
+ * naming who re-sequenced and every front that was holding something.
  */
 export function dispatchPlan(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
@@ -246,11 +269,18 @@ export function dispatchPlan(state: State, actorId: string | null, frame: Record
   if (running.length > 0 && frame.replace !== true) {
     const held = [...new Set(running.map((w) => w.takenById).filter((id): id is string => id !== null))]
       .map((id) => state.participants[id]?.name ?? id);
+    // The count is about the PLAN, not about one wave — `livePlanItems` spans
+    // every wave the plan has opened, on purpose. Naming the wave beside the
+    // count read as "N items of that wave", which is a claim this refusal is
+    // not entitled to make; the position is stated separately, and only while
+    // the plan still has a wave to be on.
+    const plan = state.plan!;
+    const where = plan.waves[plan.waveIndex] ? ` (on wave ${plan.waveIndex + 1} of ${plan.waves.length})` : "";
     return {
       state,
       response: err(
         "CONFLICT",
-        `a plan is already running: ${running.length} item(s) of wave ${state.plan!.waveIndex + 1} are not done` +
+        `a plan is already running${where}: ${running.length} item(s) not done` +
           `${held.length > 0 ? ` (${held.join(", ")} holding)` : ""}` +
           " — finish it, or re-sequence with parley plan <file> --replace",
       ),
@@ -334,19 +364,22 @@ function openWave(state: State, waveTasks: PlanTask[], ctx: Ctx): { events: Conv
     const title = task.parseError ? `${label} — ${task.parseError}` : label;
     // A task that declared nothing still gets an item — never dropping a task
     // is the rule — but it holds no territory, so `paths[0]` is a label rather
-    // than a path. Parenthesised and spaced so no reader mistakes it for one,
-    // and deliberately never matched against a claim: `matchesPath("**", …)`
-    // says true for any string, so a front holding a broad claim would be
-    // announced as "waiting" on a path that does not exist.
-    const declared = task.paths.length > 0;
-    const paths = declared ? task.paths : [NO_DECLARED_PATH];
+    // than a path. Parenthesised and spaced so no reader mistakes it for one.
+    const paths = task.paths.length > 0 ? task.paths : [NO_DECLARED_PATH];
     for (const path of paths) {
+      // The label is never matched against a claim, and the test is on the
+      // PATH rather than on how this task got here: `matchesPath("**", …)` is
+      // true for any string, so looking it up would announce a real person as
+      // waiting on a file that does not exist. Asking "did this task declare
+      // anything" instead let a client that sent the label itself as a path
+      // walk straight back into that.
+      //
       // Ruling: dispatch authority covers fronts working the plan, never a
       // front a person is directing by hand — so a held path is published
       // open and announced as waiting, not taken from its owner.
-      const holder = declared
-        ? state.claims.find((c) => c.orphanedAtMs === null && !c.auto && matchesPath(c.pattern, path))
-        : undefined;
+      const holder = path === NO_DECLARED_PATH
+        ? undefined
+        : state.claims.find((c) => c.orphanedAtMs === null && !c.auto && matchesPath(c.pattern, path));
       const item: WorkItem = {
         id: ctx.nextId("w"),
         paths: [path],
