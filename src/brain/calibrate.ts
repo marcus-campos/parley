@@ -97,13 +97,18 @@ const MIN_PAIRS = 256;
  * fixture by recalibrating one table under 300 different seeds:
  *
  * ```
- *   samples   range over 300 seeds   sd of the floor   one calibration
+ *   samples   range over 300 seeds   sd of the floor   sampling loop
  *       512             0.72 nullSd       0.135 nullSd            2.7ms
  *      1024             0.52 nullSd       0.094 nullSd            5.5ms
  *      2048             0.40 nullSd       0.071 nullSd           11.1ms
  *      4096             0.32 nullSd       0.050 nullSd           23.1ms
  *      8192             0.24 nullSd       0.032 nullSd           46.6ms
  * ```
+ *
+ * The last column is the sampling loop alone; `meanRow` and the usable-row
+ * filter cost about 5ms more on that table whatever `SAMPLES` is. End to end
+ * this took `calibrate` on the 12,840-row fixture from 8.0ms to 33.2ms, once
+ * per daemon boot.
  *
  * So pairs are drawn from repeated shuffles instead: a token may appear in
  * more than one pair, but never on both sides of the same one. The half of
