@@ -20,6 +20,15 @@ export interface RegisteredRepo {
 }
 
 function registryPath(): string {
+  // A test that walks this registry refreshes the hooks and skill of every
+  // repository in it — which, without an override, means the person's real
+  // projects. That is not a hypothetical: it happened, and eight unrelated
+  // repositories spent days carrying the skill text of an unmerged branch,
+  // teaching agents commands their installed binary did not have. Tests point
+  // this at a temp directory; nothing in production sets it.
+  const override = process.env.PARLEY_STATE_DIR;
+  if (override) return join(override, "repos.json");
+
   // Alongside the runtime state, never inside a repository: this is a fact
   // about the machine, not about any one project.
   if (process.platform === "win32") {
