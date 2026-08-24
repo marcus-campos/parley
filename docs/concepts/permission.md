@@ -12,7 +12,7 @@ they have to answer (`src/state/permissions.ts:46-53`). Only the owner may
 answer, with `parley grant <id> --scope once|transfer` or
 `parley deny <id> --reason "..."`, and a request already settled cannot be
 answered again (`src/state/permissions.ts:99-139`, CLI at
-`src/cli/main.ts:849-861`). `scope: once` carves out just the requested
+`src/cli/main.ts:852-864`). `scope: once` carves out just the requested
 path; `scope: transfer` moves the whole overlapping claim to the requester
 (`src/state/permissions.ts:78-96`). A request's state machine is
 `pending → granted | denied | granted_by_timeout`.
@@ -77,6 +77,6 @@ against a dead front still resolves on schedule instead of waiting forever
 If the daemon itself cannot be reached, `parley ask` (like every other CLI
 command) reports it on stderr and exits clean rather than blocking —
 `parley: <reason> — continuing without coordination`
-(`src/cli/main.ts:187-193`). And in `off` mode, `ask` short-circuits to an
+(`src/cli/main.ts:190-196`). And in `off` mode, `ask` short-circuits to an
 immediate grant with no request created at all, the same as an unclaimed
 path (`src/state/permissions.ts:11-13`).

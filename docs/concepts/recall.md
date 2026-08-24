@@ -249,6 +249,6 @@ and a broken index degrades a ranked query to the same unranked list a plain
 If the daemon itself cannot be reached, `parley notes` behaves like every
 other direct CLI command — it reports the problem on stderr and exits clean
 rather than blocking, `parley: <reason> — continuing without coordination`
-(`src/cli/main.ts:187-193`). Recall failing is never the reason an edit does
+(`src/cli/main.ts:190-196`). Recall failing is never the reason an edit does
 not happen; at worst, a front gets the unranked list, or the plain
 path-anchored notes it would have had anyway.

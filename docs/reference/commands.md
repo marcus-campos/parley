@@ -399,6 +399,12 @@ parley brain enable [<model>]
 human-only. With no model named, lists the registry ranked by measured score, with the disk each costs, so you can weigh it before anything downloads.
 
 ```
+parley brain files [<model>]
+```
+
+the files a model needs and where they go, for a machine whose network refuses the download
+
+```
 parley brain disable
 ```
 

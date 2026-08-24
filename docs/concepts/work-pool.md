@@ -92,7 +92,7 @@ parley done w_0002 --summary "3 labels removed"
 finished work to check, rather than new work to do — routed through the same
 `ownerForPath` and the same offer/open split, just with a different meaning
 once it is taken (`src/state/work.ts:61,81`; CLI syntax at
-`src/cli/main.ts:143`).
+`src/cli/main.ts:146`).
 
 ## Why it is built this way
 
@@ -145,7 +145,7 @@ If the daemon cannot be reached at all, `work`, `works`, `take`, `drop` and
 `done` behave like every other direct CLI command: the problem is reported
 on stderr and the process exits clean rather than blocking —
 `parley: <reason> — continuing without coordination`
-(`src/cli/main.ts:187-193`). A broken parley never stops the fix the item
+(`src/cli/main.ts:190-196`). A broken parley never stops the fix the item
 describes; it only stops the bookkeeping around it.
 
 A `planned` item — one dispatched rather than discovered — cannot be dropped,

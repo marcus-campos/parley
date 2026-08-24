@@ -135,6 +135,9 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              registry ranked by measured score, with the disk
                              each costs, so you can weigh it before anything
                              downloads.
+  parley brain files [<model>]
+                             the files a model needs and where they go, for a
+                             machine whose network refuses the download
   parley brain disable
 
   parley plan <path-to-plan.md> [--replace]
@@ -1025,6 +1028,32 @@ async function main(): Promise<void> {
           const r = await send({ op: "brain", disable: true });
           if (!r.ok) fail(p, describeError(r));
           return out(p, "parley: brain disabled", r);
+        }
+
+        // `files` is deliberately reachable without failing first: somebody
+        // setting up a machine they already know is locked down should not
+        // have to trigger an error to find out what to fetch.
+        if (sub === "files") {
+          const name = p.positional[1] ?? RECOMMENDED;
+          const model = findModel(name);
+          if (!model) fail(p, `no such model in the registry: ${name}`);
+          if (!isEncoder(model)) fail(p, `${model.name} needs no separate download`);
+          const { manualSteps } = await import("../brain/sidecar");
+          return out(
+            p,
+            `parley: "parley brain enable ${model.name}" normally fetches these for you.\n` +
+              `This is the list, for a machine where that cannot work.\n\n` +
+              manualSteps(model),
+            {
+              ok: true,
+              model: model.name,
+              repo: model.spec.repo,
+              files: model.spec.files.map((f) => ({
+                path: f,
+                url: `https://huggingface.co/${model.spec.repo}/resolve/main/${f}`,
+              })),
+            },
+          );
         }
 
         if (sub === "enable") {

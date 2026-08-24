@@ -19,7 +19,10 @@ import type { EncoderBrainModel } from "../../src/brain/registry";
 
 const MODEL: EncoderBrainModel = {
   name: "fake", kind: "encoder", vectorWeight: 20, dims: 3, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
-  spec: { repo: "fake/fake", pool: "mean", queryPrefix: "q:", passagePrefix: "p:", floor: 0.5 },
+  spec: {
+    repo: "fake/fake", pool: "mean", queryPrefix: "q:", passagePrefix: "p:", floor: 0.5,
+    files: ["config.json", "onnx/model.onnx"],
+  },
 };
 
 /** A models directory with a sidecar in it that behaves as `body` says. */

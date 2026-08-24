@@ -28,6 +28,19 @@ export interface EncoderSpec {
    * wrong model's vectors.
    */
   floor: number;
+  /**
+   * Every file the runtime actually fetches, relative to the model's
+   * repository — enumerated rather than derived.
+   *
+   * It cannot be derived. The weight file's name depends on the quantisation
+   * in a way that is not a rule: `q4` is `model_q4.onnx`, `q8` is
+   * `model_quantized.onnx`, and only some models carry the external
+   * `.onnx_data` sidecar next to the graph. This list is read off a working
+   * install, and it exists so that somebody whose network refuses the download
+   * can fetch these by hand — a browser goes through the corporate proxy that
+   * the runtime cannot.
+   */
+  files: string[];
 }
 
 interface Common {
@@ -243,6 +256,13 @@ export const MODELS: BrainModel[] = [
       // lexical ranking, never replacing it — so what that costs is extra
       // candidates in a fusion, not a wrong answer standing on its own.
       floor: 0.571,
+      files: [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "onnx/model_q4.onnx",
+        "onnx/model_q4.onnx_data",
+      ],
     },
   },
   {
@@ -279,6 +299,14 @@ export const MODELS: BrainModel[] = [
       // answers above the floor, which is more than embeddinggemma's one and
       // is the honest cost of this entry.
       floor: 0.8265,
+      // No `.onnx_data` here: this model's weights fit inside the graph file,
+      // which is why the list is per model rather than a pattern.
+      files: [
+        "config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "onnx/model_quantized.onnx",
+      ],
     },
   },
 ];

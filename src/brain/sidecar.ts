@@ -48,6 +48,8 @@ const SERVE_TS = String.raw`
 // and keeps it; loading the model costs seconds and embedding a text costs
 // milliseconds, so the process outliving the request is the entire point.
 import { AutoModel, AutoTokenizer, env } from "@huggingface/transformers";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 const spec = JSON.parse(process.argv[2] ?? "{}");
 
@@ -56,6 +58,17 @@ const spec = JSON.parse(process.argv[2] ?? "{}");
 // silently re-download 200 MB. This puts them beside the sidecar instead,
 // where they survive a reinstall and a person can find and delete them.
 if (spec.cacheDir) env.cacheDir = spec.cacheDir;
+
+// If the model is already on disk, do not touch the network at all.
+//
+// This is what makes a hand-placed model work. On a machine behind a TLS
+// inspecting proxy the runtime cannot fetch even file metadata, so a person
+// downloads the files in a browser — which goes through that proxy fine — and
+// drops them here. Left to itself the runtime would still reach out to check
+// them and fail exactly as before, with the files sitting right there.
+if (spec.cacheDir && spec.repo && existsSync(join(spec.cacheDir, spec.repo, "config.json"))) {
+  env.allowRemoteModels = false;
+}
 
 function reply(obj) {
   process.stdout.write(JSON.stringify(obj) + "\n");
@@ -177,6 +190,34 @@ export function specFor(dir: string, model: EncoderBrainModel): EncoderSpec & { 
 }
 
 /**
+ * What to fetch by hand, and where to put it.
+ *
+ * The last resort for a machine whose runtime cannot reach huggingface.co. A
+ * browser usually can — it trusts the same corporate proxy the runtime refuses
+ * — so the way through is to download the files and drop them where the
+ * sidecar already looks. Once `config.json` is there, the worker stops using
+ * the network entirely (see the template above), so this genuinely finishes
+ * the job rather than moving the failure.
+ *
+ * `baseDir` is threaded through so the path printed is the path that will be
+ * read, on this machine, rather than a description of one.
+ */
+export function manualSteps(model: EncoderBrainModel, baseDir?: string): string {
+  const into = join(encoderDir(baseDir), "weights", model.spec.repo);
+  const files = model.spec.files
+    .map((f) => `    https://huggingface.co/${model.spec.repo}/resolve/main/${f}`)
+    .join("\n");
+  return (
+    `  A browser can usually reach huggingface.co on a machine where this cannot —\n` +
+    `  it trusts the same proxy the runtime refuses. Download these ${model.spec.files.length} files:\n\n${files}\n\n` +
+    `  and put them here, keeping the onnx/ subfolder:\n\n` +
+    `    ${into}\n\n` +
+    `  Then run "parley brain enable ${model.name}" again. It will find them and\n` +
+    `  never touch the network.`
+  );
+}
+
+/**
  * Turn the worker's dying words into a sentence with a next step in it.
  *
  * The first version of this said "downloaded but could not produce an
@@ -205,13 +246,18 @@ function explainWarmFailure(model: EncoderBrainModel, stderr: string, status: nu
       `a corporate proxy, a VPN, or endpoint security. Nothing was downloaded, and the model is fine.\n` +
       `  Point the runtime at the certificate your organisation uses, then run this again:\n` +
       `    export NODE_EXTRA_CA_CERTS=/path/to/your-org-ca.pem\n` +
-      `  On macOS the bundle can usually be exported from Keychain Access; your IT team will know ` +
-      `the path. If you cannot get one, the lexical floor keeps working and needs no network at all.`
+      `  On macOS the bundle can usually be exported from Keychain Access; your IT team will know\n` +
+      `  the path.\n\n` +
+      manualSteps(model) +
+      `\n\n  And if none of that is possible, the lexical floor keeps working and needs no network.`
     );
   }
 
   if (text.includes("enotfound") || text.includes("econnrefused") || text.includes("getaddrinfo")) {
-    return `huggingface.co could not be reached — nothing was downloaded. Check the network and run this again.`;
+    return (
+      `huggingface.co could not be reached — nothing was downloaded. Check the network and run\n` +
+      `  this again.\n\n${manualSteps(model)}`
+    );
   }
 
   if (text.includes("etimedout") || text.includes("timed out") || status === null) {
