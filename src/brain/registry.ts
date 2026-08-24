@@ -26,18 +26,28 @@ export interface BrainModel {
  */
 export const MODELS: BrainModel[] = [
   {
-    // Not "-int8": there is no int8 asset in that repository, and the URL
-    // below serves the full-precision weights. The name promised a file that
-    // does not exist.
-    name: "potion-multilingual-128M",
+    // model2vec's potion-base-8M, converted to the flat `{dims, vocab}` shape
+    // `loadStaticModel` reads. The published safetensors is not that shape, and
+    // a registry entry whose file the loader cannot parse is an entry that
+    // refuses every download that would have worked.
+    name: "potion-base-8M",
     dims: 256,
-    languages: "101 languages, including Portuguese",
-    bytes: 512_361_560,
-    url: "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
-    sha256: "14b5eb39cb4ce5666da8ad1f3dc6be4346e9b2d601c073302fa0a31bf7943397",
-    tokenizer: "xlmr",
+    languages: "English — strongest on identifiers, file names and code prose",
+    bytes: 56_905_102,
+    url: "https://github.com/marcus-campos/parley/releases/download/v0.7.0/potion-base-8M.json",
+    sha256: "189d1e8b67a5394ab4be1655adc4dcb8c8850b510aa1b0773d0f333eabd66c47",
+    tokenizer: "wordlevel",
   },
 ];
+
+// potion-multilingual-128M is deliberately absent. It is a real model and it is
+// the one somebody writing Portuguese notes would want — but its tokenizer is
+// XLM-R, which this build does not carry, so listing it means a person reads the
+// name they want, types it, and is refused. A menu whose only entry cannot be
+// chosen is worse than a shorter menu: it teaches that the feature is broken
+// rather than that this build is narrower than the field.
+//
+// Bring it back with an XLM-R tokenizer, not before.
 
 export function findModel(name: string): BrainModel | undefined {
   return MODELS.find((m) => m.name === name);

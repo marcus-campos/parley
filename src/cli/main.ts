@@ -194,7 +194,13 @@ async function withSession(
   const join = (name?: string) => joinFrame(identity, {
     mission: flagString(parsed.flags, "mission", identity.mission),
     cwd: repo.cwd,
-    kind: name ? "agent" : flagBool(parsed.flags, "human") ? "human" : "agent",
+    // `name` is set only by the NAME_TAKEN retry below. It used to force
+    // "agent", which silently demoted the one participant whose kind is
+    // load-bearing: a person running `--human` in a repository where agents are
+    // already on the bus collides on the derived name, comes back as an agent,
+    // and is then refused by `brain enable` with a message telling them to ask
+    // a human. The retry is about the name; it was never about who is asking.
+    kind: flagBool(parsed.flags, "human") ? "human" : "agent",
     wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
     ...(name ? { name } : {}),
@@ -1017,7 +1023,13 @@ async function main(): Promise<void> {
             );
           }
 
-          const name = p.positional[1];
+          // With one loadable entry there is no choice to present, and asking
+          // somebody to name a thing when there is only one thing is a menu
+          // that exists for the menu's sake. `enable` should download, verify,
+          // and turn it on. The listing below is for when there is genuinely
+          // something to choose between.
+          const loadable = MODELS.filter(isLoadable);
+          const name = p.positional[1] ?? (loadable.length === 1 ? loadable[0]!.name : undefined);
           if (!name) {
             // A menu offering a choice that cannot work is worse than a
             // shorter menu — so every row says plainly whether this build

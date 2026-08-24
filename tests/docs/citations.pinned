@@ -83,7 +83,13 @@
 |   if (request.state !== "pending") {
 |     return { state, response: err("NOT_OWNER", `request already ${request.state}`), broadcast: [] };
 |   }
-@ docs/concepts/permission.md src/cli/main.ts 10ba00db6b31
+@ docs/concepts/permission.md src/cli/main.ts 26fee74a0b8f
+|         const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
+|         if (list.length === 0) return out(p, "parley: nothing pending", r);
+|         const rows = list.map((q) => `  ${q.id}  ${q.requester} wants ${q.path} from ${q.owner}  (${q.seconds_left}s left)\n        ${q.reason || "no reason given"}`);
+|         return out(p, rows.join("\n"), r);
+|       }
+|
 |       case "grant": {
 |         const id = p.positional[0];
 |         if (!id) fail(p, "grant needs a request id");
@@ -91,12 +97,6 @@
 |         if (!r.ok) fail(p, describeError(r));
 |         return out(p, "parley: granted", r);
 |       }
-|
-|       case "deny": {
-|         const id = p.positional[0];
-|         if (!id) fail(p, "deny needs a request id");
-|         const r = await send({ op: "deny", request: id, reason: flagString(p.flags, "reason") });
-|         if (!r.ok) fail(p, describeError(r));
 @ docs/concepts/permission.md src/state/permissions.ts ead73426b347
 |   const held = state.claims.find((c) => c.pattern === request.path || ownerOfPath(state, request.path)?.pattern === c.pattern);
 |   if (scope === "transfer" && held) {

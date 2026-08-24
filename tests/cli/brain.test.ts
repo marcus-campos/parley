@@ -3,11 +3,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isLoadable } from "../../src/brain/embed";
 import { MODELS } from "../../src/brain/registry";
-
-// O nome vem do registry, não de uma cópia dele: renomear uma entrada não pode
-// quebrar um teste que verifica outra coisa.
-const XLMR = MODELS.find((m) => m.tokenizer === "xlmr")!.name;
 
 const BIN = join(import.meta.dir, "..", "..", "dist", "parley");
 
@@ -65,7 +62,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
       // No --human: this is an agent. The registry name is real, so a bug
       // that downloads before checking `may_enable` would actually reach
       // the network — this proves it never gets that far.
-      const p = Bun.spawn([BIN, "brain", "enable", XLMR], {
+      const p = Bun.spawn([BIN, "brain", "enable", MODELS[0]!.name], {
         cwd: repo, env, stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([
@@ -85,47 +82,35 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
   }, 15_000);
 
   /**
-   * Same harm as the agent case, from a different direction (the ruling on
-   * Task 7's review): the one real registry entry declares `tokenizer:
-   * "xlmr"`, and this build's loader (`src/brain/embed.ts`) understands only
-   * `wordlevel`. Without this refusal, a human would agree to the size, wait
-   * for the whole download, and end up with a brain that can never load —
-   * exactly the harm the agent-refusal test above already proves this CLI
-   * avoids, arriving here through a model instead of through an actor.
+   * The refusal is about the loader, not about the registry's contents.
+   *
+   * This used to name the one `xlmr` entry the registry listed — and that entry
+   * is gone, because a menu whose only row cannot be chosen taught people the
+   * feature was broken. What must still hold is the rule underneath it: a
+   * tokenizer this build does not carry is refused, and the check is in
+   * `isLoadable` rather than in a list that happens to contain an example.
    */
-  test("a human is refused before a single byte is downloaded — this build cannot load the xlmr tokenizer", async () => {
-    await withTempRepo(async (repo, env) => {
-      const p = Bun.spawn([BIN, "brain", "enable", XLMR, "--human"], {
-        cwd: repo, env, stdout: "pipe", stderr: "pipe",
-      });
-      const [stdout, stderr, code] = await Promise.all([
-        new Response(p.stdout).text(),
-        new Response(p.stderr).text(),
-        p.exited,
-      ]);
+  test("a tokenizer this build cannot load is refused, whatever the registry lists", () => {
+    const unloadable = { name: "x", dims: 8, languages: "", bytes: 1, url: "", sha256: "", tokenizer: "xlmr" } as const;
+    expect(isLoadable(unloadable)).toBe(false);
+    // And the shipped registry offers nothing a person can pick and not use:
+    // that is the property whose absence produced a dead end.
+    expect(MODELS.filter((m) => !isLoadable(m))).toEqual([]);
+    expect(MODELS.length).toBeGreaterThan(0);
+  });
 
-      expect(code).not.toBe(0);
-      const text = stdout + stderr;
-      // Named honestly: a limitation of this build, not a bad download or a
-      // broken model.
-      expect(text).toContain("xlmr");
-      expect(text).not.toContain("downloading");
-      expect(existsSync(expectedModelsDir(env.HOME as string))).toBe(false);
-    });
-  }, 15_000);
 
-  test("the listing marks which entries this build can actually load", async () => {
-    await withTempRepo(async (repo, env) => {
-      const p = Bun.spawn([BIN, "brain", "enable", "--human", "--json"], {
-        cwd: repo, env, stdout: "pipe", stderr: "pipe",
-      });
-      const [stdout, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
-      expect(code).toBe(0);
-
-      const payload = JSON.parse(stdout) as { models: { name: string; tokenizer?: string; loadable: boolean }[] };
-      const entry = payload.models.find((m) => m.name === XLMR);
-      expect(entry).toBeDefined();
-      expect(entry!.loadable).toBe(false);
-    });
-  }, 15_000);
+  test("with one loadable entry there is nothing to choose, so enable acts", () => {
+    // The listing used to be what `enable` with no name produced, and this
+    // asserted its shape. It now appears only when there is a choice: asking
+    // somebody to name a thing when there is one thing is a menu for the menu's
+    // sake, and it is what made a person read a name, type it, and be refused.
+    //
+    // Asserted on the registry rather than by running the binary, because the
+    // action `enable` now takes is a download — the one thing a test must not
+    // do for real.
+    const loadable = MODELS.filter(isLoadable);
+    expect(loadable.length).toBe(1);
+    expect(loadable[0]!.name).toBe(MODELS[0]!.name);
+  });
 });
