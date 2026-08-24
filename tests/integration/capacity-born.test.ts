@@ -214,19 +214,37 @@ function harnessOffThePath(): void {
  * slow test: it teaches whoever sees it that a red here means nothing. The
  * failing direction is unchanged; only the patience is.
  */
-async function untilLines(
-  daemon: ParleyDaemon, front: RawClient, wanted: number,
-): Promise<{ n: number; name: string; text: string; at: string }[]> {
+type OutputLine = { n: number; name: string; text: string; at: string };
+
+/**
+ * Wait until the tail satisfies `done`, not until it reaches a length.
+ *
+ * A count is the wrong question once the ring is full: it is satisfied the
+ * moment PANEL_TAIL_LINES have arrived, which on a fast machine is long before
+ * the child has written its last one. A test that then asserts the last line is
+ * present is asking about something the wait never promised — it passes where
+ * the writer happens to be ahead and fails where it is not, and the failure
+ * looks like the ring being wrong.
+ */
+async function untilOutput(
+  daemon: ParleyDaemon, front: RawClient, done: (lines: OutputLine[]) => boolean,
+): Promise<OutputLine[]> {
   const ceiling = Date.now() + 20_000;
-  let lines: { n: number; name: string; text: string; at: string }[] = [];
+  let lines: OutputLine[] = [];
   while (Date.now() < ceiling) {
     const r = await front.send({ op: "output" });
-    lines = (r.lines ?? []) as typeof lines;
-    if (lines.length >= wanted) return lines;
+    lines = (r.lines ?? []) as OutputLine[];
+    if (done(lines)) return lines;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   void daemon;
   return lines;
+}
+
+async function untilLines(
+  daemon: ParleyDaemon, front: RawClient, wanted: number,
+): Promise<OutputLine[]> {
+  return untilOutput(daemon, front, (lines) => lines.length >= wanted);
 }
 
 async function connectTo(address: string): Promise<RawClient> {
@@ -1249,7 +1267,9 @@ describe.skipIf(WINDOWS_SPAWN)("the panel is the newborn's window", () => {
       `long=; i=0; while [ $i -lt 400 ]; do long="\${long}x"; i=$((i+1)); done; echo "\$long"`,
     );
 
-    const lines = await untilLines(daemon, front, DEFAULTS.PANEL_TAIL_LINES);
+    // Espera a última linha, não uma contagem: é ela que a asserção abaixo
+    // afirma estar presente, e o anel enche antes de o filho terminar.
+    const lines = await untilOutput(daemon, front, (ls) => ls.some((l) => l.text === `line ${many - 1}`));
     expect(lines.length).toBe(DEFAULTS.PANEL_TAIL_LINES);
     // A ring, so what survives is the tail — the part somebody watching wants.
     expect(lines.some((l) => l.text === `line ${many - 1}`)).toBe(true);
