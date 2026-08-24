@@ -1,6 +1,7 @@
 import type {
-  GrantScope, Mode, ParticipantKind, Priority, RequestState, Response,
+  GrantScope, Mode, ParticipantKind, Priority, RequestState, Response, Shape,
 } from "../protocol/types";
+import type { PlanTask } from "../plan/parse";
 
 export interface Participant {
   id: string;
@@ -37,6 +38,27 @@ export interface Participant {
    * id where there is one. This, not the name, is what identity is keyed on.
    */
   session: string | null;
+  /**
+   * Who created this session. `parley` fronts are the only ones parley can
+   * genuinely wake, because it owns their process — see §4.6 of the spec.
+   *
+   * Written from `PARLEY_BORN`, which `bearFront` puts in the newborn's
+   * environment and `resolveIdentity` reads back. Set once, at the join that
+   * created this participant, and never revised: the only direction a later
+   * revision could take is `person` -> `parley`, and that is the direction
+   * that makes a person's session retirable by a frame anybody can send.
+   */
+  born: "person" | "parley";
+  /**
+   * When this front was last invited to retire, or `null` when it has no
+   * standing invitation.
+   *
+   * Rung once per episode — the same discipline as `nudgedAtMs` on a work
+   * item and `ownerNudgedAtMs` on a permission request. Without it the daemon
+   * re-sent the notice and re-attempted the cleanup on every tick and before
+   * every command, for as long as the front stayed on the bus.
+   */
+  retireNudgedAtMs: number | null;
 }
 
 export interface Claim {
@@ -152,6 +174,39 @@ export interface Question {
   nudgedAtMs: number | null;
 }
 
+export interface WorkItem {
+  id: string;
+  /** One concrete path or glob. One item per path — the unit of territory. */
+  paths: string[];
+  title: string;
+  /** Ids of Note and CommandResult. Reference, never a copy: this is the token saving. */
+  evidenceIds: string[];
+  publishedById: string;
+  publishedByName: string;
+  /** `work` is something to do. `review` is somebody else's work to check. */
+  kind: "work" | "review";
+  /**
+   * What decides whether it can be refused. A discovered item is an offer; a
+   * planned item is a dispatch.
+   */
+  origin: "discovered" | "planned";
+  state: "open" | "offered" | "taken" | "done";
+  offeredToId: string | null;
+  offeredAtMs: number | null;
+  takenById: string | null;
+  /** Set when the holder dies; returned to the pool after the grace period. */
+  orphanedAtMs: number | null;
+  /** For `kind: "review"`, the item whose work is being checked. */
+  reviewOf: string | null;
+  at: string;
+  /**
+   * Set once the pool has rung an idle front about this item, so nobody is
+   * pushed round in circles. Same discipline as the question and permission
+   * nudges.
+   */
+  nudgedAtMs: number | null;
+}
+
 /** A command result worth not running again. */
 export interface CommandResult {
   key: string;
@@ -166,8 +221,38 @@ export interface CommandResult {
   staleBecause: string | null;
 }
 
+/**
+ * The state of one dispatched plan, one wave at a time.
+ *
+ * `waves` only carries task numbers because that is the shape other fronts
+ * read (and, eventually, the wire) — never the full task data, which is kept
+ * separately below so it is not duplicated into every response.
+ */
+export interface PlanState {
+  goal: string;
+  spec: string | null;
+  waves: { taskNumbers: number[] }[];
+  waveIndex: number;
+  /** Work item ids created for each task number, across every wave opened so far. */
+  itemsByTask: Record<number, string[]>;
+  /**
+   * The parsed tasks behind each wave, index-aligned with `waves` above —
+   * needed again whenever a later wave opens. Kept as the literal per-wave
+   * groupings `waves()` produced, not looked up by task number: two tasks
+   * sharing a number (a malformed plan, but one `graph.ts` promises not to
+   * throw on) would otherwise collapse to whichever was seen last.
+   */
+  tasksByWave: PlanTask[][];
+}
+
 export interface State {
   mode: Mode;
+  /**
+   * Where work comes from. Orthogonal to `mode`, which is how strict territory
+   * is. Repo-scoped for the same reason: a front in `bus` inside a `plan`
+   * would ignore dispatch, and the plan would be theatre.
+   */
+  shape: Shape;
   seq: number;
   participants: Record<string, Participant>;
   claims: Claim[];
@@ -180,6 +265,36 @@ export interface State {
   touches: Record<string, Touch>;
   results: Record<string, CommandResult>;
   questions: Record<string, Question>;
+  work: WorkItem[];
+  /**
+   * The optional layer above the lexical floor. `active`/`model` are the
+   * person's decision (`parley brain enable`, human-only — see machine.ts);
+   * `askedAtMs` is parley's own nudge-once bookkeeping for the panel notice
+   * raised the first time a front wants semantic recall while it is off.
+   */
+  brain: { active: boolean; model: string | null; askedAtMs: number | null };
+  /** Set by `parley plan <file>` under `shape plan`; null otherwise. */
+  plan: PlanState | null;
+  /** When capacity was last asked for. The cooldown is what stops a big pool becoming six fronts in ten seconds. */
+  lastBirthMs: number | null;
+  /**
+   * Whether parley may start any more fronts. A person's switch, and the only
+   * thing on this bus that is.
+   *
+   * §4.7 of the design: a human on this bus has a voice and not a vote —
+   * territory and permission are for the fronts to settle among themselves,
+   * because an unanswered request that degrades into a request for a person's
+   * attention is the failure the whole design avoids. Capacity is the one
+   * exception, and it is narrow: starting a front spends somebody's money on
+   * somebody's account, and no front is ever the right one to decide that.
+   *
+   * It is on the state and not in `spawn.json` because it is a decision, not a
+   * configuration: it is journalled, it survives a restart, and it appears in
+   * the panel of everyone watching the moment it is taken. A ceiling of six
+   * that a person has to edit a file to change is a different thing from a
+   * switch they can throw while they watch the bill.
+   */
+  birthsAllowed: boolean;
 }
 
 /**
@@ -202,8 +317,10 @@ export interface Outcome {
 
 export function emptyState(mode: Mode = "advisory"): State {
   return {
-    mode, seq: 0, participants: {}, claims: [], requests: {},
+    mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
+    work: [], plan: null, lastBirthMs: null, birthsAllowed: true,
+    brain: { active: false, model: null, askedAtMs: null },
   };
 }
 

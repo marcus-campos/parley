@@ -1,5 +1,6 @@
 import { err, ok } from "../protocol/types";
-import { matchesPath, normalizeTerritoryPath } from "../repo/paths";
+import { matchesPath, readPathList } from "../repo/paths";
+import { brainNudge } from "./notes";
 import { actorOf, type CommandResult, type Ctx, type Outcome, type State } from "./types";
 
 /**
@@ -24,16 +25,6 @@ export function staleReason(state: State, result: CommandResult): string | null 
   return null;
 }
 
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const p of value) {
-    if (typeof p !== "string" || !p.trim()) continue;
-    try { out.push(normalizeTerritoryPath(p)); } catch { /* not a usable path */ }
-  }
-  return out;
-}
-
 export function recordResult(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
@@ -50,7 +41,7 @@ export function recordResult(state: State, actorId: string | null, frame: Record
     summary: typeof frame.summary === "string" ? frame.summary : "",
     // With no paths declared, anything touched anywhere invalidates it. That is
     // the safe default: better to re-run than to trust a stale green.
-    paths: readPaths(frame.paths).length ? readPaths(frame.paths) : ["**"],
+    paths: readPathList(frame.paths).length ? readPathList(frame.paths) : ["**"],
     byId: me.id,
     byName: me.name,
     at: ctx.now,
@@ -63,12 +54,29 @@ export function recordResult(state: State, actorId: string | null, frame: Record
   return { state, response: ok({ key, status }), broadcast: [] };
 }
 
-export function listResults(state: State, frame: Record<string, unknown>): Outcome {
+export function listResults(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const wanted = typeof frame.key === "string" && frame.key ? frame.key : null;
   const results = Object.values(state.results)
     .filter((r) => !wanted || r.key === wanted)
     .map((r) => ({ ...r, staleBecause: staleReason(state, r) }))
     .filter((r) => frame.fresh !== true || r.staleBecause === null);
 
-  return { state, response: ok({ results }), broadcast: [] };
+  // Both callers of `--query` have been putting `semantic` on the wire since
+  // it existed; only `notes` was reading it, so a person whose fronts happen
+  // to ask through `results` was never told the brain exists. Same request,
+  // same discipline, same notice — see `brainNudge` (notes.ts) for why it is
+  // shared rather than copied.
+  const broadcast = brainNudge(state, frame, ctx);
+
+  // Same treatment as listNotes: the daemon resolves `q` into ranked `ids`
+  // before `apply`, so this stays pure and never searches on its own.
+  if (Array.isArray(frame.ids)) {
+    const byKey = new Map(results.map((r) => [r.key, r]));
+    const ranked = (frame.ids as unknown[])
+      .map((id) => (typeof id === "string" ? byKey.get(id) : undefined))
+      .filter((r): r is CommandResult => r !== undefined);
+    return { state, response: ok({ results: ranked, ranked: true }), broadcast };
+  }
+
+  return { state, response: ok({ results }), broadcast };
 }

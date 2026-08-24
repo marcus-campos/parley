@@ -1,7 +1,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { createDecoder } from "../protocol/codec";
 import { locateRepo, type RepoInfo } from "../repo/locate";
-import { resolveIdentity } from "../cli/identity";
+import { joinFrame, resolveIdentity } from "../cli/identity";
 import { VERSION } from "../version";
 
 /**
@@ -29,7 +29,7 @@ interface Tool {
   /** The parley frame to send. */
   frame: (args: Record<string, unknown>) => Record<string, unknown>;
   /** How to render the answer for a reader that is a language model. */
-  render: (response: Record<string, unknown>) => string;
+  render: (response: Record<string, unknown>, args: Record<string, unknown>) => string;
 }
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
@@ -37,8 +37,11 @@ const list = (v: unknown): string[] =>
   Array.isArray(v) ? v.filter((x): x is string => typeof x === "string")
   : typeof v === "string" && v.trim() ? v.split(",").map((s) => s.trim()).filter(Boolean)
   : [];
+const num = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
-const TOOLS: Tool[] = [
+/** Exported for tests/mcp/server.test.ts — the schema, frame and render logic
+ * for every tool, asserted directly rather than through a live stdio round trip. */
+export const TOOLS: Tool[] = [
   {
     name: "parley_who",
     description:
@@ -77,11 +80,22 @@ const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: {} },
     frame: () => ({ op: "drain" }),
     render: (r) => {
-      const events = (r as unknown as { events: { from: { name: string; kind: string } | null; text: string; priority: string }[] }).events;
-      if (!events?.length) return "Nothing new.";
-      return events
-        .map((e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`)
-        .join("\n");
+      const d = r as unknown as {
+        events: { from: { name: string; kind: string } | null; text: string; priority: string }[];
+        pool?: string;
+      };
+      const parts: string[] = [];
+      if (d.events?.length) {
+        parts.push(
+          d.events
+            .map((e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`)
+            .join("\n"),
+        );
+      }
+      // The pool footer rides on this same response (Task 7's `drain` change),
+      // so a direct drain call sees it too, not just the footer of other tools.
+      if (d.pool) parts.push(d.pool);
+      return parts.length ? parts.join("\n\n") : "Nothing new.";
     },
   },
   {
@@ -97,20 +111,23 @@ const TOOLS: Tool[] = [
       required: ["paths"],
     },
     frame: (a) => ({ op: "claim", paths: list(a.paths), intent: str(a.intent) }),
-    render: (r) => {
+    render: (r, a) => {
       const d = r as unknown as {
         claimed?: string[];
         notes?: { title: string; body: string; kind: string; authorName: string }[];
+        more_notes?: number;
+        more_decisions?: number;
         recent?: { byName: string; intent: string; at: string }[];
       };
       const parts: string[] = [];
       parts.push(d.claimed?.length ? `Claimed: ${d.claimed.join(", ")}` : "Already yours.");
       if (d.notes?.length) {
-        parts.push(
-          `What other fronts wrote down about these paths:\n${d.notes
-            .map((n) => `- [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.body ? `\n  ${n.body}` : ""} (${n.authorName})`)
-            .join("\n")}`,
+        const lines = d.notes.map(
+          (n) => `- [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.body ? `\n  ${n.body}` : ""} (${n.authorName})`,
         );
+        if (d.more_decisions) lines.push(`- ${d.more_decisions} more decision(s) — parley notes --path ${list(a.paths)[0] ?? ""} --kind decision`);
+        if (d.more_notes) lines.push(`- ${d.more_notes} more — parley notes --path ${list(a.paths)[0] ?? ""}`);
+        parts.push(`What other fronts wrote down about these paths:\n${lines.join("\n")}`);
       }
       if (d.recent?.length) {
         parts.push(
@@ -295,36 +312,60 @@ const TOOLS: Tool[] = [
   },
   {
     name: "parley_notes",
-    description: "Durable knowledge left by every front, present and past. Filter by `path` to get only what is about a file you are touching.",
+    description:
+      "Durable knowledge left by every front, present and past. Filter by `path` to get only what is about a file you are touching, or ask a question with `query` to get back the few notes that actually answer it instead of reading everything.",
     inputSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         tag: { type: "string" },
         kind: { type: "string", enum: ["note", "decision"] },
+        query: { type: "string", description: "Ask instead of listing — ranked recall over every note, newest push channel aside." },
+        k: { type: "number", description: "How many to return when `query` is set. Default 5." },
       },
     },
-    frame: (a) => ({ op: "notes", path: str(a.path) || undefined, tag: str(a.tag) || undefined, kind: str(a.kind) || undefined, active: true }),
+    frame: (a) => ({
+      op: "notes", path: str(a.path) || undefined, tag: str(a.tag) || undefined, kind: str(a.kind) || undefined,
+      active: true, q: str(a.query) || undefined, k: num(a.k), semantic: str(a.query) ? true : undefined,
+    }),
     render: (r) => {
-      const notes = (r as unknown as { notes: { id: string; title: string; body: string; kind: string; paths: string[]; authorName: string }[] }).notes;
-      if (!notes?.length) return "Nothing written down yet.";
-      return notes
+      const d = r as unknown as {
+        notes: { id: string; title: string; body: string; kind: string; paths: string[]; authorName: string }[];
+        ranked?: boolean;
+      };
+      if (!d.notes?.length) return "Nothing written down yet.";
+      const lines = d.notes
         .map((n) => `- ${n.id} [${n.kind === "decision" ? "DECISION" : "note"}] ${n.title}${n.paths.length ? ` (${n.paths.join(", ")})` : ""}${n.body ? `\n  ${n.body}` : ""}`)
         .join("\n");
+      return d.ranked ? `Ranked by relevance to your query:\n${lines}` : lines;
     },
   },
   {
     name: "parley_results",
     description:
-      "What another front already ran, and whether the answer still holds. Check this BEFORE running a long suite: if nothing it depends on has been touched since, running it again costs minutes and buys nothing.",
-    inputSchema: { type: "object", properties: { key: { type: "string" } } },
-    frame: (a) => ({ op: "results", key: str(a.key) || undefined }),
+      "What another front already ran, and whether the answer still holds. Check this BEFORE running a long suite: if nothing it depends on has been touched since, running it again costs minutes and buys nothing. `query` ranks by relevance instead of listing everything.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string" },
+        query: { type: "string", description: "Ask instead of listing — ranked recall over every recorded result." },
+        k: { type: "number", description: "How many to return when `query` is set. Default 5." },
+      },
+    },
+    frame: (a) => ({
+      op: "results", key: str(a.key) || undefined,
+      q: str(a.query) || undefined, k: num(a.k), semantic: str(a.query) ? true : undefined,
+    }),
     render: (r) => {
-      const rs = (r as unknown as { results: { key: string; status: string; summary: string; byName: string; staleBecause: string | null }[] }).results;
-      if (!rs?.length) return "Nothing recorded yet.";
-      return rs
+      const d = r as unknown as {
+        results: { key: string; status: string; summary: string; byName: string; staleBecause: string | null }[];
+        ranked?: boolean;
+      };
+      if (!d.results?.length) return "Nothing recorded yet.";
+      const lines = d.results
         .map((x) => `- ${x.key}: ${x.status.toUpperCase()} — ${x.summary || "(no summary)"} (${x.byName})\n  ${x.staleBecause ? `STALE: ${x.staleBecause}` : "still valid, do not re-run"}`)
         .join("\n");
+      return d.ranked ? `Ranked by relevance to your query:\n${lines}` : lines;
     },
   },
   {
@@ -361,6 +402,8 @@ export async function runMcpServer(): Promise<void> {
 
   let client: ParleyClient | null = null;
   let joined = false;
+  /** Unsolicited frames, held until the next tool response can carry them. */
+  const pushed: unknown[] = [];
 
   async function ensure(): Promise<ParleyClient | null> {
     if (!repo) return null;
@@ -373,19 +416,24 @@ export async function runMcpServer(): Promise<void> {
     }
     if (!joined) {
       const identity = resolveIdentity(repo.cwd, repo.cwd);
-      let response = await client.request({
-        op: "join", name: identity.name, mission: identity.mission,
-        harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
-        connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
+      const join = (name?: string) => joinFrame(identity, {
+        cwd: repo.cwd, kind: "agent", connected: true,
+        session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
+        ...(name ? { name } : {}),
       });
+      let response = await client.request(join());
       if (!response.ok && response.error.code === "NAME_TAKEN" && "suggestion" in response.error) {
-        response = await client.request({
-          op: "join", name: String(response.error.suggestion), mission: identity.mission,
-          harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
-          connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
-        });
+        response = await client.request(join(String(response.error.suggestion)));
       }
       joined = response.ok;
+      // This front joins `connected: true`, which is what tells the daemon it
+      // is reachable immediately and may be pushed to. Declaring that and then
+      // registering no handler meant every unsolicited frame was dropped by
+      // the client while the daemon marked those events read — the same
+      // "generated, never delivered" shape the retirement notice had. There is
+      // no place to render a push here, so it is held and folded into the next
+      // tool response's footer, which is where this harness reads everything.
+      client.onPush((events) => { for (const e of events) pushed.push(e); });
     }
     return client;
   }
@@ -397,12 +445,26 @@ export async function runMcpServer(): Promise<void> {
   async function footer(connection: ParleyClient): Promise<string> {
     const drained = await connection.request({ op: "drain" });
     if (!drained.ok) return "";
-    const events = (drained as unknown as { events: { from: { name: string; kind: string } | null; text: string; priority: string }[] }).events;
-    if (!events.length) return "";
-    const lines = events.map(
-      (e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`,
-    );
-    return `\n\n---\nMessages from the other sessions working in this repository:\n${lines.join("\n")}`;
+    const d = drained as unknown as {
+      events: { from: { name: string; kind: string } | null; text: string; priority: string }[];
+      pool?: string;
+    };
+    const parts: string[] = [];
+    // Whatever arrived unsolicited since the last tool call, ahead of the
+    // drain that follows it. `drain` will not return these a second time: the
+    // daemon moved the cursor past them when it pushed them.
+    const events = [...(pushed.splice(0) as typeof d.events), ...d.events];
+    if (events.length) {
+      const lines = events.map(
+        (e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`,
+      );
+      parts.push(`Messages from the other sessions working in this repository:\n${lines.join("\n")}`);
+    }
+    // Same drain, same round trip — a second request just for the pool would
+    // cost more than the pool saves.
+    if (d.pool) parts.push(d.pool);
+    if (!parts.length) return "";
+    return `\n\n---\n${parts.join("\n\n")}`;
   }
 
   function send(message: unknown): void {
@@ -470,7 +532,7 @@ export async function runMcpServer(): Promise<void> {
         });
       }
 
-      const text = tool.render(response as unknown as Record<string, unknown>);
+      const text = tool.render(response as unknown as Record<string, unknown>, args);
       const tail = name === "parley_drain" ? "" : await footer(connection);
       return reply(id, { content: [{ type: "text", text: text + tail }] });
     }

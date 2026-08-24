@@ -1,16 +1,6 @@
 import { err, ok } from "../protocol/types";
-import { matchesPath, normalizeTerritoryPath } from "../repo/paths";
-import { actorOf, pushEvent, type Ctx, type Note, type Outcome, type State } from "./types";
-
-function readPaths(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  const out: string[] = [];
-  for (const p of value) {
-    if (typeof p !== "string" || !p.trim()) continue;
-    try { out.push(normalizeTerritoryPath(p)); } catch { /* skip what cannot be a path */ }
-  }
-  return out;
-}
+import { matchesPath, normalizeTerritoryPath, readPathList } from "../repo/paths";
+import { actorOf, pushEvent, type ConvEvent, type Ctx, type Note, type Outcome, type State } from "./types";
 
 /** Knowledge anchored to a concrete path, newest last. */
 export function notesForPath(state: State, path: string): Note[] {
@@ -42,7 +32,7 @@ export function note(state: State, actorId: string | null, frame: Record<string,
     title,
     body: typeof frame.body === "string" ? frame.body : "",
     tags: Array.isArray(frame.tags) ? frame.tags.filter((t): t is string => typeof t === "string") : [],
-    paths: readPaths(frame.paths),
+    paths: readPathList(frame.paths),
     kind: frame.kind === "decision" ? "decision" : "note",
     reversedBy: null,
     authorId: me.id,
@@ -63,7 +53,35 @@ export function note(state: State, actorId: string | null, frame: Record<string,
   return { state, response: ok({ id: entry.id, kind: entry.kind }), broadcast };
 }
 
-export function listNotes(state: State, frame: Record<string, unknown>): Outcome {
+/**
+ * A front asking for `semantic` recall cannot be blocked on a prompt it has no
+ * way to answer — a model choice and a ~100MB download are the person's call
+ * (see `brain` in machine.ts) — so the request is answered from the lexical
+ * floor unconditionally. What it earns instead is one notice, and only one:
+ * `askedAtMs` is the same once-only bookkeeping the permission and question
+ * nudges elsewhere in `src/state/` already use, so a front that keeps asking
+ * cannot turn this into noise.
+ *
+ * The once is bus-wide, not per-front, and deliberately so: it announces that
+ * *somebody* wants semantic recall, which is a fact about the bus and needs
+ * saying once, not once per front that happens to ask.
+ *
+ * Shared with `listResults` rather than duplicated there. `notes --query` and
+ * `results --query` are the same request against two corpora — the daemon even
+ * resolves them through the same ranking — so which of the two a front happens
+ * to reach for should not decide whether the person ever hears about the
+ * brain.
+ */
+export function brainNudge(state: State, frame: Record<string, unknown>, ctx: Ctx): ConvEvent[] {
+  if (frame.semantic !== true || state.brain.active || state.brain.askedAtMs !== null) return [];
+  state.brain.askedAtMs = ctx.nowMs;
+  return [pushEvent(state, ctx, {
+    kind: "system", from: null, to: null, priority: "high",
+    text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
+  })];
+}
+
+export function listNotes(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   let notes = state.notes;
   if (typeof frame.tag === "string" && frame.tag) {
     notes = notes.filter((n) => n.tags.includes(frame.tag as string));
@@ -78,7 +96,24 @@ export function listNotes(state: State, frame: Record<string, unknown>): Outcome
     notes = notes.filter((n) => n.kind === frame.kind);
   }
   if (frame.active === true) notes = notes.filter((n) => n.reversedBy === null);
-  return { state, response: ok({ notes }), broadcast: [] };
+
+  // The daemon resolves `q` into ranked `ids` before calling `apply` — this
+  // module has no clock and no I/O, so it cannot search on its own. A direct
+  // `apply` carrying a bare `q` (Task 5's tests call it that way, with no
+  // daemon in front) has nothing to rank by, so `q` itself is never read here;
+  // the honest degrade is the unranked list, not an attempt to search.
+
+  const broadcast = brainNudge(state, frame, ctx);
+
+  if (Array.isArray(frame.ids)) {
+    const byId = new Map(notes.map((n) => [n.id, n]));
+    const ranked = (frame.ids as unknown[])
+      .map((id) => (typeof id === "string" ? byId.get(id) : undefined))
+      .filter((n): n is Note => n !== undefined);
+    return { state, response: ok({ notes: ranked, ranked: true }), broadcast };
+  }
+
+  return { state, response: ok({ notes }), broadcast };
 }
 
 /** Reversing a decision keeps it in the record and stops it binding. */

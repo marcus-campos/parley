@@ -1,5 +1,8 @@
 # parley
 
+**Documentation:** <https://marcus-campos.github.io/parley/>
+
+<!-- #region what-it-is -->
 **A coordination bus for concurrent agent sessions working in one repository.**
 
 Running four or five agent sessions on the same repository works. The problem is
@@ -25,6 +28,7 @@ parley: CONFLICT
   src/backend/finance/services.py held by FINANCEIRO (month-end closing) since 2026-08-18T13:50:00Z
 Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 ```
+<!-- #endregion what-it-is -->
 
 - **Protocol reference:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - **How it works inside:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
@@ -33,6 +37,7 @@ Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 
 ## Where this fits, and where it does not
 
+<!-- #region where-it-fits -->
 The most common reaction to parley is that the problem is already solved — by
 worktrees, by subagents, by an orchestrator. Each of those is good, each of them
 is something to keep using, and none of them covers the case parley was built
@@ -112,23 +117,30 @@ from nothing.
 So: for one big decomposable task, master and subagents. For several independent,
 long-running fronts, the cost of keeping everything under a single master stops
 being obvious — and that is where this earns its place.
+<!-- #endregion where-it-fits -->
 
 ---
 
 ## The one rule
 
+<!-- #region one-rule -->
 **A broken parley must never stop the work.**
 
-If the daemon is unreachable, `enforced` degrades to `advisory` and says so
-loudly. If a hook overruns its time budget, it lets go. If the journal has a torn
-line from a `kill -9`, the daemon drops that line and boots anyway. A
-coordination system that freezes the machine when it fails is worse than no
-system at all.
+If the daemon is unreachable, nothing blocks. A command you ran yourself prints
+the reason on stderr and exits clean. The pre-edit hook is quieter than that: it
+answers with nothing at all, and your edit lands unclaimed with parley never
+mentioned in the transcript — silence, not a warning, which is the honest
+description of what you get. If a hook overruns its time budget, it lets go. If
+the journal has a torn line from a `kill -9`, the daemon drops that line and
+boots anyway. A coordination system that freezes the machine when it fails is
+worse than no system at all.
+<!-- #endregion one-rule -->
 
 ---
 
 ## Install
 
+<!-- #region install -->
 ### One line — macOS, Linux, WSL
 
 ```bash
@@ -322,6 +334,7 @@ what that implies.
 **After upgrading by hand**, run `parley stop` once — a daemon that is already
 running keeps serving the version it started with. `parley update` does this for
 you.
+<!-- #endregion install -->
 
 ---
 
@@ -456,6 +469,249 @@ Claude Code. See the compatibility matrix below.
 
 ---
 
+## Shape pool
+
+`mode` says how strict territory is. `shape` says **where work comes from** —
+a second axis, also held by the daemon and also repo-scoped: a front running
+`bus` in the middle of a `pool` would ignore every offer, and the pool would
+be theatre. `bus` is everything above, and the default — a repository that
+never sets a shape behaves exactly as it always has. `plan` is the third value,
+and it has its own section below.
+
+```bash
+parley shape pool
+```
+
+A front that finds work — sixty-four instances of the same defect, a batch of
+files that all need the same label removed — publishes it instead of writing
+it into a chat message that evaporates with the scrollback:
+
+```bash
+parley work "label sem for" templates/a.html templates/b.html src/orphan.ts
+```
+
+One item per path, because the path is the unit of territory, and each is
+routed on publish, not by hand: a path a live front already holds becomes an
+**offer**, exclusive to that front for 5 minutes before it returns to the
+pool unanswered; a path owned by nobody is **open** for anyone.
+
+```bash
+parley works --mine          # offered to you, plus everything you have taken
+parley works --state open    # what belongs to nobody
+parley take w_0012           # first refusal is exclusive while it stands
+parley drop w_0012 --reason "not my mission"
+parley done w_0012 --summary "3 labels removed"
+```
+
+**Offers ride the footer** — the same one your inbox rides: every MCP tool
+response, and every hook that drains the inbox. (`SessionStart`, `Stop`,
+`SessionEnd` and an edit denied under `enforced` answer without draining, so
+they carry neither.) A front never polls `works` to learn an offer arrived. **`take` hands
+back the notes and results already gathered for the item, in the same
+response**, so nobody re-runs the investigation that produced them. **`drop`
+costs nothing and is the right call whenever the item is not your mission**;
+it goes back in the pool for whoever it actually belongs to.
+
+An **agent** front holding no explicit claim and no taken item is spare
+capacity. An auto-claim does not make it busy — that is the footprint of an
+edit, not a declaration of what it is doing — and a person watching a panel is
+never spare capacity, because they were never going to pick the item up. If the
+pool still has something open ten minutes later, parley rings that front once —
+same discipline as the doorbell for an unanswered question, never a loop.
+
+`--kind review --review-of <id>` marks an item as somebody else's work to
+check rather than new work to do.
+
+---
+
+## Recall: ask, don't just list
+
+`claim` already pushes path-anchored notes at whoever edits that file next —
+the deal since day one. What was missing: a front with a *question* that has
+no single path to anchor on could only list everything or filter by path, both
+of which cost tokens on a corpus that outgrows any one session fast.
+
+```bash
+parley notes --query "how does the footer cap work" --k 3
+parley results --query "select2 dropdown test" --k 3
+```
+
+Both `notes` and `results` gain `--query` (`q` in the protocol, `query` on the
+MCP tools) and `--k`. Every front gets a lexical floor for free — no download,
+no configuration, no model:
+
+- **Identifier-aware tokenisation.** `screen_builder.html` is retrieved by
+  `screen builder`; `is_staff()` by `is_staff`. This corpus is notes about
+  code, so splitting on `_`, `-`, `.` and camelCase is the common case, not an
+  edge case.
+- **BM25 with a distinctiveness threshold.** A term present in more than half
+  the corpus does not count as a match on its own — otherwise a note sharing
+  only "the" or "test" with the query would outrank returning nothing. (Below
+  four documents in the corpus this threshold does not engage yet; a corpus
+  that small has no meaningful notion of "common.")
+- **Silence below the floor, on purpose.** A query with no good answer returns
+  `[]`, never the least-bad note. The least-bad note costs tokens and teaches
+  the agent to distrust the channel.
+
+### The brain: optional, local, off by default
+
+Enabling the brain (`parley brain enable`) fuses a local embedding model into
+every ranked query by reciprocal rank, on top of the lexical floor — so a
+Portuguese note about *"o menu lateral"* is still found by an English query
+about *"hidden sidebar,"* paraphrase rather than shared tokens. It is opt-in,
+deliberately:
+
+- **Human-only.** An agent asking `parley brain enable` is refused — it is
+  somebody's disk and somebody's ~100MB download, so it is the person's call.
+  An agent's query still answers from the lexical floor either way, and never
+  waits on a person. What the asking costs is one notice — *"a front asked for
+  semantic recall and the brain is off — `parley brain enable` to pick a
+  model"* — pushed to every **other** front on the bus, the panel among them,
+  and never back to the front that asked. It is spent once for the whole bus,
+  not once per front: whoever asks second while the brain is still off gets
+  the floor and no notice at all. Turning the brain on or off arms it again.
+- **Static embeddings only.** A token-lookup-and-mean model, not a
+  transformer: deterministic down to the bit, no GPU, no per-platform native
+  runtime. Vectors persist beside the journal, int8-quantised, and are
+  rebuilt from the notes and results already in `state` if that file ever
+  goes missing — nothing here needs re-deriving from scratch.
+- **A relevance floor measured from the model itself.** Dense embedding
+  tables are anisotropic: two texts about nothing in common still land at
+  cosine 0.85 or higher, and exactly where they land drifts with how long the
+  texts are. So enabling a model does two things before it will answer
+  anything. It subtracts the table's own centre of mass from every vector,
+  document and query alike, which is what stops that drift — measured across
+  every text-length regime from one token against one to eight against sixty,
+  the score of unrelated text goes from *"0.76 to 0.98, which is 11σ of
+  movement from length alone against the widest regime's own spread and over
+  100σ against the narrowest's"* to *"0.00, ±0.06 at 256 dimensions and ±0.09
+  at 128, with 0.02 to 0.06σ of residual drift for text that is about
+  nothing, and up to 0.5σ for text that is about one thing on a table with
+  only a dozen topic directions to spare"*. Not perfectly still, and worth
+  saying so; still a different universe. Then it measures what unrelated text
+  actually scores on that table, over 4,096 pairs drawn from a vocabulary big
+  enough to lay out at least 256 of them without repeating a word — a table
+  too small for that is refused rather than estimated from a handful — and
+  keeps `mean + 4σ` of that as an absolute floor. A hit clears that one number or it
+  is not returned: the same verdict whether it is the only candidate or one of
+  forty, and regardless of what anything else scored. Two notes that match
+  equally well both come back; a corpus where everything is equally irrelevant
+  returns none of it.
+- **A model that cannot be measured does not get a guessed floor.** If the
+  table is too small to measure a null distribution over, or the measurement
+  comes back degenerate, the brain does not come up: the lexical floor answers
+  and the bus is told. A wrong floor is worse than no floor, because nobody
+  can tell which direction it is wrong in.
+
+**Honestly, about this build:** the registry lists one model today,
+`potion-multilingual-128M-int8`, and it declares the `xlmr` tokenizer —
+XLM-RoBERTa's SentencePiece tokenizer, which has no TypeScript implementation
+yet (only Python or WASM). **This build cannot load it.** `parley brain
+enable` says so, and refuses, before a single byte downloads — not after.
+The registry entry is not hidden or removed to paper over that: a reader
+deserves to see that the intended model is known and simply not shippable
+yet, not silently absent. Recall still works in full on the lexical floor
+regardless of any of this — the brain is strictly additive, never a
+dependency.
+
+### The footer cap
+
+A live session accumulates notes fast — forty, sixty, more — and `claim`
+already rides some of them on every call, automatically. Sending the whole
+corpus on every edit is a tax on every edit, so both halves of it are capped,
+each with its own overflow count:
+
+| kind | rides in full up to | overflow field |
+|---|---|---|
+| plain notes | newest 5 | `more_notes` |
+| decisions | newest 20 | `more_decisions` |
+
+Decisions get their own cap rather than an outright exemption from one: a
+decision binds until reversed, so it is worth more per line than a plain note
+— but "worth more" is not "unbounded," and a path that has collected thirty
+decisions over a repository's lifetime should not answer every claim with all
+thirty of them. Either overflow count points at `parley notes --path <file>`
+(add `--kind decision` for just the rest of those) for the full list.
+
+### Degradation
+
+| failure | behaviour |
+|---|---|
+| brain off | the lexical floor answers |
+| model missing, corrupt, or too small to measure a floor from | the lexical floor answers, and the bus is told once |
+| model fails its checksum | the file is deleted, the brain is never switched on, and `parley brain enable` says so **to the person who ran it**. The bus hears nothing, because nothing about the bus changed |
+| the ranked query itself fails | the plain, unranked list `parley notes` / `parley results` would have returned with no `--query` at all |
+| nothing in the corpus clears the floor | an empty answer, marked ranked. Silence on purpose, never the least-bad note |
+| daemon unreachable | today's behaviour |
+
+`claim`'s path-anchored footer is underneath all of that and is not in the
+table, because no failure above can reach it: it reads the notes filed against
+the paths being claimed straight out of `state` and never consults either
+index.
+
+Nothing here can block an edit, delay a hook, or stop the work — [the one
+rule](#the-one-rule) applies to recall exactly as it applies to everything
+else.
+## Shape plan
+
+The third shape, on the same axis. `mode` is untouched by it: territory is
+still `off`, `advisory` or `enforced`, and it still means exactly what it means
+above. The two compose, and `plan` + `enforced` is the strongest pairing — the
+wave decides what may be worked on, and territory keeps two fronts off the same
+file while they work it.
+
+They compose; neither enforces the other. **Taking a planned item claims
+nothing**, so nothing stops a front that took a wave-0 item from also editing a
+file that belongs to wave 2 — enforced mode refuses an edit that collides with
+a live claim, and a file nobody has claimed collides with nothing. The wave is
+the schedule; territory is the lock. Claim what you are editing, in any shape.
+
+**superpowers itself is not modified in any way.** You write the plan exactly
+as you write one today, with `superpowers:brainstorming` and
+`superpowers:writing-plans`. What this fills is a branch superpowers' own
+decision tree already declares and does not implement: its
+`subagent-driven-development` asks *"Stay in this session?"* and routes
+`no - parallel session` to `executing-plans` — which today ends with a person
+opening another window by hand and pasting a plan path.
+
+```bash
+parley shape plan
+parley plan docs/superpowers/plans/2026-08-20-thing.md
+# parley: 6 task(s) in 3 wave(s) — 5 item(s) open now
+#   parley works --state open
+
+parley plan docs/superpowers/plans/2026-08-20-thing.md --replace
+# re-sequence: withdraw what the running plan has not finished, and start over
+```
+
+A `writing-plans` plan states each task's exact paths in a `**Files:**` block.
+That is the template's shape, not something anything validates — which is why a
+task whose block is missing or will not parse is still dispatched, with the
+reason appended to its title (below). parley parses those blocks and computes the
+collision graph before anything is dispatched: tasks whose paths are disjoint
+open together, tasks that touch the same file are pushed into later waves.
+Other orchestrators leave the question to a human — superpowers'
+`subagent-driven-development` branches on *"Tasks mostly independent?"* and you
+answer it. They have to, because none of them keeps a territory map. Here the
+answer is computed from what the plan already declares, and it is a
+deterministic unit test.
+
+| | |
+|---|---|
+| Dispatched, not offered | A planned **task** is published **open**, owned by nobody, and any front takes it — but once taken it cannot be dropped. The plan put it there and it stays. |
+| A wave, not a queue | The next wave opens by itself, the moment every item of the current one is done. |
+| Review is a state, not an agreement | Finishing a planned task publishes a `review` item for it, offered to a front that is **not** the author. The wave is not over until those are done too. A review is the one planned item that really is an offer: it is named in that front's footer, `drop` hands it back to the pool, and `take` returns the item under review along with it. |
+| Self-review is stated, never blocked | A review is never **offered** to the front that did the work — but `take` does not refuse one. An offer buys first refusal, not obedience, and with one live front the review can only ever be open to its author, so a block would stall the plan at that wave with nothing to rescue it. parley says so instead, wherever the item is read: `parley take` prints it, the take event carries it, and `parley works` marks the row `(self-review)`. Both panels mark it too, while the item is live — they show nothing that is `done`, so a **finished** self-review is read back in `parley works`, which is what that listing is for. |
+| A person's front outranks the plan | A path held under an explicit claim is never taken from its holder. That task is published anyway and announced as waiting — the holder runs `parley release`, or you re-sequence with `parley plan <file> --replace`. |
+| One plan at a time | A second `parley plan` while the first still has an unfinished item is **refused**. The wave rule is a proof over the tasks `parley plan` was handed, and a second plan's items would sit on the same paths with nothing having compared them. `--replace` is the way through: it withdraws every unfinished item of the running plan — including one a front is holding, announced by name — and dispatches the new plan from wave 0. What the old plan finished stays. |
+| No task disappears | A task whose `**Files:**` block is missing or unparseable is published anyway, with the parse failure **appended to its title** — and to `task N` when the heading carried no title, so the reason is always an addition and never the whole label. Silently dropping a task from a plan is the one failure that would make this untrustworthy. |
+
+The coordinator is a front, never the daemon. The daemon holds the plan's state
+and advances its waves, but it never reads your plan file: `parley plan` parses
+the markdown on the CLI side, and only the parsed tasks cross the wire.
+
+---
+
 ## Commands
 
 Everything takes `--json` for machine consumption. `--as NAME` says which front
@@ -493,10 +749,11 @@ through the environment.
 |---|---|
 | `parley say "text"` | Tell everyone. `--to NAME` for one front, `--priority high` to mark it urgent. Use it to announce intent **before** a broad change. |
 | `parley drain` | Your unread messages. Incremental by construction: it only ever returns what you have not seen, so polling costs nothing when nothing happened. |
-| `parley history [--limit N] [--since SEQ]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
+| `parley history [--limit N]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
 | `parley question --to NAME "..."` | Ask, when you need an answer rather than to be heard. The other session **cannot go idle** while your question is open. `--wait N` blocks for the reply. |
 | `parley reply <id> "answer"` | Answer a question put to you. Someone is blocked on it — and "I cannot answer" unblocks them just as well. |
 | `parley ack <id> ["got it"]` | Close the loop. Without it the front that answered has no idea the answer landed. |
+| `parley nudged <id>` | Record that you rang somebody's doorbell. Until you do, **every attempt to finish a turn tells you again**, naming the question and the address — while the front you are waiting on is still unreachable, has been quiet for two minutes, and has an address to ring at all. |
 | `parley questions` | What you owe an answer to, and what you are waiting on. |
 
 ### Territory
@@ -511,6 +768,18 @@ through the environment.
 | `parley requests [--all]` | Permission requests waiting, with the clock on each. |
 | `parley mode [off\|advisory\|enforced]` | The mode belongs to the repository, not to a session. |
 
+### The pool
+
+| | |
+|---|---|
+| `parley shape [bus\|pool\|plan]` | The shape belongs to the repository, not to a session. Read it with no argument. |
+| `parley plan <path-to-plan.md> [--replace]` | Read a `superpowers:writing-plans` plan, compute its waves from the paths each task declares, and publish the first one. `parley shape plan` first. One plan runs at a time: a second dispatch is refused while the first has an unfinished item, and `--replace` withdraws those and re-sequences. |
+| `parley work "<title>" <path…> [--evidence <id,...>] [--kind review --review-of <id>]` | Publish discovered work, one item per path. Routed on publish: offered to whoever already holds the path, open for anyone otherwise. |
+| `parley works [--state open\|offered\|taken\|done] [--mine]` | List the pool. `--mine` is what is offered to you plus what you have taken. **Offers also ride the footer that carries your inbox** — every MCP tool response, and every hook that drains it — so this is for looking, not for polling. |
+| `parley take <id>` | Take an open item, or an offer made to you. The answer carries **the notes and results already gathered for it** — do not re-run the investigation. |
+| `parley drop <id> [--reason "..."]` | Hand it back. Free, and the right call whenever the item is not your mission. A planned **task** refuses it — a review does not. |
+| `parley done <id> [--summary "..."]` | Mark it finished. Terminal, and only once: a second `done` on the same item is refused rather than filing a second review. |
+
 ### Knowledge that outlives the session
 
 | | |
@@ -519,8 +788,20 @@ through the environment.
 | `parley decide --title "..."` | Record something binding. Announced to everyone, stands until reversed — so the next front does not relitigate a settled question. |
 | `parley reverse <id> --reason "..."` | Un-bind a decision while keeping it on the record. |
 | `parley notes [--path p] [--tag t] [--kind decision] [--export] [--import]` | Read them. `--export` rewrites `.parley/notes.md` (it is written automatically on every note anyway); `--import` reads that file back onto the bus, which is what a fresh clone needs. |
+| `parley notes --query "..." [--k N]` | **Ask** instead of listing: ranked recall over every note and decision, top-`k` only (default 5). See [Recall](#recall-ask-dont-just-list) above. |
 | `parley result "<cmd>" --status pass\|fail --paths <globs>` | Record what a command produced, and what it depends on. |
 | `parley results [--fresh]` | What is already known, and whether it still holds. **Check this before running a long suite** — if nothing it depends on changed, running it again buys nothing. |
+| `parley results --query "..." [--k N]` | Same idea, over recorded results instead of notes. |
+
+### The brain
+
+| | |
+|---|---|
+| `parley brain` | Is semantic recall on, and with which model. Readable by anyone; a human sees whether they may turn it on, an agent sees that they may not. |
+| `parley brain enable [<model>]` | **Human-only** — it is somebody's disk and somebody's download. With no model named, lists the registry — name, languages, size, and whether **this build** can actually load it — so you weigh it before anything downloads. |
+| `parley brain disable` | Back to the lexical floor, without losing the corpus. |
+
+See [Recall](#recall-ask-dont-just-list) above for what turning it on actually buys you, and the honest state of what this build can load today.
 
 ### Watching
 
@@ -594,7 +875,7 @@ parley watch --web
 ```
 
 ```
-parley: web panel on http://127.0.0.1:7717/?t=a619ab2e16136a21d6098859087f9d89
+parley: web panel on http://127.0.0.1:7834/?t=a619ab2e16136a21d6098859087f9d89
 parley: bound to 127.0.0.1 only; the token is required. Ctrl+C to stop.
 parley: the page opens in watching mode; press s there to say something.
 ```
@@ -614,31 +895,47 @@ closing.
   `parley watch --web --stop` shuts it down.
 - **Each repository gets its own port**, derived from its id, so panels for
   several projects run side by side — and it is the *same* port every time, so
-  the URL in your browser history keeps working. If it happens to be taken,
-  parley moves to a free one and tells you.
+  the URL in your browser history keeps working. It is
+  `7717 + (hash of the repository id % 200)`, so anything from 7717 to 7916 is
+  normal and **the port in the sample above is one repository's, not yours** —
+  read yours off the line parley prints. The id hashes the canonical path to
+  the repository's git directory, not its name, so the same project cloned into
+  two directories derives two different ports and no page can tell you which is
+  which. If the port is taken, parley moves to a free one and tells you.
 - `--port N` pins it. If that one is busy, you get told which, rather than a
   raw bind error.
-- `--open=false` skips launching the browser.
+- `--no-open` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
   not a security boundary on a shared machine: without a token, any process — or
   any page you have open — could read your bus and speak on it.
 
 ### Why the panel is built for watching
 
-A person joins the room, and then mostly watches. That posture is deliberate, and
-it is enforced by the protocol rather than left to the interface:
+A person joins the room, and then mostly watches. That posture is deliberate,
+and what a human is allowed to do is enforced by the protocol rather than left
+to the interface:
 
-- **A human cannot grant or deny.** The daemon refuses it with `OBSERVER_ONLY`.
-  Territory disputes are for the fronts to settle among themselves, so a stalled
-  request can never turn into a request for a person's attention.
-- **A human does have a voice.** What you send arrives marked as human and at
-  high priority, and the agents are told to weigh it above a peer's opinion —
-  but never to wait for it, and never to ask a person to decide.
+- **A human answers for what they hold, exactly like a front does.** `grant`
+  and `deny` are open to a human the same as to an agent — the ownership check
+  that refuses an agent `NOT_OWNER` for someone else's territory refuses a
+  human too, so the only request a person can settle is one about a path they
+  hold themselves. That is the answer someone editing a file by hand actually
+  needs: "no, I am using this," not just `release` (hand it over) or silence
+  (grant it by timeout).
+- **What a human still cannot do is arbitrate someone else's dispute.** A
+  stalled request between two agents never becomes a request for a person's
+  attention — that is for the fronts to settle among themselves.
+- **A human does have a voice regardless of ownership.** What you send arrives
+  marked as human and at high priority, and the agents are told to weigh it
+  above a peer's opinion — but never to wait for it, and never to ask a
+  person to decide.
 - **Saying nothing is the normal case**, not a signal. Participation is optional;
   the bus does not stall because nobody is watching.
-- **So the composer is something you open, not something that waits for you.**
-  <kbd>i</kbd> in the terminal, <kbd>s</kbd> in the browser. A prompt sitting
-  there permanently invites exactly the behaviour the design tries to avoid.
+- **So the composer is something you open, not something that waits for you,**
+  and the panel only opens it for `say`. <kbd>i</kbd> in the terminal,
+  <kbd>s</kbd> in the browser — `grant`, `deny` and the rest are one `parley`
+  command away when you are holding the path, the same way `claim` is: the
+  panel puts a button on none of them.
 
 Prefer not to sit in a panel at all? `parley who`, `parley requests` and
 `parley drain` give you the same information from any terminal. The panel is a
@@ -808,6 +1105,7 @@ it — *"FINANCEIRO dropped holding 3 claim(s)"* — and they are released after
 
 ## Compatibility matrix
 
+<!-- #region compatibility -->
 No makeup. Only Claude Code has a pre-tool gate, so it is the only harness where
 everything works without the agent remembering anything.
 
@@ -831,6 +1129,7 @@ honest and different: the agent joins on its first tool call, territory is
 manual, and **every MCP tool response carries the pending inbox in its footer**
 — which turns "never reads its messages" into "reads them whenever it touches
 parley at all".
+<!-- #endregion compatibility -->
 
 ---
 
@@ -859,8 +1158,16 @@ integration. Long-term search over history.
 still local-only and single-user: `parley watch --web` binds to `127.0.0.1`
 behind a token and is not a hosted interface.)*
 
-And above all: **parley does not distribute work.** It coordinates sessions
-someone already created. Orchestration is a different project.
+And above all: **parley does not decide what the work is. It provides
+capacity, and now a schedule.** `shape plan` dispatches a plan *you* wrote and
+computes, from the paths that plan already declares, which of its tasks can run
+at the same time — arithmetic over the plan's own text, using the same
+path-overlap test territory uses, not a judgement about the work. The waves are
+computed before anything is claimed and never consult the territory map; the map
+is asked afterwards, when a wave opens, and only to announce that a path is
+already held. It does not write the plan, decide whether a task is worth doing,
+pick which front is competent to take one, or read the result. And it still
+creates no sessions: it coordinates sessions someone already started.
 
 ---
 

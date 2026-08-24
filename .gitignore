@@ -4,6 +4,9 @@ dist/
 .DS_Store
 .claude-qs
 bun.lockb
+docs/.vitepress/dist
+docs/.vitepress/cache
 
 # .parley/notes.md is versioned on purpose; only local runtime state is ignored
 .parley/state/
+.parley/worktrees/

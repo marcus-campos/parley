@@ -9,10 +9,17 @@ import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
+import { ensureModel } from "../brain/download";
+import { isLoadable } from "../brain/embed";
+import { findModel, MODELS } from "../brain/registry";
+import { parsePlan } from "../plan/parse";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { flagString, parseArgs, type Parsed } from "./args";
+import { isSelfReview } from "../state/work";
+import type { WorkItem } from "../state/types";
+import { flagBool, flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
-import { resolveIdentity, wakeAddress } from "./identity";
+import { joinFrame, resolveIdentity, wakeAddress } from "./identity";
 
 const COMPILED_CLI = import.meta.url.includes("$bunfs");
 
@@ -33,63 +40,127 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              --global installs the Claude Code hooks once for
                              every project — the only way every worktree is
                              covered, since .claude/ is usually gitignored.
-  parley uninit              remove what init wrote
+  parley uninit [--global]   remove what init wrote, --global included
   parley doctor              diagnose transport, repo identity and the WSL boundary
   parley status              is a daemon up, and what does it hold
   parley stop                shut the daemon down
 
   parley whoami              which front you are, and where
   parley join --as NAME [--mission "..."]
+                             announce yourself on the bus; the hooks already do
+                             this for you
   parley rename --as NAME [--mission "..."]
-  parley leave
-  parley who
+                             change the name and mission everyone else sees
+  parley leave               step off the bus, releasing every path you hold
+  parley who                 everyone here: name, mission, branch, idle time
+                             and what each one holds
 
   parley say [--to NAME] [--priority high] "text"
+                             tell everyone, or one front with --to
   parley question --to NAME "..." [--wait 60] [--ttl 600]
-  parley reply <id> "answer"
+                             ask when you need an answer back: they cannot go
+                             idle while it is open
+  parley reply <id> "answer" [--text "..."]
+                             answer a question somebody is blocked on
   parley ack <id> ["got it, doing X"]
+                             close the loop, so the front that answered knows
+                             it landed
   parley nudged <id>         record that you woke them, so parley stops asking
-  parley questions
-  parley drain
+  parley questions           what you owe an answer to, and what you are
+                             waiting on
+  parley drain               your unread messages, and only the unread ones
   parley history [--limit 200]
+                             re-read the backlog without moving your read
+                             cursor
 
   parley claim <paths...> [--intent "..."] [--auto]
+                             take files or globs; the answer carries the notes
+                             and the recent edits on them
   parley release [<paths...>] [--all]
+                             give them back — letting go is the answer to
+                             whoever was waiting
 
-  parley watch [--web] [--port N] [--detach] [--stop]
+  parley watch [--web] [--port N] [--detach] [--stop] [--no-open]
                              live panel: fronts, feed and pending requests.
                              Opens watching; press i (or s on the web) to speak.
                              --detach keeps the web panel up after you close the
-                             terminal; --stop shuts that one down. Each
-                             repository gets its own port, so panels for several
-                             projects run side by side.
+                             terminal; --stop shuts that one down; --no-open
+                             leaves your browser alone. Each repository gets its
+                             own port, so panels for several projects run side
+                             by side.
 
   parley ask <path> --reason "..." [--ttl 300]
-  parley requests [--all]
+                             ask the owner for a path that is theirs; silence
+                             until the ttl grants it, and says so by name
+  parley requests [--all]    permission requests waiting, with the clock on each
   parley grant <request> [--scope once|transfer]
+                             hand over a path you own
   parley deny <request> --reason "..."
+                             refuse, with a reason the requester sees
 
   parley note --title "..." [--body "..."] [--tags a,b] [--paths a,b]
-  parley decide --title "..." [--body "..."] [--paths a,b]
+                             write down what the code does not say about
+                             itself; --paths is what hands it to whoever edits
+                             those files next
+  parley decide --title "..." [--body "..."] [--tags a,b] [--paths a,b]
+                             record something binding: announced to everyone,
+                             and it stands until reversed
   parley reverse <id> [--reason "..."]
-  parley notes [--tag x] [--path p] [--kind decision] [--export] [--import]
+                             un-bind a decision, keeping it on the record
+  parley notes [--tag x] [--path p] [--kind decision] [--active] [--export]
+                             [--import] [--query "..." [--k N]]
+                             read them back; --active drops anything reversed,
+                             note or decision, --query ranks by relevance
 
   parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
-  parley results [--fresh] [--key "..."]
+                             record what a command produced, and the paths it
+                             depends on
+  parley results [--fresh] [--key "..."] [--query "..." [--k N]]
+                             what is already known, and whether it still holds;
+                             --fresh hides anything a later edit invalidated
 
   parley mode [off|advisory|enforced]
+                             how strict territory is; it belongs to the
+                             repository, not to a session
+  parley shape [bus|pool|plan]
+                             where work comes from; read it back with no
+                             argument
+
+  parley brain               is semantic recall on, and with which model
+  parley brain enable [<model>]
+                             human-only. With no model named, lists the
+                             registry — name, languages, size — so you can
+                             weigh it before anything downloads.
+  parley brain disable
+
+  parley plan <path-to-plan.md> [--replace]
+                             read a superpowers plan and dispatch its first
+                             wave onto the pool — parley shape plan first
+  parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
+                             publish discovered work, one item per path,
+                             offered first to whoever already holds it
+  parley works [--state open|offered|taken|done] [--mine]
+                             what is in the pool: id, state, paths and title.
+                             The state is the only holder information it shows
+  parley take <id>           take an open item or an offer made to you; the
+                             answer carries the evidence already gathered
+  parley drop <id> [--reason "..."]
+                             hand it back to the pool, free
+  parley done <id> [--summary "..."]
+                             mark it finished
 
 Global flags: --json (machine output), --as NAME, --quiet
+              --human (you are a person watching, not an agent)
               --help, --version
 `;
 
 function out(parsed: Parsed, human: string, payload: unknown): void {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify(payload)}\n`);
-  else if (!parsed.flags.quiet) process.stdout.write(`${human}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify(payload)}\n`);
+  else if (!flagBool(parsed.flags, "quiet")) process.stdout.write(`${human}\n`);
 }
 
 function fail(parsed: Parsed, message: string, code = 1): never {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
   else process.stderr.write(`parley: ${message}\n`);
   process.exit(code);
 }
@@ -112,7 +183,7 @@ async function withSession(
   } catch (e) {
     // parley broken must never stop the work: say so, exit clean for hooks.
     if (e instanceof ParleyUnreachable) {
-      if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+      if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
       process.exit(0);
     }
@@ -120,31 +191,20 @@ async function withSession(
   }
 
   const identity = resolveIdentity(repo.cwd, repo.cwd, flagString(parsed.flags, "as"));
-  let response = await client.request({
-    op: "join",
-    name: identity.name,
+  const join = (name?: string) => joinFrame(identity, {
     mission: flagString(parsed.flags, "mission", identity.mission),
-    harness: identity.harness,
     cwd: repo.cwd,
-    kind: parsed.flags.human ? "human" : "agent",
-    branch: identity.branch,
+    kind: name ? "agent" : flagBool(parsed.flags, "human") ? "human" : "agent",
     wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
+    ...(name ? { name } : {}),
   });
+  let response = await client.request(join());
 
   // A derived name that collides takes the suggestion rather than failing: the
   // hook path has no human to retype it.
   if (!response.ok && response.error.code === "NAME_TAKEN" && identity.provisional && "suggestion" in response.error) {
-    response = await client.request({
-      op: "join",
-      name: String(response.error.suggestion),
-      mission: flagString(parsed.flags, "mission", identity.mission),
-      harness: identity.harness,
-      cwd: repo.cwd,
-      kind: "agent",
-      branch: identity.branch,
-      session: sessionFor(repo.discoveryDir, repo.cwd),
-    });
+    response = await client.request(join(String(response.error.suggestion)));
   }
   if (!response.ok) {
     client.close();
@@ -172,6 +232,13 @@ async function main(): Promise<void> {
       const found = locateRepo();
       here = { gitCommonDir: found.gitCommonDir, root: found.root };
     } catch { /* run from outside a repository is fine */ }
+    // Deliberately `argv.includes` and not `flagBool`, which is the one
+    // accessor everywhere else in this file. This branch runs before
+    // `parseArgs` and reads raw argv, and it is not a command a person types:
+    // src/cli/update.ts spawns it with bare `--yes` / `--json` and nothing
+    // else. So the exact-match assumption that `--detach=true` broke cannot be
+    // reached here — there is no spelling to get wrong. A reader converging on
+    // "one accessor" will find these two survivors; they are on purpose.
     return refreshAllAdapters({
       assumeYes: argv.includes("--yes"),
       json: argv.includes("--json"),
@@ -226,18 +293,28 @@ async function main(): Promise<void> {
 
   // `--help` and `--version` are consumed as the command name by the parser, so
   // they are matched here explicitly. Both must work outside a git repository.
-  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || parsed.flags.help) {
+  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || flagBool(parsed.flags, "help")) {
     process.stdout.write(USAGE);
     return;
   }
-  if (["version", "--version", "-v"].includes(parsed.command) || parsed.flags.version) {
+  if (["version", "--version", "-v"].includes(parsed.command) || flagBool(parsed.flags, "version")) {
     process.stdout.write(`parley ${VERSION} (protocol v${PROTOCOL_VERSION})\n`);
     return;
   }
 
   // Marking a workspace happens before repository lookup, because the whole
   // point is that the directory is not itself a repository.
-  if (parsed.command === "init" && parsed.flags.workspace) {
+  //
+  // Presence, not truth. `--workspace` is the one hybrid in this file: bare it
+  // means "find the workspace file here", with a value it names the file. Read
+  // through `flagBool`, `parley init --workspace off` — `off` being a
+  // perfectly ordinary filename — reads as *not given*, skips this branch and
+  // falls through to a normal `runInit` that writes adapter files into the
+  // current repository. Before, it entered here and failed loudly on a file it
+  // could not read, which is the right answer. A valued flag must never be
+  // routed through the boolean accessor; the value is read at `flagString`
+  // below.
+  if (parsed.command === "init" && "workspace" in parsed.flags) {
     const {
       findWorkspaceRoot, markAsWorkspace, membersOf, readWorkspaceFile, workspaceFilesIn,
     } = await import("../repo/workspace");
@@ -315,9 +392,9 @@ async function main(): Promise<void> {
       discoveryDir = found.discoveryDir;
     } catch { /* updating from anywhere is fine */ }
     return runUpdate({
-      checkOnly: parsed.flags.check === true,
-      assumeYes: parsed.flags.yes === true,
-      json: parsed.flags.json === true,
+      checkOnly: flagBool(parsed.flags, "check"),
+      assumeYes: flagBool(parsed.flags, "yes"),
+      json: flagBool(parsed.flags, "json"),
       gitCommonDir,
       repoRoot,
       discoveryDir,
@@ -338,14 +415,14 @@ async function main(): Promise<void> {
     case "init": {
       const { runInit } = await import("../adapters/install");
       return runInit(repo, {
-        assumeYes: parsed.flags.yes === true,
-        json: parsed.flags.json === true,
-        global: parsed.flags.global === true,
+        assumeYes: flagBool(parsed.flags, "yes"),
+        json: flagBool(parsed.flags, "json"),
+        global: flagBool(parsed.flags, "global"),
       });
     }
     case "uninit": {
       const { runUninit } = await import("../adapters/install");
-      return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
+      return runUninit(repo, { json: flagBool(parsed.flags, "json"), global: flagBool(parsed.flags, "global") });
     }
 
     case "buses": {
@@ -459,7 +536,7 @@ async function main(): Promise<void> {
       const panel = readRunningPanel(repo.gitCommonDir);
       return out(
         parsed,
-        `parley up  pid ${endpoint.pid}  mode ${s.mode}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending` +
+        `parley up  pid ${endpoint.pid}  mode ${s.mode}  shape ${s.shape}  ${s.participants} front(s)  ${s.claims} claim(s)  ${s.pending_requests} pending` +
           (panel ? `\n  web panel: ${panel.url}` : ""),
         { ...(response as object), panel: panel?.url ?? null },
       );
@@ -481,13 +558,13 @@ async function main(): Promise<void> {
       process.env.PARLEY_PANEL_NAME ||
       readPanelConfig(repo.gitCommonDir).name ||
       "PANEL";
-    if (parsed.flags.web) {
+    if (flagBool(parsed.flags, "web")) {
       const { clearRunningPanel, defaultPortFor, readRunningPanel, runWebPanel } = await import("./web");
       const explicitPort = flagString(parsed.flags, "port");
       const port = explicitPort ? Number(explicitPort) : defaultPortFor(repo.repoId);
       const running = readRunningPanel(repo.gitCommonDir);
 
-      if (parsed.flags.stop) {
+      if (flagBool(parsed.flags, "stop")) {
         if (!running) return out(parsed, "parley: no web panel running for this repository", { ok: true, stopped: false });
         try { process.kill(running.pid, "SIGTERM"); } catch { /* already gone */ }
         clearRunningPanel(repo.gitCommonDir);
@@ -501,9 +578,12 @@ async function main(): Promise<void> {
         return out(parsed, `parley: web panel already running on ${running.url}`, { ok: true, url: running.url, reused: true });
       }
 
-      if (parsed.flags.detach) {
+      if (flagBool(parsed.flags, "detach")) {
         const { spawn } = await import("node:child_process");
-        const args = process.argv.slice(1).filter((a) => a !== "--detach");
+        // Every spelling of the flag, not just the bare one. `--detach=true` left
+        // in the child's argv makes the child detach too, and the one after it:
+        // no generation ever reaches runWebPanel, so the panel never starts.
+        const args = process.argv.slice(1).filter((a) => a !== "--detach" && !a.startsWith("--detach="));
         const child = spawn(process.execPath, COMPILED_CLI ? args.slice(1) : args, {
           detached: true, stdio: "ignore", windowsHide: true,
         });
@@ -523,7 +603,12 @@ async function main(): Promise<void> {
         return fail(parsed, "started the web panel but it never came up");
       }
 
-      return runWebPanel(repo, panelName, port, parsed.flags.open !== false, explicitPort !== "");
+      // `--no-open` is the spelling the help text offers, and `flagBool` is
+      // what reads it — as it now reads every boolean flag here. The old
+      // `parsed.flags.open !== false` was true for every input, and
+      // `parsed.flags["no-open"] !== true` was still true for `--no-open=true`
+      // and `--no-open true`, which parseArgs stores as the string `"true"`.
+      return runWebPanel(repo, panelName, port, !flagBool(parsed.flags, "no-open"), explicitPort !== "");
     }
     return runWatch(repo, panelName);
   }
@@ -713,11 +798,11 @@ async function main(): Promise<void> {
 
       case "claim": {
         if (p.positional.length === 0) fail(p, "claim needs at least one path");
-        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: p.flags.auto === true });
+        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: flagBool(p.flags, "auto") });
         if (!r.ok) {
           const conflicts = (r as unknown as { conflicts?: { path: string; owner: { name: string; mission: string }; since: string }[] }).conflicts ?? [];
           const detail = conflicts.map((c) => `  ${c.path} held by ${c.owner.name} (${c.owner.mission || "no mission"}) since ${c.since}`).join("\n");
-          if (p.flags.json) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
+          if (flagBool(p.flags, "json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
           process.stderr.write(`parley: CONFLICT\n${detail}\nAsk for it:  parley ask ${conflicts[0]?.path ?? p.positional[0]} --reason "..."\n`);
           process.exit(1);
         }
@@ -726,7 +811,7 @@ async function main(): Promise<void> {
       }
 
       case "release": {
-        const r = await send({ op: "release", paths: p.positional, all: p.flags.all === true });
+        const r = await send({ op: "release", paths: p.positional, all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const released = (r as unknown as { released: string[] }).released;
         return out(p, released.length ? `parley: released ${released.join(", ")}` : "parley: nothing to release", r);
@@ -749,7 +834,7 @@ async function main(): Promise<void> {
       }
 
       case "requests": {
-        const r = await send({ op: "requests", all: p.flags.all === true });
+        const r = await send({ op: "requests", all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
         if (list.length === 0) return out(p, "parley: nothing pending", r);
@@ -809,10 +894,17 @@ async function main(): Promise<void> {
       }
 
       case "results": {
+        const query = flagString(p.flags, "query") || undefined;
         const r = await send({
           op: "results",
           key: flagString(p.flags, "key") || undefined,
-          fresh: p.flags.fresh === true,
+          fresh: flagBool(p.flags, "fresh"),
+          q: query,
+          k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // A query is the front asking for recall — spec §5.1's activation
+          // flow only fires on this flag, so an actual `--query` call is what
+          // has to set it, not just the daemon's own optional field existing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as {
@@ -827,7 +919,7 @@ async function main(): Promise<void> {
       }
 
       case "notes": {
-        if (p.flags.import) {
+        if (flagBool(p.flags, "import")) {
           const fromDisk = readExportedNotes(repo.root);
           if (fromDisk.length === 0) {
             return out(p, "parley: nothing to import — no .parley/notes.md in this repository", { ok: true, imported: 0 });
@@ -851,16 +943,22 @@ async function main(): Promise<void> {
             { ok: true, imported, found: fromDisk.length },
           );
         }
+        const query = flagString(p.flags, "query") || undefined;
         const r = await send({
           op: "notes",
           tag: flagString(p.flags, "tag") || undefined,
           path: flagString(p.flags, "path") || undefined,
           kind: flagString(p.flags, "kind") || undefined,
-          active: p.flags.active === true,
+          active: flagBool(p.flags, "active"),
+          q: query,
+          k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // Same reasoning as `results` above: asking is what should surface
+          // the brain's existence to the panel, once — never a bare listing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
-        if (p.flags.export) {
+        if (flagBool(p.flags, "export")) {
           const written = exportNotes(notes, repo.root);
           return out(p, `parley: wrote ${written} (${notes.length} note(s)) — commit it when you are ready`, { ok: true, path: written });
         }
@@ -885,6 +983,225 @@ async function main(): Promise<void> {
         return out(p, `parley: mode ${(r as unknown as { mode: string }).mode}`, r);
       }
 
+      case "shape": {
+        const wanted = p.positional[0];
+        const r = await send(wanted ? { op: "shape", shape: wanted } : { op: "shape" });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, `parley: shape ${(r as unknown as { shape: string }).shape}`, r);
+      }
+
+      case "brain": {
+        const sub = p.positional[0];
+
+        if (sub === "disable") {
+          const r = await send({ op: "brain", disable: true });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, "parley: brain disabled", r);
+        }
+
+        if (sub === "enable") {
+          // Probe before spending a single byte: the daemon already knows
+          // whether this participant may enable it (`me.kind`), so ask
+          // first rather than downloading ~100MB and only then finding out
+          // the answer was always going to be no. This probe is a courtesy,
+          // not the gate — `enable` below still refuses an agent on its own
+          // even if some other client skipped straight to it.
+          const probe = await send({ op: "brain" });
+          if (!probe.ok) fail(p, describeError(probe));
+          const mayEnable = (probe as unknown as { may_enable: boolean }).may_enable;
+          if (!mayEnable) {
+            fail(
+              p,
+              "brain enable/disable is the person's call, not a front's — it is somebody's disk and " +
+                "somebody's money. Ask the human on this bus to run it (with --human).",
+            );
+          }
+
+          const name = p.positional[1];
+          if (!name) {
+            // A menu offering a choice that cannot work is worse than a
+            // shorter menu — so every row says plainly whether this build
+            // can even load it, not just its size and languages.
+            const rows = MODELS.map((m) => {
+              const size = `~${Math.round(m.bytes / (1024 * 1024))} MB`;
+              const notice = isLoadable(m) ? "" : `  — not loadable in this build (needs the ${m.tokenizer} tokenizer)`;
+              return `  ${m.name}${notice}\n        ${m.languages} — ${size}`;
+            });
+            return out(
+              p,
+              `parley: no model named. Available:\n${rows.join("\n")}\n\n` +
+                `Choose one: parley brain enable <name>`,
+              {
+                ok: true,
+                models: MODELS.map((m) => ({
+                  name: m.name, languages: m.languages, bytes: m.bytes, loadable: isLoadable(m),
+                })),
+              },
+            );
+          }
+
+          const model = findModel(name);
+          if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
+
+          // Refuse before a single byte moves — the same suspicion Task 6
+          // already applies to the download itself, aimed here at whether
+          // this build could ever load the result. The registry knows about
+          // `xlmr` models; this build's loader (`src/brain/embed.ts`) only
+          // understands `wordlevel`. Downloading first and finding that out
+          // after would spend somebody's disk and time on an outcome that
+          // was already certain.
+          if (!isLoadable(model)) {
+            fail(
+              p,
+              `${model.name} needs the ${model.tokenizer} tokenizer, which this build does not carry — only ` +
+                `wordlevel loads today. That is a limitation of this build, not a bad download or a broken ` +
+                `model; it stays listed because the model is real. Run "parley brain enable" to see which ` +
+                `entries are loadable.`,
+            );
+          }
+
+          // The size is shown before anything is downloaded, unconditionally
+          // — even under --json, since this goes to stderr and never
+          // touches the JSON on stdout. A person agreeing to spend ~100MB of
+          // their own disk should see the number first, since that is the
+          // entire reason this is theirs to decide.
+          process.stderr.write(
+            `parley: downloading ${model.name} (~${Math.round(model.bytes / (1024 * 1024))} MB)...\n`,
+          );
+          const path = await ensureModel(model);
+          if (!path) fail(p, "download or checksum verification failed — the brain stays off");
+
+          const r = await send({ op: "brain", enable: model.name });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, `parley: brain enabled — ${model.name}`, r);
+        }
+
+        const r = await send({ op: "brain" });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as { active: boolean; model: string | null };
+        return out(p, d.active ? `parley: brain is on — ${d.model}` : "parley: brain is off", r);
+      }
+      case "plan": {
+        const file = p.positional[0];
+        if (!file) fail(p, "plan needs a path, e.g. parley plan docs/superpowers/plans/2026-08-20-shape-plan.md");
+        let markdown: string;
+        try {
+          markdown = readFileSync(file, "utf8");
+        } catch (e) {
+          fail(p, `could not read ${file}: ${(e as Error).message}`);
+        }
+        // The daemon never touches the filesystem: parsing happens here, and
+        // only the parsed tasks cross the wire.
+        const parsed = parsePlan(markdown);
+        const r = await send({
+          op: "plan", goal: parsed.goal, spec: parsed.spec, tasks: parsed.tasks,
+          // One plan runs at a time. `--replace` is what the README calls
+          // re-sequencing: it withdraws what the running plan has not
+          // finished — including items a front is holding — and starts over.
+          replace: flagBool(p.flags, "replace"),
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as { waves: number; opened: number; withdrawn: number };
+        return out(
+          p,
+          `parley: ${parsed.tasks.length} task(s) in ${d.waves} wave(s) — ${d.opened} item(s) open now\n` +
+            (d.withdrawn > 0 ? `  ${d.withdrawn} unfinished item(s) of the previous plan were withdrawn\n` : "") +
+            `  parley works --state open`,
+          r,
+        );
+      }
+
+      case "work": {
+        const title = p.positional[0];
+        const paths = p.positional.slice(1);
+        if (!title) fail(p, `work needs a title, e.g. parley work "label sem for" templates/a.html`);
+        if (paths.length === 0) fail(p, "work needs at least one path");
+        const r = await send({
+          op: "work",
+          title,
+          paths,
+          evidence: flagString(p.flags, "evidence").split(",").map((t) => t.trim()).filter(Boolean),
+          kind: p.flags.kind === "review" ? "review" : undefined,
+          reviewOf: flagString(p.flags, "review-of") || undefined,
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const items = (r as unknown as { items: { id: string; path: string; state: string; offeredTo: string | null }[] }).items;
+        return out(
+          p,
+          `parley: published ${items.length} item(s)\n` +
+            items.map((i) => `  ${i.id}  ${i.path}  (${i.state})`).join("\n"),
+          r,
+        );
+      }
+
+      case "works": {
+        const stateFilter = flagString(p.flags, "state");
+        const r = await send({
+          op: "works",
+          state: ["open", "offered", "taken", "done"].includes(stateFilter) ? stateFilter : undefined,
+          mine: flagBool(p.flags, "mine"),
+        });
+        if (!r.ok) fail(p, describeError(r));
+        const work = (r as unknown as { work: WorkItem[] }).work;
+        if (work.length === 0) return out(p, "parley: nothing in the pool", r);
+        // The listing is where a finished wave is read back, and a done review
+        // keeps `takenById` — so this is the surface on which a wave that was
+        // reviewed by its own author would otherwise look exactly like one
+        // that was not. Same predicate `take` answers with.
+        const rows = work.map((w) =>
+          `  ${w.id}  ${w.state.padEnd(7)} ${w.paths.join(", ")} — ${w.title}` +
+          (isSelfReview(w, w.takenById) ? "  (self-review)" : ""));
+        return out(p, rows.join("\n"), r);
+      }
+
+      case "take": {
+        const id = p.positional[0];
+        if (!id) fail(p, "take needs a work item id");
+        const r = await send({ op: "take", id });
+        if (!r.ok) {
+          const offered = (r as unknown as { offeredTo?: { name: string; mission: string } }).offeredTo;
+          fail(p, offered ? `${describeError(r)} — held by ${offered.name} (${offered.mission || "no mission"})` : describeError(r));
+        }
+        // `reviewing` is the whole reviewed `WorkItem` (see `takeWork`), not
+        // the two fields this line prints — structural typing made the narrow
+        // shape safe but it understated what a consumer may read.
+        const d = r as unknown as {
+          title: string; paths: string[]; evidence: { notes: unknown[]; results: unknown[] };
+          reviewing: WorkItem | null; selfReview: boolean;
+        };
+        const evCount = d.evidence.notes.length + d.evidence.results.length;
+        return out(
+          p,
+          `parley: took ${d.paths[0]} — ${d.title}` +
+            // A review names what it is a review OF. Without this the pointer
+            // exists only in --json, and the skill tells fronts to take items
+            // in plain text.
+            (d.reviewing ? `\n  reviewing ${d.reviewing.id} — ${d.reviewing.title}` : "") +
+            // And it names whose work that is when it is yours. parley does not
+            // refuse this take — with one front it is the only path — so saying
+            // so plainly is the only thing that keeps the rule from being a
+            // rule nobody can observe being kept.
+            (d.selfReview ? `\n  self-review — this review is of your own work` : "") +
+            (evCount ? `\n  ${evCount} piece(s) of evidence came with it — read --json, do not re-discover it` : ""),
+          r,
+        );
+      }
+
+      case "drop": {
+        const id = p.positional[0];
+        if (!id) fail(p, "drop needs a work item id");
+        const r = await send({ op: "drop", id, reason: flagString(p.flags, "reason") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: dropped — back in the pool for someone else", r);
+      }
+
+      case "done": {
+        const id = p.positional[0];
+        if (!id) fail(p, "done needs a work item id");
+        const r = await send({ op: "done", id, summary: flagString(p.flags, "summary") });
+        if (!r.ok) fail(p, describeError(r));
+        return out(p, "parley: marked done", r);
+      }
 
       default:
         process.stdout.write(USAGE);

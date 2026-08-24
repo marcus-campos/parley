@@ -145,7 +145,9 @@ A closed list. Anything outside it is a protocol violation.
 | `UNKNOWN_OP` | Unrecognised `op`, or a malformed frame. |
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
-| `OBSERVER_ONLY` | A participant with `kind: "human"` tried to `grant` or `deny`. A human has a voice, not a vote. |
+| `OBSERVER_ONLY` | An agent tried `brain enable`/`brain disable`. Spending somebody's disk and somebody's money is the person's call, not a front's. |
+| `NOT_TAKEN` | A work item you cannot act on: `done` on someone else's, `drop` on one neither offered to you nor taken by you, or either on one already `done` — including a `done` you sent twice. |
+| `NO_CAPACITY` | Reserved for the front-birth ceiling. **No operation returns it yet**; it is in the closed list so a client written against this version already knows it. |
 
 Success is always `{"ok": true, ...}`. Failure is always
 `{"ok": false, "error": {"code": ..., "message"?: ...}, ...}`. Extra detail that
@@ -224,10 +226,48 @@ this is a clean exit.
     {"id":"p_0001","name":"FINANCEIRO","mission":"month-end closing",
      "harness":"claude-code","kind":"agent","connected":true,
      "since":"2026-08-18T13:50:00Z","idle_s":12,
-     "claims":["src/backend/finance/**"]}]}
+     "claims":["src/backend/finance/**"]}],
+   "births":{"allowed":true,"max":6,"live":1}}
 ```
 
+`births` is whether parley may start more fronts, the ceiling from `spawn.json`,
+and how many agent fronts are live against it — carried here so a panel showing
+that switch needs no second round trip. See `summon` in §6.9.
+
 This is the memory of "who touches what" that a markdown board never had.
+
+#### `wake`, and the one front parley may wake
+
+`join` may carry `wake`: **an address the front's own harness published for
+it**, and nothing else. Claude Code puts one in `CLAUDE_CODE_MESSAGING_SOCKET`;
+a front reads its own environment and reports what it finds. parley never
+writes this field and never uses it to act — it hands the address back to
+whoever asked that front a question and has been waiting, so *they* can wake it
+with the session tool their own harness gives them. It is kept to the shape of
+an address: one line, at most 512 characters. Anything else is not recorded.
+
+The reason parley does not do the waking is stated in `src/state/types.ts` and
+holds for every front a person opened: the format belongs to the harness, and
+guessing it means sending malformed bytes into somebody's live session.
+
+**A front parley started is the one place that reasoning does not apply**, and
+it is worth stating because it is the only exception in the protocol. parley is
+the parent of that process: it chose the command, it holds the pipes, and
+`born: "parley"` on the participant is what records it. That is what licenses
+the two things parley will do to such a front and to no other — invite it to
+retire when the pool is empty, and collect its worktree once it has gone — and
+neither of those is anything a person's session can be subjected to.
+
+What that exception does **not** license today is waking. A front parley bears
+is started as a one-shot run (`claude -p …`) with its standard input closed,
+and in `terminal` mode the process parley holds is the terminal launcher rather
+than the agent. So parley owns the newborn's *output*, not its attention: see
+`output` below, which is why the panel is a newborn's window.
+
+`born` is set once, from `PARLEY_BORN`, at the join that creates the
+participant, and is never revised by a later frame. The only direction a
+revision could take is `person` → `parley`, which would make somebody's own
+session retirable by a frame anyone can send.
 
 ### 6.2 Conversation
 
@@ -272,6 +312,15 @@ may be watching the whole session and say nothing. See §6.7.
 The read cursor is **per participant**, so each front drains only what it has not
 seen. A participant never receives its own messages. Directed messages reach only
 their addressee. `drain` advances the cursor to the current sequence number.
+
+Outside `shape: "bus"` the response also carries **`pool`**: a short plain-text
+footer naming the work items offered to this participant (at most three, then a
+count) and how many are open to anybody. It rides here rather than behind a
+second request because `drain` is already on the hottest path in the system, and
+a client that has nothing to show simply gets `""`. Every command a hook or an
+MCP tool answers appends it; the hook returns that do not drain — `SessionStart`,
+`Stop`, `SessionEnd`, and an edit denied under `enforced` — carry neither the
+inbox nor the pool.
 
 #### `history`
 
@@ -432,8 +481,10 @@ the reason, the request id and the remaining time.
   it to the requester.
 - `scope: "transfer"` moves the whole overlapping claim to the requester.
 - `deny` takes a `reason`, which is delivered to the requester.
-- **Only the owner may answer.** Not a human, not another front. A settled
-  request cannot be answered again.
+- **Only the owner may answer.** Ownership decides, not `kind` — a human
+  holding the path answers exactly like an agent holding it would; anyone
+  else, human or agent, is refused `NOT_OWNER`. A settled request cannot be
+  answered again.
 
 State machine: `pending → granted | denied | granted_by_timeout`.
 
@@ -567,18 +618,39 @@ otherwise they would hold only for as long as every client behaved.
 |---|---|
 | `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
 | `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
-| `grant`, `deny` | **refused** with `OBSERVER_ONLY` |
+| `claim`, `release`, `ask`, `grant`, `deny` | **allowed**, exactly like an agent — none of them is gated by `kind` |
+| `summon` with `allow` | **allowed, and refused for an agent** — see §6.9 |
 
-The reasoning: permission disputes are for the fronts to settle among
-themselves. If a human could arbitrate, an unanswered request would degrade into
-a request for a person's attention, and the autonomous flow would acquire a
-human-shaped bottleneck — which is the exact failure the five-minute expiry
-grant exists to prevent.
+None of the five share one mechanism, and it would overstate things to say so.
+`release`, `grant` and `deny` are ownership-gated: refused `NOT_OWNER` unless
+the path is the caller's (§5). `claim` is not — it is refused `CONFLICT` on
+overlap with anyone's territory, human or agent, regardless of who is asking.
+`ask` has no ownership check on the actor at all; asking about a path someone
+else holds is the entire point of the op. What all five have in common, and
+the only thing this row claims, is that a human hits exactly the same check
+an agent would — never a `kind`-only refusal.
 
-So a human is an observer with a voice. Participation is optional and silence is
-the expected state. An interface built on this protocol should reflect that
-posture: parley's own panels ship read-only, and only grow an input when the
-person explicitly asks for one.
+**Spending is the one thing that runs the other way.** Starting a front spends
+somebody's money on somebody's account, and no front is ever the right one to
+decide that — so `summon` with an `allow` field is refused for an *agent* with
+the same `OBSERVER_ONLY`, in the opposite direction from every other use of that
+code in this document. It is the narrow exception §4.7 of the design describes:
+a human here has a voice and not a vote, except on the bill.
+
+
+`grant` and `deny` refuse with `NOT_OWNER` unless `request.ownerId === me.id`,
+for a human the same as for an agent. That check is what keeps this safe: a
+person can only ever settle a request for a path they themselves hold, never
+arbitrate a dispute between two fronts that has nothing to do with them. A
+human editing a file by hand needs exactly the answer this gives: `deny`, so
+that "no, I am using this" is something the bus can hear, instead of only
+`release` (hand it over) or silence (grant it by timeout).
+
+So a human is a participant with a voice, not a bystander with one — full
+standing over whatever territory is theirs, and none at all over anyone
+else's. Participation is optional and silence is the expected state: an
+interface built on this protocol should reflect that posture, growing an
+input only when the person explicitly asks for one.
 
 ### 6.8 Mode and status
 
@@ -595,6 +667,224 @@ broadcast at high priority, because it applies to every front on the bus.
 ← {"ok":true,"protocol":1,"mode":"advisory","seq":128,"participants":2,
    "claims":4,"pending_requests":1,"notes":7}
 ```
+
+### 6.9 Shape, and where work comes from
+
+`shape` is a second repo-scoped axis, independent of `mode`. Neither enforces
+the other: `mode` says how strict territory is, `shape` says where work comes
+from.
+
+```json
+→ {"v":1,"op":"shape","shape":"pool"}
+← {"ok":true,"shape":"pool"}
+```
+
+Sending `shape` with no `shape` field reads the current value. `bus`, `pool` and
+`plan` are the only accepted values; anything else is `UNKNOWN_OP` and changes
+nothing. A change is broadcast at high priority; setting the shape to what it
+already is broadcasts nothing. `bus` is the default and the behaviour of every
+section above.
+
+#### 6.9.1 The pool
+
+A **work item** is one path. A front publishing three paths creates three items,
+because the path is the unit of territory: that is what lets an owner refuse two
+files and keep ten.
+
+```json
+→ {"v":1,"op":"work","title":"label sem for","paths":["a.html","b.html"],
+   "evidence":["n_0003"],"kind":"review","reviewOf":"w_0007"}
+← {"ok":true,"items":[
+     {"id":"w_0012","path":"a.html","state":"offered","offeredTo":"p_2"},
+     {"id":"w_0013","path":"b.html","state":"open","offeredTo":null}]}
+```
+
+`title` and at least one path are required; `evidence` is a list of `Note` and
+`CommandResult` ids, `kind` is `"work"` (default) or `"review"`, and `reviewOf`
+names the item being checked. Refused with `UNKNOWN_OP` in `shape: "bus"`.
+
+Each item is routed **on publish**, never by hand: a path a live participant
+already holds becomes `offered` to that participant, and a path owned by nobody
+is `open`. Where several live claims match one path, the pattern with more
+segments wins; on a tie a literal beats a wildcard; on a further tie the claim
+touched least recently. It is a routing hint, not a permission — the loser is
+never consulted. **`origin` is not a field a client may set** — see 6.9.3.
+
+```json
+→ {"v":1,"op":"works","state":"open"}
+← {"ok":true,"work":[{"id":"w_0013","paths":["b.html"],"title":"label sem for",
+     "evidenceIds":["n_0003"],"publishedById":"p_1","publishedByName":"CORE",
+     "kind":"work","origin":"discovered","state":"open",
+     "offeredToId":null,"offeredAtMs":null,"takenById":null,
+     "orphanedAtMs":null,"nudgedAtMs":null,"reviewOf":null,
+     "at":"2026-08-20T12:00:00Z"}]}
+```
+
+`state` filters to one of `open`, `offered`, `taken`, `done`; anything else is
+ignored rather than refused. `mine` returns what is offered to you **plus what
+you have taken**, `done` items included. The two filters combine, and one
+combination is always empty: `{"state":"open","mine":true}` returns nothing for
+any participant, because an `open` item has `offeredToId` and `takenById` both
+null and `mine` matches on exactly those two. `mine` is ignored altogether on a
+connection with no participant bound to it — there is nobody for it to mean.
+
+```json
+→ {"v":1,"op":"take","id":"w_0013"}
+← {"ok":true,"id":"w_0013","title":"label sem for","paths":["b.html"],
+   "evidence":{"notes":[…],"results":[…]},"reviewing":null,"selfReview":false}
+```
+
+`take` resolves the item's evidence into the response, so the front that picks
+the work up does not repay the discovery. `CommandResult` staleness is
+recomputed at read time, exactly as `results` does — a stored result always
+claims `staleBecause: null`. `reviewing` is the whole `WorkItem` under review,
+or `null`; `selfReview` says whether this review was published by the front
+taking it, and is **always present** so `false` is never confused with a build
+that does not send it.
+
+An offer is exclusive while it stands: a `take` from anyone but the offeree is
+`CONFLICT`, and the response carries `offeredTo: {id, name, mission}` at the top
+level so the caller can act without a second round trip. An item already `taken`
+or `done` is `CONFLICT` too.
+
+```json
+→ {"v":1,"op":"drop","id":"w_0013","reason":"not my mission"}
+← {"ok":true,"id":"w_0013","state":"open"}
+
+→ {"v":1,"op":"done","id":"w_0013","summary":"3 labels removed"}
+← {"ok":true,"id":"w_0013","state":"done"}
+```
+
+`drop` returns the item to the pool and is free: possession bought first
+refusal, not obedience. It refuses with `NOT_TAKEN` when the item is neither
+offered to you nor taken by you, or is already `done`, and with `NOT_OWNER` for
+a planned **task** (6.9.3). `done` is only for the participant holding the item,
+and refuses with `NOT_TAKEN` on an item already `done` — a retried `done` is
+answered, never applied twice, because the second one would file a second
+review. `done` is terminal: no operation moves an item out of it.
+
+#### 6.9.2 Dispatching a plan
+
+`shape: "plan"` adds one operation. The daemon never reads a file: the client
+parses the markdown and only the parsed tasks cross the wire.
+
+```json
+→ {"v":1,"op":"plan","goal":"…","spec":"docs/…/plan.md","replace":false,
+   "tasks":[{"n":1,"title":"Task 1","paths":["a.ts"],"parseError":null},
+            {"n":2,"title":"Task 2","paths":["a.ts"],"parseError":null}]}
+← {"ok":true,"waves":2,"opened":1,"withdrawn":0}
+```
+
+Every task is read rather than trusted. An entry that is not an object, whose
+`n` is not a number, or whose `paths` the daemon cannot read refuses the whole
+frame with `UNKNOWN_OP` and withdraws nothing. `title` and `parseError` are
+coerced instead — anything that is not a string reads as `""` and `null`.
+
+Two fields are refused rather than coerced, because coercing either would make
+the daemon assert something the client never sent. `n` is what the waves and
+`itemsByTask` are keyed on, and the daemon will not supply one. `paths` is what
+the waves are *computed from*, so emptying a `paths` the client did send would
+claim the task declared no files and open it in the same wave as a task it
+collides with — silently, and indistinguishably from a task that really
+declared nothing. `paths` may be omitted, `null` or `[]`, which are three
+spellings of "this task declares nothing" and can hide no file name; anything
+else must be a list of strings that each read as a repository path. A single
+unreadable element refuses the whole frame, and the error names which task and
+which element inside it.
+
+The waves are computed from the paths each task declares: tasks whose paths are
+disjoint open together, tasks that touch the same file are serialised, and a
+task is seated no earlier than one wave past the latest wave holding a task it
+collides with. `opened` counts **items**, not tasks — one item per declared
+path.
+
+Only wave 0 is published. Each later wave opens by itself once every item of the
+current one is `done`, reviews included. Finishing a planned task publishes a
+`kind: "review"` item for it, offered to a live participant with `kind: "agent"`
+that is not the author, or `open` when there is none.
+
+Refused with `UNKNOWN_OP` outside `shape: "plan"` and for an empty `tasks` list.
+**One plan runs at a time:** a second `plan` while the running one still has an
+unfinished item is `CONFLICT`. `replace: true` is the way through — it withdraws
+every unfinished item of the running plan, reports how many in `withdrawn`, and
+dispatches the new plan from wave 0. What the old plan finished is kept.
+
+#### 6.9.3 `origin`, and what a client may not say
+
+Every work item carries `origin`, and it is the field that decides whether the
+item can be refused: a `discovered` item is an offer, a `planned` **task** is a
+dispatch and `drop` returns `NOT_OWNER` for it. A `planned` **review** is an
+offer like any other and can be dropped.
+
+**A client cannot set `origin`.** It appears in `works` output and nowhere in
+any request. Honouring it on `work` would let any front publish an item its
+offeree is forbidden to hand back, aimed by construction at whoever already
+holds the path — the front that discovered the work acquiring authority over the
+front that holds the file. `planned` items are created by `plan` and by the
+review a `done` spawns, and by nothing else.
+### 6.9 Fronts parley started
+
+#### `summon`
+
+```json
+→ {"v":1,"op":"summon","reason":"three items in the pool and nobody free"}
+← {"ok":true,"summoned":true,"reason":"three items in the pool and nobody free"}
+```
+
+A front asking for capacity. Refused with `NO_CAPACITY` at the ceiling
+(`maxFronts` in `spawn.json`), and refused with `NO_CAPACITY` while a person has
+stopped parley starting fronts.
+
+```json
+→ {"v":1,"op":"summon","allow":false}
+← {"ok":true,"birthsAllowed":false,"maxFronts":6,"live":2}
+```
+
+The same op with an `allow` field is a **different frame with a different
+owner**: it settles whether parley may start fronts at all, and only a
+participant that joined as `kind: "human"` may send it. An agent gets
+`OBSERVER_ONLY`.
+
+The veto stops both routes to a birth — the automatic one in `tick`, and a
+front asking by name — and stops nothing else. The pool stays open, every front
+already on the bus keeps working, and nothing is retired. It is journalled, so
+it survives a restart: a person's decision about their own money is not
+something an unrelated daemon restart quietly reverses.
+
+The change is broadcast at high priority, once, on the change. Re-affirming a
+veto already in place is not a louder veto.
+
+`who` carries `births: {allowed, max, live}` so a panel can show what the switch
+is switching without a second round trip.
+
+#### `output`
+
+```json
+→ {"v":1,"op":"output","after":41}
+← {"ok":true,"lines":[
+    {"n":42,"name":"POOL-1","text":"reading the pool","at":"2026-08-20T12:00:00Z"}]}
+```
+
+The tail of what fronts parley bore have printed — stdout and stderr, one line
+each, in the order they arrived. `after` is a cursor: pass the highest `n` you
+have already seen and only newer lines come back. Omit it for everything the
+daemon still holds.
+
+**This is not the bus, on purpose.** Bus events are journalled and drained into
+every other front's context; a harness printing its answer there would cost
+every agent on the repository the tokens to read it, which is the exact trade
+the pool footer exists to avoid. So these lines are held in the daemon, are
+never journalled, do not survive a restart, and reach nobody who does not ask.
+Panels ask.
+
+The buffer is a ring — the last 300 lines across all newborns, each truncated
+to 240 characters — so a runaway child overwrites its own oldest output rather
+than growing the daemon. Reading these pipes is also what keeps a newborn from
+wedging: a pipe nobody drains fills at 64KB and blocks the child on its next
+write, forever.
+
+Only `panel` mode produces any. A front started in `terminal` mode prints into
+its own window, which is where a person can already see it.
 
 ---
 
@@ -625,6 +915,14 @@ every command, so a bus nobody touches never invents events.
 | Orphan grace | 60 s | A dead front's claims are announced immediately, then released after the grace period. |
 | Permission TTL | 5 min | An unanswered request is granted and announced by name. |
 | Idle shutdown | 30 min | Zero connections for this long and the daemon exits, cleaning up its endpoint and socket. |
+| Offer TTL | 5 min | An `offered` work item nobody answered returns to the pool as `open` and is announced. Matches the permission TTL on purpose: both are a right of first refusal with a deadline. |
+| Work orphan grace | 60 s | A `taken` item whose holder is gone is stamped, then returned to the pool as `open` after the grace. Same constant as the claim orphan grace, and a holder that comes back before it elapses keeps the item. |
+| Pool doorbell | 10 min | With at least one idle agent front live, every `open` item older than this that has not rung yet is stamped, and **one** message addressed to that front names how many there are. Rung once per item, so nobody is pushed round in circles. Longer than the presence lease on purpose: a front that has not renewed for this long is gone, not idle. |
+
+"Idle" for the doorbell means an **agent** holding no explicit claim and no
+taken item. An auto-claim does not count as busy — it is the footprint of an
+edit, not a declaration — and a participant with `kind: "human"` is never rung,
+because a panel was never going to pick the item up.
 
 **Note on interaction:** with the defaults, the 5-minute presence lease fires
 before the 15-minute auto-claim TTL. For a CLI-only front, death by lease is what
@@ -645,6 +943,22 @@ the daemon boots anyway — a partially written last line is exactly what a `kil
 -9` produces, and refusing to start because of it would be worse than losing one
 event.
 
+An entry that parses and then **throws** while being applied is skipped the same
+way, named on stderr, and the replay continues with the entries after it. The
+frame is journaled before it is applied, so a frame the daemon cannot survive is
+already on disk by the time anyone finds out; refusing to boot would make the
+repository undispatchable permanently, since restarting is what replays it.
+Reducers validate their own frames at the boundary rather than lean on this, so
+a skipped entry should mean a bug, not a malformed client.
+
+**The count on stderr is entries, not damage.** Whatever depended on a skipped
+entry is refused on replay and writes nothing, so a skipped `join` costs its
+whole session while the count still says one. The number of later entries naming
+a participant that no surviving entry joined is reported next to it, because
+that is the one dependent loss the daemon can measure — a frame is journaled
+under the participant its connection was bound to, and that binding only ever
+comes from an accepted `join`.
+
 Nothing survives a restart `connected`. Presence must be re-proven.
 
 ---
@@ -654,8 +968,9 @@ Nothing survives a restart `connected`. Presence must be re-proven.
 | Failure | Required behaviour |
 |---|---|
 | Daemon died | The next command spawns one; it rebuilds from the journal. Sessions re-attach on their next hook. |
-| Daemon unreachable | `enforced` **degrades to `advisory`** with a loud warning. |
+| Daemon unreachable | `enforced` **degrades to `advisory`**. A command you ran says so on stderr; the pre-edit hook answers with nothing and lets the edit through unclaimed. |
 | Hook slow | Hard time budget. Overrun means let go; the agent never waits for parley. |
 | Journal truncated | Drop the bad line, warn, boot. |
+| Journal entry throws on replay | Skip that entry, name it on stderr, boot with the rest. |
 | Duplicate name | Refuse with a usable suggestion. |
 | Version skew | `PROTOCOL_MISMATCH` naming both versions. |

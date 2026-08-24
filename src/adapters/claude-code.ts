@@ -170,6 +170,90 @@ lease. If you are going to pause for a long time and still need a path, touch it
 or re-claim it. A claim you took by editing expires after 15 idle minutes; one
 you asked for explicitly is yours until you release it or leave.
 
+## Work offered to you, not assigned
+
+Found something that is not your mission to fix — sixty-four instances of the
+same defect, a batch of files that all need the same label removed? Publish it
+instead of writing it into a chat message that evaporates with the scrollback:
+
+\`\`\`
+parley shape pool
+parley work "label sem for" templates/a.html templates/b.html --evidence n_0003
+\`\`\`
+
+\`--evidence\` is what makes an item worth more than a chat message: whoever
+takes it gets the note or result you already gathered, not just your
+description of it.
+
+Where the repository runs in \`shape pool\`, a front that discovers work on a
+path you hold does not have to reach you to hand it over — the offer already
+rides in the same footer your inbox does: every MCP tool response, and every
+hook that drains the inbox. (An edit denied under \`enforced\`, and the
+session-start and session-end hooks, answer without draining.) You do not poll
+for it.
+
+\`\`\`
+parley take w_0012
+parley drop w_0012 --reason "not my mission"
+\`\`\`
+
+**\`take\` hands you the notes and results already gathered for it, in the same
+response.** That is what the offer bought you — do not go rediscover what it
+already carried.
+
+**\`drop\` costs nothing, and is the right call whenever the item is not your
+mission.** It returns to the pool for whoever it actually belongs to; refusing
+is not a failure to report.
+
+## A plan is dispatched, not handed out
+
+Wrote a plan with \`superpowers:writing-plans\`? Do not paste task numbers into
+other sessions:
+
+\`\`\`
+parley shape plan
+parley plan docs/superpowers/plans/2026-08-20-thing.md
+\`\`\`
+
+parley reads the \`**Files:**\` block of every task and **computes which tasks
+can run at the same time** from the paths they declare — do not fan them out by
+hand and do not guess. Two tasks that touch the same file never open together.
+The first wave is published open, other fronts take it, and the next wave opens
+by itself once the current one is entirely done.
+
+**One plan runs at a time.** A second \`parley plan\` while the first still has
+an unfinished item is refused — that guarantee is a proof over the tasks parley
+was handed, and it cannot cover two plans at once. To re-sequence, run
+\`parley plan <file> --replace\`: it withdraws every unfinished item of the
+running plan, including one somebody is holding, and starts from wave 0.
+
+A planned **task** is **dispatched, not offered**: it is open to everybody, it
+does not arrive named in your footer, and once you take it \`drop\` refuses it.
+So go and look, and take what you can actually finish:
+
+\`\`\`
+parley works --state open
+parley take w_0004
+parley done w_0004 --summary "..."
+\`\`\`
+
+Finishing a planned task publishes a **review** of it, offered to another live
+agent — never to you. If nobody else is live it is published **open** instead
+of falling back to you, and then taking it yourself is the only way that wave
+ever closes; parley says so rather than refusing, on \`take\`, in the event and
+in \`parley works\`. A review is the one planned item that *is* an offer: it
+arrives named in your footer and \`drop\` accepts it — hand it back if you
+cannot review this one and it returns to the pool for somebody else. Taking one
+also hands you the item it reviews. The wave is not over until those reviews
+are done too, so review here is a state on the bus, not something two fronts
+agreed to do.
+
+The plan never takes a path a person's front already holds under an explicit
+claim: that task is published anyway and announced as waiting. And a task whose
+\`**Files:**\` block did not parse still gets an item, with the failure appended
+to its title — so a broken task never looks like a task that quietly never
+happened.
+
 ## Use parley, not a side channel
 
 Your harness may also offer a direct session-to-session message tool. **Prefer
@@ -242,9 +326,10 @@ The owner is pushed the request. If nobody answers within five minutes it is
 granted to you and announced to everyone, naming who stayed silent. Waiting
 longer than that is not politeness, it is waste.
 
-Ask the **owner**, never a human. A human cannot grant or deny — the protocol
-refuses it — precisely so that a stalled request never becomes a request for a
-person's attention.
+Ask the **owner** — whoever holds the path, human or agent. A human answers
+for what they hold exactly like a front does, but has no standing over a
+dispute that is not theirs: you cannot ask a human to arbitrate someone
+else's territory, only the fronts settle that among themselves.
 
 ## Anchor knowledge to the files it is about
 
@@ -334,7 +419,7 @@ a broken parley must never stop the work. It degrades to advisory and says so.
  */
 export const SKILL_STAMP = /<!-- parley skill v([0-9][^ ]*) -->/;
 
-const SKILL = `${SKILL_BODY}\n<!-- parley skill v${VERSION} -->\n`;
+export const SKILL = `${SKILL_BODY}\n<!-- parley skill v${VERSION} -->\n`;
 
 /** Which version wrote the skill on disk, if it says. */
 export function skillVersionAt(path: string): string | null {

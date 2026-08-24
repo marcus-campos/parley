@@ -64,6 +64,17 @@ export const PAGE = String.raw`<!doctype html>
   .req .why{color:var(--mute);font-size:12.5px;margin-bottom:8px}
   .req .settle{color:var(--mute);font-size:11.5px;border-top:1px dashed var(--line);padding-top:7px}
 
+  /* Collapsed by default: <details> is the one HTML element that gives us
+     that for free, no JS state to track across a page an EventSource keeps
+     re-rendering underneath the person's cursor. */
+  #work[open] summary{margin-bottom:8px}
+  #work summary{cursor:pointer;color:var(--mute);font-size:12.5px}
+  #work summary::marker{color:var(--mute)}
+  .witem{padding:7px 9px;border:1px solid var(--line);border-radius:var(--radius);
+    background:var(--panel);margin-bottom:6px;font-size:12.5px}
+  .witem .owner{font-weight:600}
+  .witem .path{color:var(--human);word-break:break-all}
+
   .feed{flex:1;overflow:auto;padding:16px 20px;min-height:0;display:flex;
     flex-direction:column;gap:5px;justify-content:flex-end}
   .ev{display:flex;gap:10px;align-items:baseline;flex:none}
@@ -115,6 +126,9 @@ export const PAGE = String.raw`<!doctype html>
   #reader .nav{margin-left:auto;display:flex;gap:8px;align-items:center}
   #reader .count{color:var(--mute);font-size:12px}
   button:disabled{opacity:.35;cursor:default}
+  /* The one control here that acts rather than speaks. Off is loud on purpose:
+     a bus that will not grow when it needs to has to say so, not hide it. */
+  #births.off{color:var(--danger);border-bottom-color:var(--danger)}
 </style>
 </head>
 <body>
@@ -123,6 +137,7 @@ export const PAGE = String.raw`<!doctype html>
   <span class="mode" id="mode">&mdash;</span>
   <span class="grow"></span>
   <span class="meta" id="repo"></span>
+  <button class="who-btn" id="births" title="whether parley may start more fronts &mdash; it is your money"></button>
   <button class="who-btn" id="you" title="click to change how you appear on the bus"></button>
   <span class="meta" id="conn">connecting&hellip;</span>
 </header>
@@ -132,6 +147,10 @@ export const PAGE = String.raw`<!doctype html>
     <div id="fronts"><p class="empty">nobody on the bus yet</p></div>
     <h2 style="margin-top:22px">Pending permission</h2>
     <div id="requests"><p class="empty">nothing pending</p></div>
+    <details id="work" style="margin-top:22px;display:none">
+      <summary id="work-summary"></summary>
+      <div id="work-items"></div>
+    </details>
     <h2 style="margin-top:22px">Notes</h2>
     <div id="notes"><p class="empty">no notes yet</p></div>
     <p class="hint" style="padding:0">Durable knowledge the fronts left for every
@@ -142,7 +161,7 @@ export const PAGE = String.raw`<!doctype html>
     <div class="feed" id="feed"></div>
     <footer>
       <div class="bar">
-        <span>watching &middot; the fronts settle territory and permission among themselves</span>
+        <span>watching &middot; you can grant or deny what's yours, the fronts settle the rest</span>
         <span class="grow"></span>
         <span><kbd>s</kbd> say &middot; <kbd>n</kbd> read notes &middot; click your name to change it</span>
       </div>
@@ -201,11 +220,25 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); setSpeaking(true);
   } else if (!speaking && (e.key === "n" || e.key === "N") && !e.metaKey && !e.ctrlKey) {
     e.preventDefault(); openNote(0);
+  } else if (!speaking && (e.key === "w" || e.key === "W") && !e.metaKey && !e.ctrlKey) {
+    e.preventDefault(); $("work").open = !$("work").open;
+  } else if (!speaking && (e.key === "b" || e.key === "B") && !e.metaKey && !e.ctrlKey) {
+    // The same key the terminal panel answers to.
+    e.preventDefault(); $("births").click();
   } else if (e.key === "Escape") {
     setSpeaking(false);
   }
 });
 $("cancel").addEventListener("click", () => setSpeaking(false));
+
+// Stopping parley spending money is a click, not a config file: the moment it
+// matters is the moment somebody is watching the bill go up.
+$("births").addEventListener("click", async () => {
+  const off = $("births").className.indexOf("off") >= 0;
+  if (!off && !window.confirm("Stop parley starting any more fronts?\n\nThe pool stays open and the fronts already here keep working.")) return;
+  const r = await post("/births", { allow: off });
+  if (!r.ok) window.alert("parley: " + (r.error && (r.error.code || r.error) || "could not change it"));
+});
 
 // Your name is set here, not with a command-line flag, and it is remembered.
 $("you").addEventListener("click", async () => {
@@ -249,11 +282,41 @@ $("feed").addEventListener("scroll", () => {
   atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
 });
 
+// Grouped by owner, not by item — the page is something a person glances at,
+// and listing every one of thirteen offered items is the corpus this whole
+// feature exists to avoid putting in front of them. The itemised list only
+// shows once they open the <details> themselves.
+function workOwnerName(id, fronts) {
+  if (!id) return "pool";
+  const f = (fronts || []).find((x) => x.id === id);
+  return f ? f.name : id;
+}
+function workGroupsFrom(work, fronts) {
+  const byOffered = new Map(), byTaken = new Map();
+  let open = 0;
+  for (const w of work) {
+    if (w.state === "offered" && w.offeredToId) byOffered.set(w.offeredToId, (byOffered.get(w.offeredToId) || 0) + 1);
+    else if (w.state === "taken" && w.takenById) byTaken.set(w.takenById, (byTaken.get(w.takenById) || 0) + 1);
+    else if (w.state === "open") open++;
+  }
+  const groups = [];
+  for (const [id, count] of byOffered) groups.push({ label: workOwnerName(id, fronts), count, kind: "offered" });
+  for (const [id, count] of byTaken) groups.push({ label: workOwnerName(id, fronts), count, kind: "taken" });
+  if (open > 0) groups.push({ label: "pool", count: open, kind: "open" });
+  return groups;
+}
+
 function render(s) {
   $("mode").textContent = s.mode;
   $("mode").className = "mode " + s.mode;
   $("repo").textContent = s.repo.split("/").pop();
   $("you").textContent = "you are " + s.you;
+
+  // §4.7: a human here has a voice and not a vote, except on spending. The
+  // label says what the switch is switching, not just that it exists.
+  var b = s.births || { allowed: true, max: 6, live: 0 };
+  $("births").textContent = (b.allowed ? "fronts " : "births off \u00b7 ") + b.live + "/" + b.max;
+  $("births").className = "who-btn" + (b.allowed ? "" : " off");
 
   allNotes = (s.notes || []).slice().reverse();
   $("notes").innerHTML = allNotes.length ? allNotes.map((n, i) =>
@@ -283,6 +346,28 @@ function render(s) {
     + '<div class="settle">'+esc(r.owner)+' settles this. Unanswered, it is granted to '
     + esc(r.requester)+' and announced.</div></div>'
   ).join("") : '<p class="empty">nothing pending</p>';
+
+  const liveWork = (s.work || []).filter((w) => w.state !== "done");
+  $("work").style.display = liveWork.length ? "" : "none";
+  if (liveWork.length) {
+    const groups = workGroupsFrom(liveWork, s.fronts);
+    $("work-summary").textContent = "Work (" + liveWork.length + ")  ·  "
+      + groups.map((g) => g.label + " " + g.count + " " + g.kind).join("    ");
+    $("work-items").innerHTML = liveWork.map((w) => {
+      const owner = w.state === "offered" ? workOwnerName(w.offeredToId, s.fronts)
+        : w.state === "taken" ? workOwnerName(w.takenById, s.fronts) : "pool";
+      // NOT re-derived here. The page ships as one self-contained string with
+      // no bundler behind it, so it cannot import isSelfReview -- which is
+      // exactly why panelWorkRows in web.ts answers it before the snapshot
+      // goes out. Every other surface calls that one predicate; a copy of the
+      // logic in this template is the only way any of them could ever
+      // disagree, on the rule parley states instead of enforcing.
+      const self = w.selfReview;
+      return '<div class="witem"><span class="owner">'+esc(owner)+'</span> &middot; '+esc(w.state)
+        + '<div class="path">'+esc(w.paths[0])+'</div><div class="meta">'+esc(w.title)
+        + (self ? ' (self-review)' : '')+'</div></div>';
+    }).join("");
+  }
 
   $("feed").innerHTML = s.feed.map((e) => {
     const t = '<time>'+hhmm(e.at)+'</time>';

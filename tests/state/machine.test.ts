@@ -462,3 +462,12 @@ describe("how a front reports being reached", () => {
     expect(seen.participants[0]!.reach).not.toContain("undefined");
   });
 });
+
+describe("status", () => {
+  test("reports both repo-scoped axes, mode and shape, side by side", () => {
+    apply(state, null, { v: 1, op: "shape", shape: "pool" }, at(0));
+    apply(state, null, { v: 1, op: "mode", mode: "enforced" }, at(10));
+    const out = apply(state, null, { v: 1, op: "status" }, at(20));
+    expect(out.response).toMatchObject({ ok: true, mode: "enforced", shape: "pool" });
+  });
+});

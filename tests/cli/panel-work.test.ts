@@ -1,0 +1,241 @@
+import { describe, expect, test } from "bun:test";
+import { workDetailLines, workSummaryLines } from "../../src/cli/watch";
+import { panelWorkRows } from "../../src/cli/web";
+import { PAGE } from "../../src/cli/web-page";
+import type { WorkItem } from "../../src/state/types";
+import { tailCursor, tailToFeed } from "../../src/cli/panel-tail";
+
+interface Row {
+  id: string; paths: string[]; title: string; state: string;
+  offeredToId: string | null; takenById: string | null;
+  kind: string; publishedById: string;
+}
+
+const front = (id: string, name: string) => ({ id, name });
+
+function offeredTo(idPrefix: string, ownerId: string, n: number): Row[] {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${idPrefix}_${i}`, paths: [`${idPrefix}/${i}.ts`], title: `item ${idPrefix}${i}`,
+    state: "offered", offeredToId: ownerId, takenById: null, kind: "work", publishedById: "",
+  }));
+}
+
+describe("the WORK section of the panel", () => {
+  test("the header names the total, and the summary line is grouped by owner", () => {
+    const work: Row[] = [
+      ...offeredTo("resp", "p_resp", 10),
+      ...offeredTo("core", "p_core", 2),
+      { id: "w_open", paths: ["open/1.ts"], title: "orphan", state: "open", offeredToId: null, takenById: null, kind: "work", publishedById: "" },
+    ];
+    const fronts = [front("p_core", "CORE"), front("p_resp", "RESPONSIVO")];
+
+    const [header, summary] = workSummaryLines(work, fronts);
+    expect(header).toContain("WORK (13)");
+    expect(header).toContain("w to expand");
+    expect(summary).toContain("RESPONSIVO");
+    expect(summary).toContain("10 offered");
+    expect(summary).toContain("CORE");
+    expect(summary).toContain("2 offered");
+    expect(summary).toContain("pool");
+    expect(summary).toContain("1 open");
+
+    // The whole point of grouping is that the collapsed line carries the top,
+    // never the corpus — an implementation that dumped every item would pass
+    // the assertions above too, so this is what actually discriminates it.
+    expect(summary).not.toContain("resp/0.ts");
+    expect(summary).not.toContain("open/1.ts");
+    expect(summary).not.toContain("orphan");
+  });
+
+  test("done items count toward neither the total nor any group", () => {
+    const work: Row[] = [
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "y", state: "done", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
+    ];
+    const [header, summary] = workSummaryLines(work, [front("p_resp", "RESPONSIVO")]);
+    expect(header).toContain("WORK (1)");
+    expect(summary).not.toContain("2 ");
+  });
+
+  test("offered and taken are named as what they are, not merged into one count", () => {
+    const work: Row[] = [
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "y", state: "taken", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
+    ];
+    const [, summary] = workSummaryLines(work, [front("p_resp", "RESPONSIVO")]);
+    expect(summary).toContain("1 offered");
+    expect(summary).toContain("1 taken");
+  });
+
+  // The panel shows who holds an item and never whose work it is. A review
+  // held by the front that published it is the one case where those two
+  // differ in a way a person watching would want to know about, and it is the
+  // case parley refuses to block — so the row has to say it.
+  test("a review held by the front that published it is named as a self-review", () => {
+    const work: Row[] = [
+      {
+        id: "w_1", paths: ["a.ts"], title: "review: Task 1", state: "taken",
+        offeredToId: null, takenById: "p_only", kind: "review", publishedById: "p_only",
+      },
+      {
+        id: "w_2", paths: ["b.ts"], title: "review: Task 2", state: "taken",
+        offeredToId: null, takenById: "p_only", kind: "review", publishedById: "p_other",
+      },
+    ];
+    const lines = workDetailLines(work, [front("p_only", "ONLY"), front("p_other", "OTHER")]);
+    const [own, theirs] = lines as [string, string];
+    expect(own).toContain("self-review");
+    // Somebody else's work checked by ONLY is the ordinary case and says
+    // nothing extra — otherwise the marker would carry no information.
+    expect(theirs).not.toContain("self-review");
+  });
+
+  test("a name unresolved against the current front list falls back to the id, not to silence", () => {
+    const work: Row[] = [
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_gone", takenById: null, kind: "work", publishedById: "" },
+    ];
+    const [, summary] = workSummaryLines(work, []);
+    expect(summary).toContain("p_gone");
+  });
+
+  test("an empty pool produces no groups at all", () => {
+    const [header, summary] = workSummaryLines([], []);
+    expect(header).toContain("WORK (0)");
+    expect(summary.trim()).toBe("");
+  });
+
+  test("the expanded view names each item by path and owner — what the collapsed line deliberately omits", () => {
+    const work: Row[] = [
+      { id: "w_1", paths: ["a.ts"], title: "fix the thing", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "finished", state: "done", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
+    ];
+    const lines = workDetailLines(work, [front("p_resp", "RESPONSIVO")]);
+    expect(lines.some((l) => l.includes("a.ts") && l.includes("RESPONSIVO"))).toBe(true);
+    // Done work is finished; it has nothing left to hand anyone.
+    expect(lines.some((l) => l.includes("b.ts"))).toBe(false);
+  });
+});
+
+describe("the WORK section of the web panel", () => {
+  test("it sits directly below Pending permission, collapsed by default", () => {
+    const pending = PAGE.indexOf("Pending permission");
+    const work = PAGE.indexOf('id="work"');
+    const notes = PAGE.indexOf(">Notes<");
+    expect(pending).toBeGreaterThan(-1);
+    expect(work).toBeGreaterThan(pending);
+    expect(notes).toBeGreaterThan(work);
+    // <details> with no `open` attribute is collapsed until a person clicks it.
+    expect(PAGE).toContain('<details id="work"');
+    expect(PAGE).not.toContain('<details id="work" open');
+  });
+
+  test("the page groups by owner client-side rather than shipping one row per item", () => {
+    expect(PAGE).toContain("workGroupsFrom");
+  });
+
+  // The page renders the answer; it does not work it out. A copy of the
+  // predicate here is the only way this surface could ever disagree with
+  // `parley take`, the take event, `parley works` and the terminal panel —
+  // and inverting a copy is invisible to a substring test, which is how the
+  // old version of this test let `!==` through.
+  test("the item row reads the server's answer and re-derives nothing", () => {
+    const start = PAGE.indexOf('$("work-items").innerHTML');
+    const end = PAGE.indexOf('.join("")', start);
+    expect(start).toBeGreaterThan(-1);
+    const renderer = PAGE.slice(start, end);
+    expect(renderer).toContain("w.selfReview");
+    expect(renderer).toContain("self-review");
+    // The field the old inline copy keyed on, and its only use in this row was
+    // the predicate. `takenById` cannot be asserted the same way: the owner
+    // column two lines above legitimately reads it.
+    expect(renderer).not.toContain("publishedById");
+  });
+
+  /**
+   * And the behaviour behind it, which the substring test above cannot reach:
+   * the web panel used to compute this inline, and BOTH inversions of that
+   * copy — `!==`, and dropping the comparison entirely so every review is
+   * marked — left every test green. The answer now comes from the same
+   * `isSelfReview` every other surface calls, so this pins the value, not a
+   * spelling.
+   */
+  test("the row the server sends says self-review for the publisher's own review, and only for that", () => {
+    const base = {
+      paths: ["a.ts"], evidenceIds: [], publishedByName: "WORKER", origin: "discovered" as const,
+      state: "taken" as const, offeredToId: null, offeredAtMs: null, orphanedAtMs: null,
+      nudgedAtMs: null, at: "2026-08-20T12:00:00Z",
+    };
+    const work: WorkItem[] = [
+      { ...base, id: "w_1", title: "review: Task 1", kind: "review", publishedById: "p_a", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_2", title: "review: Task 2", kind: "review", publishedById: "p_b", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_3", title: "Task 3", kind: "work", publishedById: "p_a", takenById: "p_a", reviewOf: null },
+    ];
+
+    expect(panelWorkRows(work).map((w) => w.selfReview)).toEqual([true, false, false]);
+    // Nothing else about the item is dropped on the way through: the row is
+    // the record plus one field, and the page reads paths, title and state off it.
+    expect(panelWorkRows(work)[0]).toMatchObject({ id: "w_1", title: "review: Task 1", state: "taken" });
+  });
+
+  test("pressing w toggles WORK open, the same key the terminal panel answers to", () => {
+    // Scoped to the keydown handler itself, not just anywhere in the page —
+    // "w" and "workGroupsFrom" both contain the letter, and a looser
+    // assertion would pass whether or not a handler actually existed.
+    const start = PAGE.indexOf('document.addEventListener("keydown"');
+    const end = PAGE.indexOf("});", start);
+    expect(start).toBeGreaterThan(-1);
+    const handler = PAGE.slice(start, end);
+    expect(handler).toContain('!speaking && (e.key === "w" || e.key === "W")');
+    expect(handler).toContain('$("work").open = !$("work").open');
+  });
+});
+
+describe("a newborn's output in the panel feed", () => {
+  test("it arrives under the front's name, as something that front said", () => {
+    // Not as a system event and not as parley speaking: for a front parley
+    // bore this is how it speaks, because there is no session a person can
+    // open and read over its shoulder.
+    const [one, two] = tailToFeed([
+      { n: 1, name: "POOL-1", text: "reading the pool", at: "2026-08-20T12:00:00.000Z" },
+      { n: 2, name: "POOL-2", text: "taking w_1", at: "2026-08-20T12:00:01.000Z" },
+    ]);
+    expect(one!.from.name).toBe("POOL-1");
+    expect(one!.kind).toBe("say");
+    expect(one!.text).toBe("reading the pool");
+    expect(one!.to).toBeNull();
+    expect(two!.from.name).toBe("POOL-2");
+  });
+
+  test("the cursor only ever moves forward, and an empty batch does not move it", () => {
+    expect(tailCursor([{ n: 7, name: "POOL-1", text: "x", at: "" }], 3)).toBe(7);
+    // Out of order, because a batch is what the daemon had, not what it sent.
+    expect(tailCursor([{ n: 9, name: "P", text: "x", at: "" }, { n: 4, name: "P", text: "y", at: "" }], 0)).toBe(9);
+    expect(tailCursor([], 12)).toBe(12);
+  });
+});
+
+describe("the spending switch, in both panels", () => {
+  test("the web page has a control that says what it is switching", () => {
+    // §4.7: the one thing on this bus a person decides and no front does. The
+    // page carries the ceiling and how much of it is in use, because a switch
+    // whose label is only "off" tells nobody whether it matters yet.
+    expect(PAGE).toContain('id="births"');
+    expect(PAGE).toContain("births off");
+    expect(PAGE).toContain('post("/births"');
+    expect(PAGE).toContain("b.live");
+    expect(PAGE).toContain("b.max");
+  });
+
+  test("pressing b toggles it, the same key the terminal panel answers to", () => {
+    expect(PAGE).toContain('e.key === "b" || e.key === "B"');
+    expect(PAGE).toContain('$("births").click()');
+  });
+
+  test("and it still refuses to be a route for grant, deny or mode", () => {
+    // The page grew a control that acts. That is exactly the moment to check
+    // it did not grow the ones that were left out on purpose.
+    expect(PAGE).not.toContain('post("/grant"');
+    expect(PAGE).not.toContain('post("/deny"');
+    expect(PAGE).not.toContain('post("/mode"');
+  });
+});

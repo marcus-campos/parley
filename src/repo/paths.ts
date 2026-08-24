@@ -26,6 +26,21 @@ export function normalizeTerritoryPath(input: string): string {
   return out.join("/");
 }
 
+/**
+ * Same normalisation, tolerant. A frame arrives from whatever a harness on the
+ * other end sent — never a reason for the daemon to throw — so anything that
+ * is not a usable path is dropped rather than failing the whole call.
+ */
+export function readPathList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const p of value) {
+    if (typeof p !== "string" || !p.trim()) continue;
+    try { out.push(normalizeTerritoryPath(p)); } catch { /* skip what cannot be a path */ }
+  }
+  return out;
+}
+
 function segRegex(seg: string): RegExp {
   let re = "";
   for (const ch of seg) {

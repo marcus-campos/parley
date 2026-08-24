@@ -62,6 +62,26 @@ describe("territory", () => {
     expect(apply(state, campo, { v: 1, op: "claim", paths: ["src/app.ts"] }, at(300)).response.ok).toBe(true);
   });
 
+  test("release with no paths releases everything, whatever `all` says", () => {
+    // `all` is not consulted when `paths` is empty — territory.ts reads
+    // `frame.all === true || paths.length === 0`. Written down because a fix
+    // report recorded the opposite as a measurement: it claimed
+    // `parley release --all src/a.ts` was the one behaviour change the boolean
+    // flag conversion cost, on the reasoning that the greedy parser swallows
+    // the path as `--all`'s value, so `all` used to arrive false and now
+    // arrives true. Both arrive with `paths: []`, and both release everything.
+    // A wrong diagnosis recorded as fact is how the next person builds around
+    // a phantom, so the behaviour gets a test instead of a paragraph.
+    for (const all of [false, true, undefined]) {
+      const fresh = initialState();
+      const me = (apply(fresh, null, { v: 1, op: "join", name: "SOLO", mission: "m" }, at(0)).response as unknown as { id: string }).id;
+      apply(fresh, me, { v: 1, op: "claim", paths: ["src/a.ts", "src/b.ts", "src/c.ts"] }, at(100));
+      const out = apply(fresh, me, { v: 1, op: "release", paths: [], all }, at(200));
+      expect(out.response.ok).toBe(true);
+      expect(fresh.claims).toEqual([]);
+    }
+  });
+
   test("releasing someone else's claim is refused", () => {
     apply(state, fin, { v: 1, op: "claim", paths: ["src/app.ts"] }, at(100));
     expect(apply(state, campo, { v: 1, op: "release", paths: ["src/app.ts"] }, at(200)).response)
@@ -248,25 +268,38 @@ describe("listing pending requests", () => {
   });
 });
 
-describe("a human has a voice, not a vote", () => {
-  test("a human cannot grant, however much they would like to", () => {
+describe("a human answers for what they hold", () => {
+  test("a human can grant a request for a path they hold", () => {
     const human = joined(state, "Marcus", 0, { kind: "human" });
-    apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    apply(state, human, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
     const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
     const id = (asked.response as unknown as { request: string }).request;
 
     const out = apply(state, human, { v: 1, op: "grant", request: id }, at(200));
-    expect(out.response).toMatchObject({ error: { code: "OBSERVER_ONLY" } });
-    expect(Object.values(state.requests)[0]!.state).toBe("pending");
+    expect(out.response).toMatchObject({ ok: true, state: "granted" });
+    expect(state.claims.some((c) => c.pattern === "src/x.ts" && c.ownerId === campo)).toBe(true);
   });
 
-  test("a human cannot deny either", () => {
+  test("a human can deny one too — the answer the bus used to refuse them", () => {
+    const human = joined(state, "Marcus", 0, { kind: "human" });
+    apply(state, human, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
+    const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
+    const id = (asked.response as unknown as { request: string }).request;
+
+    const out = apply(state, human, { v: 1, op: "deny", request: id, reason: "estou usando isso agora" }, at(200));
+    expect(out.response).toMatchObject({ ok: true, state: "denied" });
+    expect(state.claims.some((c) => c.ownerId === campo)).toBe(false);
+  });
+
+  test("but only for what they hold: NOT_OWNER on a path held by another front", () => {
     const human = joined(state, "Marcus", 0, { kind: "human" });
     apply(state, fin, { v: 1, op: "claim", paths: ["src/x.ts"] }, at(0));
     const asked = apply(state, campo, { v: 1, op: "ask", path: "src/x.ts", reason: "r" }, at(100));
     const id = (asked.response as unknown as { request: string }).request;
-    expect(apply(state, human, { v: 1, op: "deny", request: id }, at(200)).response)
-      .toMatchObject({ error: { code: "OBSERVER_ONLY" } });
+
+    expect(apply(state, human, { v: 1, op: "grant", request: id }, at(200)).response)
+      .toMatchObject({ error: { code: "NOT_OWNER" } });
+    expect(Object.values(state.requests)[0]!.state).toBe("pending");
   });
 
   test("but a human speaks, and it lands at high priority on every front", () => {

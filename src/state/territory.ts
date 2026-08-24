@@ -25,6 +25,23 @@ function recordTouch(state: State, path: string, ownerId: string, intent: string
   }
 }
 
+/** A live session accumulates forty-plus notes; riding all of them on every claim is a tax on every edit. */
+const NOTES_CAP = 5;
+
+/**
+ * Decisions bind until reversed, so exempting them from `NOTES_CAP` entirely
+ * was the right instinct — an agent that never sees one will relitigate
+ * exactly what it was recorded to settle. But "exempt" and "unbounded" are not
+ * the same claim: a path that has collected thirty decisions over the life of
+ * a repository is the same shape of tax `NOTES_CAP` exists to stop, just paid
+ * in the binding half of the corpus instead of the disposable half. This cap
+ * is deliberately far more generous than `NOTES_CAP` — decisions are rarer and
+ * worth more per line — but it is still a cap, with its own overflow count, so
+ * the footer's worst case stays bounded instead of growing with the
+ * repository's whole decided history.
+ */
+const DECISIONS_CAP = 20;
+
 /**
  * What someone else did to this path recently, and what is known about it.
  *
@@ -32,13 +49,22 @@ function recordTouch(state: State, path: string, ownerId: string, intent: string
  * before an edit — so the agent learns who rewrote the file four minutes ago,
  * and whatever a previous front wrote down about it, without a second round
  * trip and without having to think to ask.
+ *
+ * Both halves are capped because `claim` runs on every tool call — the corpus
+ * must not. Plain notes are trimmed to the newest few (`NOTES_CAP`); decisions
+ * get their own, far more generous cap (`DECISIONS_CAP`) precisely because
+ * they bind — but a cap all the same, so 30 decisions and 30 notes on one path
+ * cannot add up to an unbounded claim response the way an exemption would.
+ * Both overflow counts point at `parley notes --path` for the rest.
  */
 function contextFor(state: State, paths: string[], meId: string, ctx: Ctx): {
   recent: Touch[];
   notes: Note[];
+  moreNotes: number;
+  moreDecisions: number;
 } {
   const recent: Touch[] = [];
-  const notes: Note[] = [];
+  const gathered: Note[] = [];
   const seen = new Set<string>();
   for (const path of paths) {
     const touch = state.touches[path];
@@ -46,10 +72,23 @@ function contextFor(state: State, paths: string[], meId: string, ctx: Ctx): {
     for (const note of notesForPath(state, path)) {
       if (seen.has(note.id)) continue;
       seen.add(note.id);
-      notes.push(note);
+      gathered.push(note);
     }
   }
-  return { recent, notes };
+
+  const decisions = gathered
+    .filter((n) => n.kind === "decision")
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  const rest = gathered
+    .filter((n) => n.kind !== "decision")
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+
+  return {
+    recent,
+    notes: [...decisions.slice(0, DECISIONS_CAP), ...rest.slice(0, NOTES_CAP)],
+    moreNotes: Math.max(0, rest.length - NOTES_CAP),
+    moreDecisions: Math.max(0, decisions.length - DECISIONS_CAP),
+  };
 }
 
 export interface ConflictReport {
@@ -71,7 +110,14 @@ export function conflictsFor(state: State, pattern: string, ownerId: string): Cl
   return state.claims.filter((c) => c.ownerId !== ownerId && patternsOverlap(c.pattern, pattern));
 }
 
-/** The claim covering a concrete path, if any. */
+/**
+ * The claim covering a concrete path, if any.
+ *
+ * Not the same function as `ownerForPath` in `work.ts`, on purpose: this one
+ * serves permissions and may lean on the no-overlapping-live-claims invariant
+ * `claim` enforces, while that one must stay correct even when a replayed
+ * journal has broken it. Different correctness contracts, so not collapsed.
+ */
 export function ownerOfPath(state: State, path: string): Claim | undefined {
   return state.claims.find((c) => matchesPath(c.pattern, path));
 }
@@ -162,7 +208,10 @@ export function claim(state: State, actorId: string | null, frame: Record<string
 
   return {
     state,
-    response: ok({ claimed, auto, recent: context.recent, notes: context.notes }),
+    response: ok({
+      claimed, auto, recent: context.recent, notes: context.notes,
+      more_notes: context.moreNotes, more_decisions: context.moreDecisions,
+    }),
     broadcast,
   };
 }

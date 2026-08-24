@@ -1,24 +1,34 @@
 import { ParleyClient } from "../client/client";
+import { isSelfReview } from "../state/work";
 import type { RepoInfo } from "../repo/locate";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
+import { tailCursor, tailToFeed, type TailLine } from "./panel-tail";
 
 /**
  * `parley watch` — the panel.
  *
- * It opens **watching**: no input line, no buttons. The fronts settle territory
- * and permission among themselves; a stalled request must never quietly become
- * a request for a person's attention, and a panel with a prompt sitting in it
- * invites exactly that.
+ * It opens **watching**: no input line, no buttons. A stalled request must
+ * never quietly become a request for a person's attention — a dispute that
+ * is not the human's own is for the fronts to settle among themselves — and
+ * a panel with a prompt sitting in it invites exactly that.
  *
  * Three screens: the bus, the note list, and one note full screen. Everything
  * that writes is something you open on purpose — `i` to say, `m` to set your
- * name — because a human here has a voice and not a vote.
+ * name. The protocol lets a human answer for whatever territory is theirs,
+ * same as any front; the panel just never puts a button on it.
  */
 
 interface Front {
-  name: string; mission: string; harness: string; kind: string;
+  id: string; name: string; mission: string; harness: string; kind: string;
   branch: string; worktree: string; tag: string;
   connected: boolean; idle_s: number; claims: string[];
+}
+
+interface WorkRow {
+  id: string; paths: string[]; title: string; state: string;
+  offeredToId: string | null; takenById: string | null;
+  /** Both only so a review held by its own author can be named as one. */
+  kind: string; publishedById: string;
 }
 
 interface Note {
@@ -87,6 +97,61 @@ function countdown(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+interface WorkGroup { label: string; count: number; kind: string }
+
+/**
+ * One entry per owner-and-state, not one per item — the panel is a person
+ * glancing over, and thirteen individual rows is the corpus this whole
+ * feature exists to avoid dumping in front of them.
+ */
+function workGroups(work: WorkRow[], nameFor: (id: string) => string): WorkGroup[] {
+  const byOffered = new Map<string, number>();
+  const byTaken = new Map<string, number>();
+  let open = 0;
+  for (const w of work) {
+    if (w.state === "offered" && w.offeredToId) {
+      byOffered.set(w.offeredToId, (byOffered.get(w.offeredToId) ?? 0) + 1);
+    } else if (w.state === "taken" && w.takenById) {
+      byTaken.set(w.takenById, (byTaken.get(w.takenById) ?? 0) + 1);
+    } else if (w.state === "open") {
+      open++;
+    }
+  }
+  const groups: WorkGroup[] = [];
+  for (const [id, count] of byOffered) groups.push({ label: nameFor(id), count, kind: "offered" });
+  for (const [id, count] of byTaken) groups.push({ label: nameFor(id), count, kind: "taken" });
+  if (open > 0) groups.push({ label: "pool", count: open, kind: "open" });
+  return groups;
+}
+
+/**
+ * The header and the collapsed, grouped-by-owner line — the two lines worth
+ * showing before anyone presses `w`. Exported bare, with no ANSI colour codes,
+ * so a test can assert the text without stripping escape sequences first.
+ */
+export function workSummaryLines(work: WorkRow[], fronts: { id: string; name: string }[]): [string, string] {
+  const live = work.filter((w) => w.state !== "done");
+  const nameFor = (id: string) => fronts.find((f) => f.id === id)?.name ?? id;
+  const groups = workGroups(live, nameFor);
+  const summary = groups.map((g) => `${g.label}   ${g.count} ${g.kind}`).join("      ");
+  return [`  WORK (${live.length})  ${G.dot}  w to expand`, `  ${summary}`];
+}
+
+/** One line per item, only rendered once a person asks to see it. */
+export function workDetailLines(work: WorkRow[], fronts: { id: string; name: string }[]): string[] {
+  const nameFor = (id: string | null) => (id ? fronts.find((f) => f.id === id)?.name ?? id : "pool");
+  return work
+    .filter((w) => w.state !== "done")
+    .map((w) => {
+      const owner = w.state === "offered" ? nameFor(w.offeredToId) : w.state === "taken" ? nameFor(w.takenById) : "pool";
+      // The owner column already says who holds it; this says whose work it
+      // is. Without it the panel shows a review under way and never that the
+      // front doing it is the front that wrote what it checks.
+      const self = isSelfReview(w, w.takenById) ? "  (self-review)" : "";
+      return `    ${owner}  ${w.state}  ${w.paths[0]} — ${w.title}${self}`;
+    });
+}
+
 /** Wrap on word boundaries, preserving the blank lines that shape a note. */
 function wrap(text: string, w: number): string[] {
   const out: string[] = [];
@@ -123,6 +188,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let fronts: Front[] = [];
   let pending: PendingRequest[] = [];
   let notes: Note[] = [];
+  let work: WorkRow[] = [];
   let mode = me.mode;
   let myName = me.name;
   const feed: FeedEvent[] = [];
@@ -134,6 +200,20 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   let selected = 0;
   let scroll = 0;
   let closing = false;
+  let workExpanded = false;
+
+  /**
+   * The last line of a newborn's output this panel has already shown. The
+   * output tail is not on the bus — it is journal-free, delivered to nobody
+   * but a panel — so it has its own cursor rather than riding `drain`'s.
+   */
+  let lastTail = 0;
+  /**
+   * Whether parley may start fronts, the ceiling it stops at, and how much of
+   * it is in use. §4.7: a human here has a voice and not a vote — except on
+   * spending, which is the one decision that is never a front's.
+   */
+  let births = { allowed: true, max: 6, live: 0 };
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
@@ -150,16 +230,22 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   }
 
   async function refresh(): Promise<void> {
-    const [whoR, reqR, notesR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR, tailR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
+      client.request({ op: "works" }),
+      client.request({ op: "output", after: lastTail }),
     ]);
     if (whoR.ok) {
-      const d = whoR as unknown as { mode: string; participants: Front[] };
+      const d = whoR as unknown as {
+        mode: string; participants: Front[];
+        births?: { allowed: boolean; max: number; live: number };
+      };
       mode = d.mode;
       fronts = d.participants.filter((p) => p.name !== myName);
+      if (d.births) births = d.births;
     }
     if (reqR.ok) pending = (reqR as unknown as { requests: PendingRequest[] }).requests;
     if (notesR.ok) {
@@ -167,6 +253,12 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       if (selected >= notes.length) selected = Math.max(0, notes.length - 1);
     }
     if (drainR.ok) pushFeed((drainR as unknown as { events: FeedEvent[] }).events);
+    if (worksR.ok) work = (worksR as unknown as { work: WorkRow[] }).work;
+    if (tailR.ok) {
+      const lines = (tailR as unknown as { lines: TailLine[] }).lines;
+      lastTail = tailCursor(lines, lastTail);
+      pushFeed(tailToFeed(lines));
+    }
     render();
   }
 
@@ -185,8 +277,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
   function renderBus(): void {
     const w = width();
     const h = height();
+    const spending = births.allowed
+      ? dim(`${births.live}/${births.max} fronts`)
+      : red(`births off ${G.dot} ${births.live}/${births.max}`);
     const lines = header(
-      `${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`,
+      `${spending} ${G.dot} ${fronts.length} front${fronts.length === 1 ? "" : "s"} ${G.dot} you are ${cyan(myName)}`,
     );
 
     if (fronts.length === 0) lines.push(dim("  nobody else on the bus yet"));
@@ -218,6 +313,16 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       }
     }
 
+    if (work.some((w) => w.state !== "done")) {
+      lines.push("");
+      const [head, summary] = workSummaryLines(work, fronts);
+      lines.push(yellow(head));
+      lines.push(summary);
+      if (workExpanded) {
+        for (const line of workDetailLines(work, fronts)) lines.push(dim(line));
+      }
+    }
+
     if (notes.length) {
       lines.push("");
       lines.push(dim(`  NOTES (${notes.length}) ${G.dot} ${bold("n")}${dim(" to browse and read them")}`));
@@ -245,8 +350,11 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
 
     lines.push(dim(G.h.repeat(w)));
     if (composer === "none") {
+      const workHint = work.some((w) => w.state !== "done")
+        ? ` ${G.dot} ${bold("w")}${dim(workExpanded ? " collapse work" : " expand work")}`
+        : "";
       lines.push(
-        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
+        dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")}${workHint} ${G.dot} ${bold("b")}${dim(births.allowed ? " stop new fronts" : " allow new fronts")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
       );
     } else {
       const label = composer === "name" ? dim("your name: ") : "";
@@ -322,6 +430,21 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
     renderBus();
   }
 
+  async function toggleBirths(): Promise<void> {
+    const wanted = !births.allowed;
+    const r = await client.request({ op: "summon", allow: wanted });
+    if (r.ok) {
+      const d = r as unknown as { birthsAllowed: boolean; maxFronts: number; live: number };
+      births = { allowed: d.birthsAllowed, max: d.maxFronts, live: d.live };
+      status = births.allowed
+        ? "parley may start fronts again"
+        : "parley will not start any more fronts — the pool stays open and the fronts here keep working";
+    } else {
+      status = `not changed: ${r.error.code}`;
+    }
+    render();
+  }
+
   async function submit(kind: Composer, text: string): Promise<void> {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -340,7 +463,9 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       return render();
     }
 
-    // Voice only. A human does not grant, deny or arbitrate from here.
+    // Voice only, from this composer specifically. `grant`, `deny` and the
+    // rest are separate `parley` commands, gated by ownership like any
+    // front's — this input just never sends anything but `say`.
     const directed = /^@(\S+)\s+([\s\S]+)$/.exec(trimmed);
     const r = await client.request(
       directed ? { op: "say", to: directed[1], text: directed[2] } : { op: "say", text: trimmed },
@@ -396,6 +521,10 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }
       if (ch === "m" || ch === "M") { composer = "name"; input = ""; status = ""; return true; }
       if (ch === "n" || ch === "N") { view = "notes"; selected = Math.max(0, notes.length - 1); return true; }
+      if (ch === "w" || ch === "W") { workExpanded = !workExpanded; return true; }
+      // The one control on this panel that acts rather than speaks, and the
+      // only one there should ever be: it is somebody's money.
+      if (ch === "b" || ch === "B") { void toggleBirths(); return true; }
       if (ch === "q" || ch === "Q") { shutdown(); return false; }
       return false;
     }

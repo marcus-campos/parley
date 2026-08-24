@@ -1,7 +1,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { DEFAULTS } from "../protocol/types";
 import { locateRepo } from "../repo/locate";
-import { resolveIdentity, wakeAddress } from "../cli/identity";
+import { joinFrame, resolveIdentity, wakeAddress } from "../cli/identity";
 import { relative, isAbsolute } from "node:path";
 import { rememberSession } from "../cli/session";
 import { isEnabledForRepo } from "./claude-code";
@@ -60,7 +60,7 @@ export async function runHook(event: string): Promise<void> {
   const name = input.hook_event_name ?? event;
 
   // Hard budget. Overrun means let go — the agent never waits for parley.
-  const budget = setTimeout(() => { emit({}); process.exit(0); }, DEFAULTS.HOOK_BUDGET_MS * 40);
+  const budget = setTimeout(() => { emit({}); process.exit(0); }, DEFAULTS.HOOK_BUDGET_MS);
 
   let repo;
   try { repo = locateRepo(input.cwd ?? process.cwd()); } catch { clearTimeout(budget); return emit({}); }
@@ -97,17 +97,13 @@ export async function runHook(event: string): Promise<void> {
   // The harness session id is what keeps this front the same front across
   // every tool call, and across the rename the agent is asked to do.
   const session = input.session_id ?? process.env.PARLEY_SESSION ?? "";
-  let joined = await client.request({
-    op: "join", name: identity.name, mission: identity.mission,
-    harness: "claude-code", cwd: repo.cwd, kind: "agent",
-    branch: identity.branch, wake: wakeAddress(), session,
+  const join = (name?: string) => joinFrame(identity, {
+    harness: "claude-code", cwd: repo.cwd, kind: "agent", wake: wakeAddress(), session,
+    ...(name ? { name } : {}),
   });
+  let joined = await client.request(join());
   if (!joined.ok && joined.error.code === "NAME_TAKEN" && "suggestion" in joined.error) {
-    joined = await client.request({
-      op: "join", name: String(joined.error.suggestion), mission: identity.mission,
-      harness: "claude-code", cwd: repo.cwd, kind: "agent",
-      branch: identity.branch, wake: wakeAddress(), session,
-    });
+    joined = await client.request(join(String(joined.error.suggestion)));
   }
   if (!joined.ok) { clearTimeout(budget); client.close(); return emit({}); }
 
@@ -252,10 +248,17 @@ export async function runHook(event: string): Promise<void> {
     const drained = await client.request({ op: "drain" });
     const events = drained.ok ? (drained as unknown as { events: never[] }).events : [];
     const inbox = formatEvents(events);
+    // Rides on the same drain the inbox came from — a second request for the
+    // pool would double the round trips this hook pays against
+    // `DEFAULTS.HOOK_BUDGET_MS`, which is the deadline the timer above is
+    // actually armed with. It said "30ms budget" — one of three surviving
+    // copies of a number this code has not enforced since the constant was
+    // corrected, in three different files.
+    const pool = drained.ok ? (drained as unknown as { pool?: string }).pool ?? "" : "";
 
     if (name !== "PreToolUse") {
       clearTimeout(budget);
-      return context(name, [inbox, territoryReminder()].filter(Boolean).join("\n\n"));
+      return context(name, [inbox, territoryReminder(), pool].filter(Boolean).join("\n\n"));
     }
 
     // PreToolUse: one hook, one call — drain the inbox and, when the tool is an
@@ -265,11 +268,11 @@ export async function runHook(event: string): Promise<void> {
     // attributed to the right front.
     if (!EDIT_TOOLS.has(input.tool_name ?? "")) {
       clearTimeout(budget);
-      return context(name, inbox);
+      return context(name, [inbox, pool].filter(Boolean).join("\n\n"));
     }
 
     const rawPath = String(input.tool_input?.file_path ?? input.tool_input?.notebook_path ?? "");
-    if (!rawPath) { clearTimeout(budget); return context(name, inbox); }
+    if (!rawPath) { clearTimeout(budget); return context(name, [inbox, pool].filter(Boolean).join("\n\n")); }
     const target = isAbsolute(rawPath) ? relative(repo.root, rawPath) : rawPath;
 
     const claimed = await client.request({ op: "claim", paths: [target], auto: true });
@@ -281,6 +284,8 @@ export async function runHook(event: string): Promise<void> {
       // context rare and precise instead of a running commentary.
       const settled = claimed as unknown as {
         notes?: { title: string; body: string; authorName: string; kind: string }[];
+        more_notes?: number;
+        more_decisions?: number;
         recent?: { byName: string; intent: string; at: string }[];
       };
 
@@ -288,6 +293,8 @@ export async function runHook(event: string): Promise<void> {
         const label = n.kind === "decision" ? "DECISION" : "note";
         return `  [${label}] ${n.title}${n.body ? `\n      ${n.body.replace(/\n+/g, " ")}` : ""} (${n.authorName})`;
       });
+      if (settled.more_decisions) known.push(`  ${settled.more_decisions} more decision(s) — parley notes --path ${target} --kind decision`);
+      if (settled.more_notes) known.push(`  ${settled.more_notes} more — parley notes --path ${target}`);
       const knowledge = known.length
         ? `parley: what other fronts have written down about ${target}:\n${known.join("\n")}`
         : "";
@@ -299,7 +306,7 @@ export async function runHook(event: string): Promise<void> {
         ? `parley: recently edited by someone else — read it before assuming what is in it:\n${touches.join("\n")}`
         : "";
 
-      return context(name, [inbox, knowledge, changed, territoryReminder()].filter(Boolean).join("\n\n"));
+      return context(name, [inbox, knowledge, changed, territoryReminder(), pool].filter(Boolean).join("\n\n"));
     }
 
     const conflicts = (claimed as unknown as {
@@ -319,7 +326,8 @@ export async function runHook(event: string): Promise<void> {
         },
       });
     }
-    return context(name, `${inbox ? `${inbox}\n\n` : ""}parley warning: ${reason} Consider \`parley ask ${target} --reason "..."\` or coordinating with \`parley say\`.`);
+    const warning = `parley warning: ${reason} Consider \`parley ask ${target} --reason "..."\` or coordinating with \`parley say\`.`;
+    return context(name, [inbox, warning, pool].filter(Boolean).join("\n\n"));
   } finally {
     client.close();
   }

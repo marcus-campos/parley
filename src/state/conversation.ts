@@ -3,6 +3,7 @@ import {
   actorOf, byName, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type Participant, type State,
 } from "./types";
+import { poolFooterFor } from "./work";
 
 export function say(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const me = actorOf(state, actorId);
@@ -76,7 +77,12 @@ export function drain(state: State, actorId: string | null, ctx: Ctx): Outcome {
   state.cursors[me.id] = state.seq;
   me.lastSeenMs = ctx.nowMs;
 
-  return { state, response: ok({ events }), broadcast: [] };
+  // The pool rides here rather than behind a second request: `drain` already
+  // sits on the hottest path in the system (every hook that reads the inbox,
+  // under the 1.2s deadline `runHook` enforces; every MCP tool response), so
+  // this is the one call that reaches both without doubling the round trips
+  // either channel pays for.
+  return { state, response: ok({ events, pool: poolFooterFor(state, me.id) }), broadcast: [] };
 }
 
 /**

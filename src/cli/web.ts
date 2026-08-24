@@ -2,9 +2,12 @@ import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { ParleyClient } from "../client/client";
+import { isSelfReview } from "../state/work";
+import type { WorkItem } from "../state/types";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
+import { tailCursor, tailToFeed, type TailLine } from "./panel-tail";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -12,16 +15,38 @@ import { dirname, join } from "node:path";
  * `parley watch --web` — the same panel in a browser, for following along on a
  * second screen while the terminal stays free.
  *
- * The page opens in watching posture: no message box, and no grant or deny
- * anywhere on it, ever — the fronts settle permission among themselves, and a
- * stalled request must not turn into a request for a person's attention.
- * Pressing `s` opens a composer, because a human does have a voice; it just is
- * not the thing the interface puts in front of you.
+ * The page opens in watching posture: no message box, and no grant-or-deny
+ * button anywhere on it, ever — the protocol lets a human answer for whatever
+ * territory is theirs, same as any front, but the page never puts a control
+ * on it. What it still will not do is turn a stalled request between two
+ * other fronts into a request for this person's attention; a dispute that is
+ * not theirs is for the fronts to settle among themselves. Pressing `s` opens
+ * a composer, because a human does have a voice; it just is not the thing
+ * the interface puts in front of you.
  *
  * Binds to 127.0.0.1 only and requires a token that is printed with the URL.
  * Localhost is not a security boundary on a shared machine: without the token,
  * any process — or any page you have open — could read the bus and speak on it.
  */
+
+/** A work item as the page reads it: the record, plus what it must not re-derive. */
+export type PanelWorkRow = WorkItem & { selfReview: boolean };
+
+/**
+ * The one thing the page is not allowed to work out for itself.
+ *
+ * `isSelfReview` is answered in exactly one place so that `parley take`, the
+ * take event, `parley works` and both panels can never disagree about it — and
+ * the web page is the surface that cannot import it, since it ships as one
+ * self-contained string with no bundler behind it. So the server answers it
+ * here and the page renders the answer. Recomputing it in the template is how
+ * the only surface capable of drifting drifts: a disclosure that says the
+ * exact opposite of every other surface, about the rule parley chose to state
+ * rather than enforce.
+ */
+export function panelWorkRows(work: WorkItem[]): PanelWorkRow[] {
+  return work.map((w) => ({ ...w, selfReview: isSelfReview(w, w.takenById) }));
+}
 
 export interface Snapshot {
   mode: string;
@@ -30,7 +55,10 @@ export interface Snapshot {
   fronts: unknown[];
   requests: unknown[];
   notes: unknown[];
+  work: unknown[];
   feed: unknown[];
+  /** Whether parley may start fronts, the ceiling, and how much is in use. */
+  births: { allowed: boolean; max: number; live: number };
 }
 
 /**
@@ -115,6 +143,8 @@ export async function runWebPanel(
 
   const token = randomBytes(16).toString("hex");
   const feed: unknown[] = [];
+  /** This panel's own cursor into the newborn output tail, which is not the bus. */
+  let lastTail = 0;
   let seeded = false;
   const subscribers = new Set<(chunk: string) => void>();
 
@@ -133,17 +163,31 @@ export async function runWebPanel(
         for (const e of (past as unknown as { events: unknown[] }).events) feed.push(e);
       }
     }
-    const [whoR, reqR, notesR, drainR] = await Promise.all([
+    const [whoR, reqR, notesR, drainR, worksR, tailR] = await Promise.all([
       client.request({ op: "who" }),
       client.request({ op: "requests" }),
       client.request({ op: "notes" }),
       client.request({ op: "drain" }),
+      client.request({ op: "works" }),
+      client.request({ op: "output", after: lastTail }),
     ]);
     if (drainR.ok) {
       for (const e of (drainR as unknown as { events: unknown[] }).events) feed.push(e);
-      while (feed.length > 500) feed.shift();
     }
-    const who = whoR.ok ? (whoR as unknown as { mode: string; participants: { name: string }[] }) : null;
+    if (tailR.ok) {
+      // A newborn's output is not on the bus and has its own cursor.
+      const lines = (tailR as unknown as { lines: TailLine[] }).lines;
+      lastTail = tailCursor(lines, lastTail);
+      for (const event of tailToFeed(lines)) feed.push(event);
+    }
+    while (feed.length > 500) feed.shift();
+    const who = whoR.ok
+      ? (whoR as unknown as {
+          mode: string;
+          participants: { id: string; name: string }[];
+          births?: { allowed: boolean; max: number; live: number };
+        })
+      : null;
     return {
       mode: who?.mode ?? me.mode,
       repo: repo.root,
@@ -151,7 +195,9 @@ export async function runWebPanel(
       fronts: (who?.participants ?? []).filter((p) => p.name !== myName),
       requests: reqR.ok ? (reqR as unknown as { requests: unknown[] }).requests : [],
       notes: notesR.ok ? (notesR as unknown as { notes: unknown[] }).notes : [],
+      work: worksR.ok ? panelWorkRows((worksR as unknown as { work: WorkItem[] }).work) : [],
       feed: feed.slice(-200),
+      births: who?.births ?? { allowed: true, max: 6, live: 0 },
     };
   }
 
@@ -219,8 +265,21 @@ export async function runWebPanel(
         });
       }
 
-      // The only write this server accepts. No grant, no deny, no mode: those
-      // are not a human's to make, so there is no route to make them through.
+      // Whether parley may start any more fronts. §4.7 — the one decision on
+      // this bus that is a person's and never a front's, because it spends
+      // their money. It is a route on this server for the same reason `grant`
+      // and `deny` are not: what belongs to the person is what the person's
+      // panel may send.
+      if (req.method === "POST" && url.pathname === "/births") {
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
+        const r = await client.request({ op: "summon", allow: body.allow !== false });
+        await broadcast();
+        return json(r);
+      }
+
+      // The only write to the *conversation* this server accepts. No grant, no
+      // deny, no mode: those are not a human's to make, so there is no route
+      // to make them through.
       if (req.method === "POST" && url.pathname === "/say") {
         const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
         const r = await client.request({ op: "say", text: String(body.text ?? ""), to: body.to ?? null });
