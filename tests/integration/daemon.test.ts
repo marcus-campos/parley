@@ -222,6 +222,12 @@ describe("a real daemon over a real socket", () => {
 
     expect(stderr).toContain("skipped 1 journal entry");
     expect(stderr).toContain("2 journal entry(ies) named a participant that no surviving entry joined");
+    // A deletion detector, and only that: it catches the correction being
+    // removed, never the message being wrong. The measured half above is what
+    // discriminates. It is here because the count alone is what misled, and a
+    // dependent loss is not always a participant — a skipped `claim` costs a
+    // later `release`, which nothing here can count.
+    expect(stderr).toContain("counts entries, not the state they would have written");
   });
 
   /**
