@@ -40,6 +40,21 @@ jobs:
       - name: Test
         run: bun test
 
+      # The command reference is generated from the CLI's own help text and
+      # dispatch. Regenerating it here means a command added without touching
+      # the docs either changes this file — and fails until it is committed —
+      # or fails the generator outright. One OS is enough: the output is the
+      # same everywhere.
+      - name: Command reference is current
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bun run docs:commands
+          git diff --exit-code docs/reference/commands.md
+
+      - name: Build the docs site
+        if: matrix.os == 'ubuntu-latest'
+        run: bun run docs:build
+
       - name: Smoke test the built binary
         shell: bash
         run: |

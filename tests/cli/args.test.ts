@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { flagString, parseArgs } from "../../src/cli/args";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { flagBool, flagString, parseArgs } from "../../src/cli/args";
 
 describe("parseArgs", () => {
   test("separates command, positionals and flags", () => {
@@ -32,6 +34,158 @@ describe("parseArgs", () => {
     const p = parseArgs(["note", "--title"]);
     expect(flagString(p.flags, "title", "fallback")).toBe("fallback");
     expect(flagString(p.flags, "missing", "fallback")).toBe("fallback");
+  });
+});
+
+describe("flagBool", () => {
+  // `--no-open` is the only flag in the help text whose name is a negation, so
+  // it is the one people write a value onto. parseArgs stores `--no-open=true`
+  // and `--no-open true` as the string `"true"`, and an `=== true` test read
+  // both as "not given": the browser opened on somebody who had just said not
+  // to, twice. A documented flag the parser drops on the floor is the failure
+  // the generator's own flag check exists to refuse.
+  const bool = (argv: string[], key = "no-open") => flagBool(parseArgs(argv).flags, key);
+
+  test("absent is false", () => {
+    expect(bool(["watch", "--web"])).toBe(false);
+  });
+
+  test("bare is true", () => {
+    expect(bool(["watch", "--no-open"])).toBe(true);
+    expect(bool(["watch", "--no-open", "--web"])).toBe(true);
+  });
+
+  test("a value written onto it is read as a value, not ignored", () => {
+    expect(bool(["watch", "--no-open=true"])).toBe(true);
+    expect(bool(["watch", "--no-open", "true"])).toBe(true);
+    expect(bool(["watch", "--no-open=false"])).toBe(false);
+    expect(bool(["watch", "--no-open", "false"])).toBe(false);
+  });
+
+  test("the other spellings of off are off too", () => {
+    for (const off of ["0", "no", "off", "FALSE", "Off"]) {
+      expect(bool(["watch", `--no-open=${off}`])).toBe(false);
+    }
+  });
+
+  test("anything else counts as meant, because silently ignoring it is worse", () => {
+    expect(bool(["watch", "--no-open=yes"])).toBe(true);
+    expect(bool(["watch", "--no-open=1"])).toBe(true);
+  });
+});
+
+/**
+ * Every boolean flag the CLI documents, read by one accessor.
+ *
+ * `--no-open` was fixed on its own last round, on the argument that it is the
+ * only flag whose name is a negation and therefore the only one people write a
+ * value onto. That argument does not survive contact with `--check=true` and
+ * `--json=true`, which are at least as natural, especially from a script — and
+ * `--check` was the worse instance by a long way: `parley update [--check]` is
+ * the first line of USAGE, and `parley update --check=true` fell straight past
+ * the dry run into a real replacement of the binary. With `--yes=true` also
+ * dropped, it did that without asking.
+ *
+ * The generator's fourth flag check cannot see any of this: it catches a flag
+ * that is documented and never read, and all ten of these were read. It is the
+ * layer below.
+ *
+ * WHAT THE TWO STRUCTURAL TESTS BELOW ARE. A lint on one file, bound to two
+ * identifier names — `parsed` and `p`, which are the idioms actually written
+ * in src/cli/main.ts. They are not a proof that the class cannot come back.
+ * Measured, not assumed; each of these passes both of them today:
+ *
+ *     const fl = parsed.flags;  if (fl.web)
+ *     const { flags } = parsed; if (flags.web)
+ *     const opts = parsed;      if (opts.flags.web)
+ *     parsed["flags"]!.web
+ *
+ * The yoda form `true === parsed.flags.web` is caught, by the bare-truthiness
+ * test rather than the one that looks like it should. Widening past two names
+ * means matching `.flags.` on any receiver, which starts matching protocol
+ * frames in src/state and stops being about this file at all. So: a lint that
+ * makes the wrong idiom inconvenient to reintroduce by copy-paste, which is
+ * how it would actually come back, and nothing stronger claimed.
+ */
+describe("the boolean flags of the CLI", () => {
+  const main = readFileSync(join(import.meta.dir, "..", "..", "src", "cli", "main.ts"), "utf8");
+  // Line comments quote the old idioms on purpose; the rule is about code.
+  const code = main.replace(/^\s*\/\/.*$/gm, "");
+
+  test("none is read with `=== true`, which drops `--flag=true` on the floor", () => {
+    const reads = [
+      ...code.matchAll(/\b(?:parsed|p)\.flags\.[A-Za-z][\w$]*\s*===\s*true/g),
+      ...code.matchAll(/\b(?:parsed|p)\.flags\[[^\]]*\]\s*===\s*true/g),
+    ].map((m) => m[0]);
+    expect(reads).toEqual([]);
+  });
+
+  test("none is read by bare truthiness either, which is the same defect mirrored", () => {
+    // `flags.x` is true for the string "false", so `--json=false` printed
+    // JSON. Harmless typed by hand, not harmless in `--json=$WANT_JSON`.
+    // A comparison against a string literal is a string flag and is fine.
+    const bare = [...code.matchAll(/\b(?:parsed|p)\.flags\.([A-Za-z][\w$]*)(\s*===\s*"[^"]*")?/g)]
+      .filter((m) => !m[2])
+      .map((m) => `--${m[1]}`);
+    expect(bare).toEqual([]);
+  });
+
+  test("`parley update --check=true` is a dry run, as the first line of USAGE says", () => {
+    const flags = parseArgs(["update", "--check=true", "--yes=true"]).flags;
+    // What the parser actually stores, which is the root of all of this.
+    expect(flags.check).toBe("true");
+    expect(flags.check === true).toBe(false);
+    expect(flagBool(flags, "check")).toBe(true);
+    expect(flagBool(flags, "yes")).toBe(true);
+  });
+
+  test("every documented boolean flag reads a written value the same way", () => {
+    for (const flag of ["check", "yes", "json", "global", "all", "auto", "fresh", "mine", "active", "web", "detach", "stop", "export", "import", "quiet", "human"]) {
+      expect(flagBool(parseArgs(["x"]).flags, flag)).toBe(false);
+      expect(flagBool(parseArgs(["x", `--${flag}`]).flags, flag)).toBe(true);
+      expect(flagBool(parseArgs(["x", `--${flag}=true`]).flags, flag)).toBe(true);
+      expect(flagBool(parseArgs(["x", `--${flag}=false`]).flags, flag)).toBe(false);
+    }
+  });
+
+  test("the two raw-argv survivors are only ever handed bare flags", () => {
+    // `__refresh-adapters` reads `argv.includes("--yes")` and
+    // `argv.includes("--json")` — the exact-match assumption `--detach=true`
+    // broke, still standing in two places. It is unreachable there: the branch
+    // runs before parseArgs, the command is hidden, and the only caller spawns
+    // it with bare flags. That is what makes it safe, so that is what is
+    // pinned; if the caller ever passes `--yes=$X`, this goes red.
+    const update = readFileSync(join(import.meta.dir, "..", "..", "src", "cli", "update.ts"), "utf8");
+    expect(update).toContain('["__refresh-adapters", ...(opts.assumeYes ? ["--yes"] : []), ...(opts.json ? ["--json"] : [])]');
+    expect(code).toContain('argv.includes("--yes")');
+  });
+
+  test("--workspace is a valued flag and is gated on presence, not on truth", () => {
+    // The one hybrid in main.ts, and the one place the conversion to `flagBool`
+    // could make a flag the person typed disappear. `--workspace` bare means
+    // "find the workspace file here"; with a value it names the file. Gated
+    // through `flagBool`, a value the accessor reads as off makes the flag
+    // vanish — and `off` is an ordinary filename:
+    expect(flagBool(parseArgs(["init", "--workspace", "off"]).flags, "workspace")).toBe(false);
+    expect(flagString(parseArgs(["init", "--workspace", "off"]).flags, "workspace")).toBe("off");
+    // …so `parley init --workspace off` would skip the workspace branch and
+    // fall through to a normal `runInit`, writing adapter files into the
+    // current repository. Before the conversion it entered the branch and
+    // failed loudly on a file it could not read, which is the right answer.
+    expect(code).toContain('parsed.command === "init" && "workspace" in parsed.flags');
+    expect(code).not.toMatch(/flagBool\(\s*(?:parsed|p)\.flags\s*,\s*"workspace"/);
+  });
+
+  test("--detach=true does not detach forever, because the child no longer keeps it", () => {
+    const argv = ["watch", "--web", "--detach=true"];
+    expect(flagBool(parseArgs(argv).flags, "detach")).toBe(true);
+    // The detached child is spawned with the parent's argv minus the flag. The
+    // old filter was `a !== "--detach"`, which leaves `--detach=true` in place:
+    // the child detaches too, and the one after it, and no generation ever
+    // reaches runWebPanel — so the panel never starts and the chain does not
+    // end. Bare `--detach` was always stripped, which is why nobody hit it.
+    expect(argv.filter((a) => a !== "--detach")).toContain("--detach=true");
+    expect(code).toContain('a !== "--detach" && !a.startsWith("--detach=")');
   });
 });
 

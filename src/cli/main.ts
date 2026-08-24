@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isSelfReview } from "../state/work";
 import type { WorkItem } from "../state/types";
-import { flagString, parseArgs, type Parsed } from "./args";
+import { flagBool, flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
 import { resolveIdentity, wakeAddress } from "./identity";
 
@@ -40,53 +40,91 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              --global installs the Claude Code hooks once for
                              every project — the only way every worktree is
                              covered, since .claude/ is usually gitignored.
-  parley uninit              remove what init wrote
+  parley uninit [--global]   remove what init wrote, --global included
   parley doctor              diagnose transport, repo identity and the WSL boundary
   parley status              is a daemon up, and what does it hold
   parley stop                shut the daemon down
 
   parley whoami              which front you are, and where
   parley join --as NAME [--mission "..."]
+                             announce yourself on the bus; the hooks already do
+                             this for you
   parley rename --as NAME [--mission "..."]
-  parley leave
-  parley who
+                             change the name and mission everyone else sees
+  parley leave               step off the bus, releasing every path you hold
+  parley who                 everyone here: name, mission, branch, idle time
+                             and what each one holds
 
   parley say [--to NAME] [--priority high] "text"
+                             tell everyone, or one front with --to
   parley question --to NAME "..." [--wait 60] [--ttl 600]
-  parley reply <id> "answer"
+                             ask when you need an answer back: they cannot go
+                             idle while it is open
+  parley reply <id> "answer" [--text "..."]
+                             answer a question somebody is blocked on
   parley ack <id> ["got it, doing X"]
+                             close the loop, so the front that answered knows
+                             it landed
   parley nudged <id>         record that you woke them, so parley stops asking
-  parley questions
-  parley drain
+  parley questions           what you owe an answer to, and what you are
+                             waiting on
+  parley drain               your unread messages, and only the unread ones
   parley history [--limit 200]
+                             re-read the backlog without moving your read
+                             cursor
 
   parley claim <paths...> [--intent "..."] [--auto]
+                             take files or globs; the answer carries the notes
+                             and the recent edits on them
   parley release [<paths...>] [--all]
+                             give them back — letting go is the answer to
+                             whoever was waiting
 
-  parley watch [--web] [--port N] [--detach] [--stop]
+  parley watch [--web] [--port N] [--detach] [--stop] [--no-open]
                              live panel: fronts, feed and pending requests.
                              Opens watching; press i (or s on the web) to speak.
                              --detach keeps the web panel up after you close the
-                             terminal; --stop shuts that one down. Each
-                             repository gets its own port, so panels for several
-                             projects run side by side.
+                             terminal; --stop shuts that one down; --no-open
+                             leaves your browser alone. Each repository gets its
+                             own port, so panels for several projects run side
+                             by side.
 
   parley ask <path> --reason "..." [--ttl 300]
-  parley requests [--all]
+                             ask the owner for a path that is theirs; silence
+                             until the ttl grants it, and says so by name
+  parley requests [--all]    permission requests waiting, with the clock on each
   parley grant <request> [--scope once|transfer]
+                             hand over a path you own
   parley deny <request> --reason "..."
+                             refuse, with a reason the requester sees
 
   parley note --title "..." [--body "..."] [--tags a,b] [--paths a,b]
-  parley decide --title "..." [--body "..."] [--paths a,b]
+                             write down what the code does not say about
+                             itself; --paths is what hands it to whoever edits
+                             those files next
+  parley decide --title "..." [--body "..."] [--tags a,b] [--paths a,b]
+                             record something binding: announced to everyone,
+                             and it stands until reversed
   parley reverse <id> [--reason "..."]
-  parley notes [--tag x] [--path p] [--kind decision] [--export] [--import]
-                             [--query "..." [--k N]]
+                             un-bind a decision, keeping it on the record
+  parley notes [--tag x] [--path p] [--kind decision] [--active] [--export]
+                             [--import] [--query "..." [--k N]]
+                             read them back; --active drops anything reversed,
+                             note or decision, --query ranks by relevance
 
   parley result <key> --status pass|fail [--summary "..."] [--paths a,b]
+                             record what a command produced, and the paths it
+                             depends on
   parley results [--fresh] [--key "..."] [--query "..." [--k N]]
+                             what is already known, and whether it still holds;
+                             --fresh hides anything a later edit invalidated
 
   parley mode [off|advisory|enforced]
+                             how strict territory is; it belongs to the
+                             repository, not to a session
   parley shape [bus|pool|plan]
+                             where work comes from; read it back with no
+                             argument
 
   parley brain               is semantic recall on, and with which model
   parley brain enable [<model>]
@@ -99,22 +137,30 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              read a superpowers plan and dispatch its first
                              wave onto the pool — parley shape plan first
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
+                             publish discovered work, one item per path,
+                             offered first to whoever already holds it
   parley works [--state open|offered|taken|done] [--mine]
-  parley take <id>
+                             what is in the pool: id, state, paths and title.
+                             The state is the only holder information it shows
+  parley take <id>           take an open item or an offer made to you; the
+                             answer carries the evidence already gathered
   parley drop <id> [--reason "..."]
+                             hand it back to the pool, free
   parley done <id> [--summary "..."]
+                             mark it finished
 
 Global flags: --json (machine output), --as NAME, --quiet
+              --human (you are a person watching, not an agent)
               --help, --version
 `;
 
 function out(parsed: Parsed, human: string, payload: unknown): void {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify(payload)}\n`);
-  else if (!parsed.flags.quiet) process.stdout.write(`${human}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify(payload)}\n`);
+  else if (!flagBool(parsed.flags, "quiet")) process.stdout.write(`${human}\n`);
 }
 
 function fail(parsed: Parsed, message: string, code = 1): never {
-  if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
+  if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, error: { message } })}\n`);
   else process.stderr.write(`parley: ${message}\n`);
   process.exit(code);
 }
@@ -137,7 +183,7 @@ async function withSession(
   } catch (e) {
     // parley broken must never stop the work: say so, exit clean for hooks.
     if (e instanceof ParleyUnreachable) {
-      if (parsed.flags.json) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
+      if (flagBool(parsed.flags, "json")) process.stdout.write(`${JSON.stringify({ ok: false, degraded: true, error: { message: e.message } })}\n`);
       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
       process.exit(0);
     }
@@ -151,7 +197,7 @@ async function withSession(
     mission: flagString(parsed.flags, "mission", identity.mission),
     harness: identity.harness,
     cwd: repo.cwd,
-    kind: parsed.flags.human ? "human" : "agent",
+    kind: flagBool(parsed.flags, "human") ? "human" : "agent",
     branch: identity.branch,
     wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
@@ -197,6 +243,13 @@ async function main(): Promise<void> {
       const found = locateRepo();
       here = { gitCommonDir: found.gitCommonDir, root: found.root };
     } catch { /* run from outside a repository is fine */ }
+    // Deliberately `argv.includes` and not `flagBool`, which is the one
+    // accessor everywhere else in this file. This branch runs before
+    // `parseArgs` and reads raw argv, and it is not a command a person types:
+    // src/cli/update.ts spawns it with bare `--yes` / `--json` and nothing
+    // else. So the exact-match assumption that `--detach=true` broke cannot be
+    // reached here — there is no spelling to get wrong. A reader converging on
+    // "one accessor" will find these two survivors; they are on purpose.
     return refreshAllAdapters({
       assumeYes: argv.includes("--yes"),
       json: argv.includes("--json"),
@@ -251,18 +304,28 @@ async function main(): Promise<void> {
 
   // `--help` and `--version` are consumed as the command name by the parser, so
   // they are matched here explicitly. Both must work outside a git repository.
-  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || parsed.flags.help) {
+  if (argv.length === 0 || ["help", "--help", "-h"].includes(parsed.command) || flagBool(parsed.flags, "help")) {
     process.stdout.write(USAGE);
     return;
   }
-  if (["version", "--version", "-v"].includes(parsed.command) || parsed.flags.version) {
+  if (["version", "--version", "-v"].includes(parsed.command) || flagBool(parsed.flags, "version")) {
     process.stdout.write(`parley ${VERSION} (protocol v${PROTOCOL_VERSION})\n`);
     return;
   }
 
   // Marking a workspace happens before repository lookup, because the whole
   // point is that the directory is not itself a repository.
-  if (parsed.command === "init" && parsed.flags.workspace) {
+  //
+  // Presence, not truth. `--workspace` is the one hybrid in this file: bare it
+  // means "find the workspace file here", with a value it names the file. Read
+  // through `flagBool`, `parley init --workspace off` — `off` being a
+  // perfectly ordinary filename — reads as *not given*, skips this branch and
+  // falls through to a normal `runInit` that writes adapter files into the
+  // current repository. Before, it entered here and failed loudly on a file it
+  // could not read, which is the right answer. A valued flag must never be
+  // routed through the boolean accessor; the value is read at `flagString`
+  // below.
+  if (parsed.command === "init" && "workspace" in parsed.flags) {
     const {
       findWorkspaceRoot, markAsWorkspace, membersOf, readWorkspaceFile, workspaceFilesIn,
     } = await import("../repo/workspace");
@@ -340,9 +403,9 @@ async function main(): Promise<void> {
       discoveryDir = found.discoveryDir;
     } catch { /* updating from anywhere is fine */ }
     return runUpdate({
-      checkOnly: parsed.flags.check === true,
-      assumeYes: parsed.flags.yes === true,
-      json: parsed.flags.json === true,
+      checkOnly: flagBool(parsed.flags, "check"),
+      assumeYes: flagBool(parsed.flags, "yes"),
+      json: flagBool(parsed.flags, "json"),
       gitCommonDir,
       repoRoot,
       discoveryDir,
@@ -363,14 +426,14 @@ async function main(): Promise<void> {
     case "init": {
       const { runInit } = await import("../adapters/install");
       return runInit(repo, {
-        assumeYes: parsed.flags.yes === true,
-        json: parsed.flags.json === true,
-        global: parsed.flags.global === true,
+        assumeYes: flagBool(parsed.flags, "yes"),
+        json: flagBool(parsed.flags, "json"),
+        global: flagBool(parsed.flags, "global"),
       });
     }
     case "uninit": {
       const { runUninit } = await import("../adapters/install");
-      return runUninit(repo, { json: parsed.flags.json === true, global: parsed.flags.global === true });
+      return runUninit(repo, { json: flagBool(parsed.flags, "json"), global: flagBool(parsed.flags, "global") });
     }
 
     case "buses": {
@@ -506,13 +569,13 @@ async function main(): Promise<void> {
       process.env.PARLEY_PANEL_NAME ||
       readPanelConfig(repo.gitCommonDir).name ||
       "PANEL";
-    if (parsed.flags.web) {
+    if (flagBool(parsed.flags, "web")) {
       const { clearRunningPanel, defaultPortFor, readRunningPanel, runWebPanel } = await import("./web");
       const explicitPort = flagString(parsed.flags, "port");
       const port = explicitPort ? Number(explicitPort) : defaultPortFor(repo.repoId);
       const running = readRunningPanel(repo.gitCommonDir);
 
-      if (parsed.flags.stop) {
+      if (flagBool(parsed.flags, "stop")) {
         if (!running) return out(parsed, "parley: no web panel running for this repository", { ok: true, stopped: false });
         try { process.kill(running.pid, "SIGTERM"); } catch { /* already gone */ }
         clearRunningPanel(repo.gitCommonDir);
@@ -526,9 +589,12 @@ async function main(): Promise<void> {
         return out(parsed, `parley: web panel already running on ${running.url}`, { ok: true, url: running.url, reused: true });
       }
 
-      if (parsed.flags.detach) {
+      if (flagBool(parsed.flags, "detach")) {
         const { spawn } = await import("node:child_process");
-        const args = process.argv.slice(1).filter((a) => a !== "--detach");
+        // Every spelling of the flag, not just the bare one. `--detach=true` left
+        // in the child's argv makes the child detach too, and the one after it:
+        // no generation ever reaches runWebPanel, so the panel never starts.
+        const args = process.argv.slice(1).filter((a) => a !== "--detach" && !a.startsWith("--detach="));
         const child = spawn(process.execPath, COMPILED_CLI ? args.slice(1) : args, {
           detached: true, stdio: "ignore", windowsHide: true,
         });
@@ -548,7 +614,12 @@ async function main(): Promise<void> {
         return fail(parsed, "started the web panel but it never came up");
       }
 
-      return runWebPanel(repo, panelName, port, parsed.flags.open !== false, explicitPort !== "");
+      // `--no-open` is the spelling the help text offers, and `flagBool` is
+      // what reads it — as it now reads every boolean flag here. The old
+      // `parsed.flags.open !== false` was true for every input, and
+      // `parsed.flags["no-open"] !== true` was still true for `--no-open=true`
+      // and `--no-open true`, which parseArgs stores as the string `"true"`.
+      return runWebPanel(repo, panelName, port, !flagBool(parsed.flags, "no-open"), explicitPort !== "");
     }
     return runWatch(repo, panelName);
   }
@@ -738,11 +809,11 @@ async function main(): Promise<void> {
 
       case "claim": {
         if (p.positional.length === 0) fail(p, "claim needs at least one path");
-        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: p.flags.auto === true });
+        const r = await send({ op: "claim", paths: p.positional, intent: flagString(p.flags, "intent"), auto: flagBool(p.flags, "auto") });
         if (!r.ok) {
           const conflicts = (r as unknown as { conflicts?: { path: string; owner: { name: string; mission: string }; since: string }[] }).conflicts ?? [];
           const detail = conflicts.map((c) => `  ${c.path} held by ${c.owner.name} (${c.owner.mission || "no mission"}) since ${c.since}`).join("\n");
-          if (p.flags.json) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
+          if (flagBool(p.flags, "json")) { process.stdout.write(`${JSON.stringify(r)}\n`); process.exit(1); }
           process.stderr.write(`parley: CONFLICT\n${detail}\nAsk for it:  parley ask ${conflicts[0]?.path ?? p.positional[0]} --reason "..."\n`);
           process.exit(1);
         }
@@ -751,7 +822,7 @@ async function main(): Promise<void> {
       }
 
       case "release": {
-        const r = await send({ op: "release", paths: p.positional, all: p.flags.all === true });
+        const r = await send({ op: "release", paths: p.positional, all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const released = (r as unknown as { released: string[] }).released;
         return out(p, released.length ? `parley: released ${released.join(", ")}` : "parley: nothing to release", r);
@@ -774,7 +845,7 @@ async function main(): Promise<void> {
       }
 
       case "requests": {
-        const r = await send({ op: "requests", all: p.flags.all === true });
+        const r = await send({ op: "requests", all: flagBool(p.flags, "all") });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
         if (list.length === 0) return out(p, "parley: nothing pending", r);
@@ -838,7 +909,7 @@ async function main(): Promise<void> {
         const r = await send({
           op: "results",
           key: flagString(p.flags, "key") || undefined,
-          fresh: p.flags.fresh === true,
+          fresh: flagBool(p.flags, "fresh"),
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
           // A query is the front asking for recall — spec §5.1's activation
@@ -859,7 +930,7 @@ async function main(): Promise<void> {
       }
 
       case "notes": {
-        if (p.flags.import) {
+        if (flagBool(p.flags, "import")) {
           const fromDisk = readExportedNotes(repo.root);
           if (fromDisk.length === 0) {
             return out(p, "parley: nothing to import — no .parley/notes.md in this repository", { ok: true, imported: 0 });
@@ -889,7 +960,7 @@ async function main(): Promise<void> {
           tag: flagString(p.flags, "tag") || undefined,
           path: flagString(p.flags, "path") || undefined,
           kind: flagString(p.flags, "kind") || undefined,
-          active: p.flags.active === true,
+          active: flagBool(p.flags, "active"),
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
           // Same reasoning as `results` above: asking is what should surface
@@ -898,7 +969,7 @@ async function main(): Promise<void> {
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
-        if (p.flags.export) {
+        if (flagBool(p.flags, "export")) {
           const written = exportNotes(notes, repo.root);
           return out(p, `parley: wrote ${written} (${notes.length} note(s)) — commit it when you are ready`, { ok: true, path: written });
         }
@@ -1079,7 +1150,7 @@ async function main(): Promise<void> {
         const r = await send({
           op: "works",
           state: ["open", "offered", "taken", "done"].includes(stateFilter) ? stateFilter : undefined,
-          mine: p.flags.mine === true,
+          mine: flagBool(p.flags, "mine"),
         });
         if (!r.ok) fail(p, describeError(r));
         const work = (r as unknown as { work: WorkItem[] }).work;

@@ -1,0 +1,71 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**", "README.md", ".github/workflows/docs.yml", "package.json"]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one halfway: a cancelled deploy can
+# leave the published site on a half-written commit.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # lastUpdated in the theme reads git history; a shallow clone shows
+          # every page as changed today.
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+
+      # Configure before building, not after: `configure-pages` is what resolves
+      # the base path a build would need. It is harmless today because base is
+      # hardcoded to "/parley/" in docs/.vitepress/config.ts, and it is a silent
+      # breakage the day that becomes dynamic.
+      - uses: actions/configure-pages@v5
+
+      # This workflow triggers on push to main on its own, with no dependency on
+      # ci.yml, and ci.yml is the only other place the reference is regenerated.
+      # Without this step a commit that reached main by any route which skipped
+      # CI deploys a stale Commands page — on the branch whose whole premise is
+      # that the reference cannot go stale. A broken *build* already refuses to
+      # deploy; a merely out-of-date page did not.
+      - name: Command reference is current
+        run: |
+          bun run docs:commands
+          git diff --exit-code docs/reference/commands.md
+
+      # Same argument, one level down. The pages cite `src/…:NN` roughly a
+      # hundred times and the only thing standing between a source edit and a
+      # site that sends readers to the wrong line is this test. It is cheap,
+      # and this workflow publishes without waiting for ci.yml.
+      - name: Citations point at the code they claim
+        run: bun test tests/docs/citations.test.ts
+
+      - run: bun run docs:build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/.vitepress/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

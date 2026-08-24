@@ -858,7 +858,7 @@ Nothing survives a restart `connected`. Presence must be re-proven.
 | Failure | Required behaviour |
 |---|---|
 | Daemon died | The next command spawns one; it rebuilds from the journal. Sessions re-attach on their next hook. |
-| Daemon unreachable | `enforced` **degrades to `advisory`** with a loud warning. |
+| Daemon unreachable | `enforced` **degrades to `advisory`**. A command you ran says so on stderr; the pre-edit hook answers with nothing and lets the edit through unclaimed. |
 | Hook slow | Hard time budget. Overrun means let go; the agent never waits for parley. |
 | Journal truncated | Drop the bad line, warn, boot. |
 | Journal entry throws on replay | Skip that entry, name it on stderr, boot with the rest. |

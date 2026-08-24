@@ -69,7 +69,7 @@ committed.
 | `src/daemon/server.ts` | The socket server, presence, push, idle shutdown. | yes |
 | `src/client/client.ts` | Connect, auto-spawn, request/response, push handling. | yes |
 | `src/cli/*.ts` | Argument parsing, identity derivation, command dispatch, output. | yes |
-| `src/cli/watch.ts` | The terminal panel. Read-only unless `--speak`. | yes |
+| `src/cli/watch.ts` | The terminal panel. Read-only until you press `i`. | yes |
 | `src/cli/web.ts` + `web-page.ts` | The browser panel: local HTTP + SSE, token-gated, one self-contained page. | yes |
 | `src/adapters/*.ts` | The Claude Code hook runner and `parley init`. | yes |
 

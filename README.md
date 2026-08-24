@@ -1,5 +1,8 @@
 # parley
 
+**Documentation:** <https://marcus-campos.github.io/parley/>
+
+<!-- #region what-it-is -->
 **A coordination bus for concurrent agent sessions working in one repository.**
 
 Running four or five agent sessions on the same repository works. The problem is
@@ -25,6 +28,7 @@ parley: CONFLICT
   src/backend/finance/services.py held by FINANCEIRO (month-end closing) since 2026-08-18T13:50:00Z
 Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 ```
+<!-- #endregion what-it-is -->
 
 - **Protocol reference:** [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - **How it works inside:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
@@ -33,6 +37,7 @@ Ask for it:  parley ask src/backend/finance/services.py --reason "..."
 
 ## Where this fits, and where it does not
 
+<!-- #region where-it-fits -->
 The most common reaction to parley is that the problem is already solved — by
 worktrees, by subagents, by an orchestrator. Each of those is good, each of them
 is something to keep using, and none of them covers the case parley was built
@@ -112,23 +117,30 @@ from nothing.
 So: for one big decomposable task, master and subagents. For several independent,
 long-running fronts, the cost of keeping everything under a single master stops
 being obvious — and that is where this earns its place.
+<!-- #endregion where-it-fits -->
 
 ---
 
 ## The one rule
 
+<!-- #region one-rule -->
 **A broken parley must never stop the work.**
 
-If the daemon is unreachable, `enforced` degrades to `advisory` and says so
-loudly. If a hook overruns its time budget, it lets go. If the journal has a torn
-line from a `kill -9`, the daemon drops that line and boots anyway. A
-coordination system that freezes the machine when it fails is worse than no
-system at all.
+If the daemon is unreachable, nothing blocks. A command you ran yourself prints
+the reason on stderr and exits clean. The pre-edit hook is quieter than that: it
+answers with nothing at all, and your edit lands unclaimed with parley never
+mentioned in the transcript — silence, not a warning, which is the honest
+description of what you get. If a hook overruns its time budget, it lets go. If
+the journal has a torn line from a `kill -9`, the daemon drops that line and
+boots anyway. A coordination system that freezes the machine when it fails is
+worse than no system at all.
+<!-- #endregion one-rule -->
 
 ---
 
 ## Install
 
+<!-- #region install -->
 ### One line — macOS, Linux, WSL
 
 ```bash
@@ -322,6 +334,7 @@ what that implies.
 **After upgrading by hand**, run `parley stop` once — a daemon that is already
 running keeps serving the version it started with. `parley update` does this for
 you.
+<!-- #endregion install -->
 
 ---
 
@@ -736,10 +749,11 @@ through the environment.
 |---|---|
 | `parley say "text"` | Tell everyone. `--to NAME` for one front, `--priority high` to mark it urgent. Use it to announce intent **before** a broad change. |
 | `parley drain` | Your unread messages. Incremental by construction: it only ever returns what you have not seen, so polling costs nothing when nothing happened. |
-| `parley history [--limit N] [--since SEQ]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
+| `parley history [--limit N]` | Re-read the backlog **without** moving your read cursor. The escape hatch for a front that lost its own context. |
 | `parley question --to NAME "..."` | Ask, when you need an answer rather than to be heard. The other session **cannot go idle** while your question is open. `--wait N` blocks for the reply. |
 | `parley reply <id> "answer"` | Answer a question put to you. Someone is blocked on it — and "I cannot answer" unblocks them just as well. |
 | `parley ack <id> ["got it"]` | Close the loop. Without it the front that answered has no idea the answer landed. |
+| `parley nudged <id>` | Record that you rang somebody's doorbell. Until you do, **every attempt to finish a turn tells you again**, naming the question and the address — while the front you are waiting on is still unreachable, has been quiet for two minutes, and has an address to ring at all. |
 | `parley questions` | What you owe an answer to, and what you are waiting on. |
 
 ### Territory
@@ -861,7 +875,7 @@ parley watch --web
 ```
 
 ```
-parley: web panel on http://127.0.0.1:7717/?t=a619ab2e16136a21d6098859087f9d89
+parley: web panel on http://127.0.0.1:7834/?t=a619ab2e16136a21d6098859087f9d89
 parley: bound to 127.0.0.1 only; the token is required. Ctrl+C to stop.
 parley: the page opens in watching mode; press s there to say something.
 ```
@@ -881,11 +895,16 @@ closing.
   `parley watch --web --stop` shuts it down.
 - **Each repository gets its own port**, derived from its id, so panels for
   several projects run side by side — and it is the *same* port every time, so
-  the URL in your browser history keeps working. If it happens to be taken,
-  parley moves to a free one and tells you.
+  the URL in your browser history keeps working. It is
+  `7717 + (hash of the repository id % 200)`, so anything from 7717 to 7916 is
+  normal and **the port in the sample above is one repository's, not yours** —
+  read yours off the line parley prints. The id hashes the canonical path to
+  the repository's git directory, not its name, so the same project cloned into
+  two directories derives two different ports and no page can tell you which is
+  which. If the port is taken, parley moves to a free one and tells you.
 - `--port N` pins it. If that one is busy, you get told which, rather than a
   raw bind error.
-- `--open=false` skips launching the browser.
+- `--no-open` skips launching the browser.
 - **It binds to `127.0.0.1` only and requires the token in the URL.** Localhost is
   not a security boundary on a shared machine: without a token, any process — or
   any page you have open — could read your bus and speak on it.
@@ -1086,6 +1105,7 @@ it — *"FINANCEIRO dropped holding 3 claim(s)"* — and they are released after
 
 ## Compatibility matrix
 
+<!-- #region compatibility -->
 No makeup. Only Claude Code has a pre-tool gate, so it is the only harness where
 everything works without the agent remembering anything.
 
@@ -1109,6 +1129,7 @@ honest and different: the agent joins on its first tool call, territory is
 manual, and **every MCP tool response carries the pending inbox in its footer**
 — which turns "never reads its messages" into "reads them whenever it touches
 parley at all".
+<!-- #endregion compatibility -->
 
 ---
 
