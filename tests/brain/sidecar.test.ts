@@ -20,7 +20,7 @@ const MODEL: EncoderBrainModel = {
  * commands, in which order, with which working directory, and what happens
  * when one of them fails.
  */
-function recorder(fail?: string, warmStdout = '{"ready":true,"dims":768}\n') {
+function recorder(fail?: string, warmStdout = '{"ready":true,"dims":768}\n', warmStderr = "") {
   const calls: { args: string[]; cwd?: string }[] = [];
   const runner = ((cmd: string, args: string[], opts: { cwd?: string } = {}) => {
     calls.push({ args: [cmd, ...args], cwd: opts.cwd });
@@ -31,7 +31,7 @@ function recorder(fail?: string, warmStdout = '{"ready":true,"dims":768}\n') {
     return {
       status: failed ? 1 : 0,
       stdout: isWarm && !failed ? warmStdout : "",
-      stderr: "", output: [], pid: 1, signal: null,
+      stderr: isWarm ? warmStderr : "", output: [], pid: 1, signal: null,
     };
   }) as unknown as typeof import("node:child_process").spawnSync;
   return { calls, runner };
@@ -105,7 +105,72 @@ describe("installing the encoder runtime", () => {
     const { runner } = recorder(undefined, "");
     const outcome = installEncoder(modelsDir, MODEL, runner);
     expect(outcome.ok).toBe(false);
-    expect(outcome.error).toContain("could not produce an embedding");
+    // With no output at all there is nothing to diagnose, and saying so is the
+    // honest answer — see the failure-explanation suite below for the cases
+    // where the runtime does say something.
+    expect(outcome.error).toContain("said nothing about why");
+  });
+
+  describe("what a failed install says happened", () => {
+    /**
+     * The first version answered "downloaded but could not produce an
+     * embedding" for everything, and that sentence is false for the failure
+     * people actually hit. A laptop behind a TLS-inspecting proxy — a company
+     * network, a VPN, endpoint security — never downloads a byte, and being
+     * told the download worked sends somebody to investigate the model when
+     * the answer is a certificate.
+     */
+    test("a TLS-intercepting proxy is named as such, and nothing is claimed to have downloaded", () => {
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", [
+        'Unable to fetch file metadata for "https://huggingface.co/onnx-community/embeddinggemma-300m-ONNX/',
+        'resolve/main/tokenizer_config.json": TypeError: self signed certificate in certificate chain',
+      ].join(""));
+      const outcome = installEncoder(modelsDir, MODEL, runner);
+
+      expect(outcome.ok).toBe(false);
+      expect(outcome.error).toContain("intercepted");
+      expect(outcome.error).toContain("Nothing was downloaded");
+      // And it has to carry the way out, not just the diagnosis.
+      expect(outcome.error).toContain("NODE_EXTRA_CA_CERTS");
+      // The false claim must not come back.
+      expect(outcome.error).not.toContain("downloaded but could not");
+    });
+
+    test("an unreachable host is not confused with a bad model", () => {
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", "getaddrinfo ENOTFOUND huggingface.co");
+      const outcome = installEncoder(modelsDir, MODEL, runner);
+      expect(outcome.error).toContain("could not be reached");
+      // "nothing was downloaded" is fine; claiming a download succeeded is not.
+      expect(outcome.error).not.toContain("downloaded but");
+    });
+
+    test("a full disk says so", () => {
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", "Error: ENOSPC: no space left on device, write");
+      expect(installEncoder(modelsDir, MODEL, runner).error).toContain("disk filled up");
+    });
+
+    test("a model that really did download and really did fail keeps the original sentence", () => {
+      // The one case the old message was right about, kept.
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", "onnxruntime: Exception during initialization");
+      expect(installEncoder(modelsDir, MODEL, runner).error).toContain("could not produce an embedding");
+    });
+
+    test("a failure nobody anticipated shows what the runtime actually said", () => {
+      // Better a raw line than a confident summary of the wrong thing.
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", "\n  something nobody has seen before\nmore detail\n");
+      expect(installEncoder(modelsDir, MODEL, runner).error).toContain("something nobody has seen before");
+    });
+
+    test("silence is reported as silence rather than as a diagnosis", () => {
+      const modelsDir = mkdtempSync(join(tmpdir(), "parley-inst-"));
+      const { runner } = recorder(undefined, "", "");
+      expect(installEncoder(modelsDir, MODEL, runner).error).toContain("said nothing about why");
+    });
   });
 
   test("the weights are kept outside node_modules, where a reinstall cannot lose them", () => {

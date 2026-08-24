@@ -176,10 +176,117 @@ export function specFor(dir: string, model: EncoderBrainModel): EncoderSpec & { 
   return { ...model.spec, cacheDir: join(dir, "weights") };
 }
 
+/**
+ * Turn the worker's dying words into a sentence with a next step in it.
+ *
+ * The first version of this said "downloaded but could not produce an
+ * embedding" for every failure, which was not merely unhelpful — it was false
+ * for the most common one. A machine behind a TLS-inspecting proxy never
+ * downloads anything, and telling somebody the download succeeded sends them
+ * looking at the model instead of at their network.
+ *
+ * Everything here is matched on text the runtime prints, so it is best-effort
+ * by nature: an unrecognised failure falls through to the raw output, which is
+ * still better than a confident wrong summary.
+ */
+function explainWarmFailure(model: EncoderBrainModel, stderr: string, status: number | null): string {
+  const text = stderr.toLowerCase();
+
+  // A corporate proxy, a company laptop's antivirus, or anything else that
+  // re-signs TLS. The download never starts, so the model is not the problem.
+  if (
+    text.includes("self signed certificate") ||
+    text.includes("self-signed certificate") ||
+    text.includes("unable to verify the first certificate") ||
+    text.includes("unable to get local issuer certificate")
+  ) {
+    return (
+      `the connection to huggingface.co is being intercepted by something that re-signs TLS — ` +
+      `a corporate proxy, a VPN, or endpoint security. Nothing was downloaded, and the model is fine.\n` +
+      `  Point the runtime at the certificate your organisation uses, then run this again:\n` +
+      `    export NODE_EXTRA_CA_CERTS=/path/to/your-org-ca.pem\n` +
+      `  On macOS the bundle can usually be exported from Keychain Access; your IT team will know ` +
+      `the path. If you cannot get one, the lexical floor keeps working and needs no network at all.`
+    );
+  }
+
+  if (text.includes("enotfound") || text.includes("econnrefused") || text.includes("getaddrinfo")) {
+    return `huggingface.co could not be reached — nothing was downloaded. Check the network and run this again.`;
+  }
+
+  if (text.includes("etimedout") || text.includes("timed out") || status === null) {
+    return `the download from huggingface.co timed out. It resumes from nothing, so run this again on a better connection.`;
+  }
+
+  if (text.includes("enospc") || text.includes("no space left")) {
+    return `the disk filled up partway through. Free some space and run this again.`;
+  }
+
+  // Reached the model and still failed: this is the case the original message
+  // described, and the only one it was ever true for.
+  if (text.includes("ready") || text.includes("onnxruntime") || text.includes("inference")) {
+    return `${model.name} downloaded but could not produce an embedding on this machine`;
+  }
+
+  const firstLine = stderr.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
+  return firstLine
+    ? `${model.name} could not be prepared: ${firstLine}`
+    : `${model.name} could not be prepared, and the runtime said nothing about why`;
+}
+
 export interface InstallOutcome {
   ok: boolean;
   /** Plain enough to print at somebody's terminal. */
   error?: string;
+}
+
+/**
+ * Install bun, with the person's explicit consent, using its official
+ * installer.
+ *
+ * This is the one place parley runs somebody else's code on somebody else's
+ * machine, so it is narrow on purpose: it only ever runs the published
+ * installer from bun.sh over HTTPS, it is only reachable from an interactive
+ * prompt a person answered, and it never runs as a side effect of anything.
+ *
+ * Windows is excluded rather than attempted. The shell installer does not run
+ * there, and guessing at PowerShell execution policy on somebody's work laptop
+ * is not a guess worth making — the message names the one command instead.
+ */
+export function installBun(runner: typeof spawnSync = spawnSync): InstallOutcome {
+  if (process.platform === "win32") {
+    return {
+      ok: false,
+      error: 'on Windows, install it with:  powershell -c "irm bun.sh/install.ps1 | iex"',
+    };
+  }
+  try {
+    // `set -o pipefail` so a failed download does not feed an empty script to
+    // the shell and report success — the exact shape of the bug this file
+    // already fixed once for the model warm-up.
+    const done = runner("sh", ["-c", "set -o pipefail; curl -fsSL https://bun.sh/install | bash"], {
+      stdio: "inherit",
+      timeout: 10 * 60 * 1000,
+    });
+    if (done.status !== 0) {
+      return { ok: false, error: "the bun installer did not finish — see its output above" };
+    }
+    // Installed, but this process's PATH was fixed when it started. Look where
+    // the installer puts it, so the very next step works instead of asking for
+    // a new shell.
+    if (!bunAvailable(runner)) {
+      const home = process.env.HOME ?? "";
+      const installed = join(home, ".bun", "bin");
+      if (existsSync(join(installed, "bun"))) {
+        process.env.PATH = `${installed}:${process.env.PATH ?? ""}`;
+      }
+    }
+    return bunAvailable(runner)
+      ? { ok: true }
+      : { ok: false, error: "bun installed but is not on PATH yet — open a new shell and try again" };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
 }
 
 /** Is `bun` on PATH? The sidecar is TypeScript on disk; something must run it. */
@@ -229,11 +336,15 @@ export function installEncoder(
     // inexplicably not answering yet.
     const warmed = runner("bun", [join(dir, "serve.ts"), JSON.stringify(specFor(dir, model))], {
       cwd: dir,
-      stdio: ["pipe", "pipe", "inherit"],
+      // stderr is captured rather than inherited, because it is the only place
+      // the real cause appears and the person needs it explained, not echoed.
+      // It is printed below either way — nothing is swallowed.
+      stdio: ["pipe", "pipe", "pipe"],
       // Empty stdin: the worker says ready, then sees the stream end and exits.
       input: "",
       timeout: 30 * 60 * 1000,
-      maxBuffer: 1024 * 1024,
+      maxBuffer: 8 * 1024 * 1024,
+      encoding: "utf8",
     });
 
     // The exit code is not the check, and trusting it was a real defect: the
@@ -241,8 +352,10 @@ export function installEncoder(
     // so a broken model reported a successful install and the person was told
     // the brain was on. What proves the install is the worker saying `ready`
     // with a width — it can only do that after a forward pass has run.
+    const noise = String(warmed.stderr ?? "");
     if (warmed.status !== 0 || !String(warmed.stdout ?? "").includes(`"ready":true`)) {
-      return { ok: false, error: `${model.name} downloaded but could not produce an embedding` };
+      if (noise.trim()) process.stderr.write(`${noise.trimEnd()}\n`);
+      return { ok: false, error: explainWarmFailure(model, noise, warmed.status) };
     }
     return { ok: true };
   } catch (e) {

@@ -168,6 +168,98 @@ export async function runInit(repo: RepoInfo, opts: InstallOptions): Promise<voi
   } else if (written.length) {
     process.stdout.write(`\nparley: wrote ${written.join(", ")}.\n`);
   }
+
+  await offerTheBrain(opts);
+}
+
+/**
+ * Offer semantic recall at the end of `init`, because that is the moment
+ * somebody is set up and has not yet been let down by search.
+ *
+ * The brain is off by default and stays that way unless a person says
+ * otherwise here. Three things gate this, and each one is the difference
+ * between an offer and an ambush:
+ *
+ *   - an interactive terminal, so there is somebody to answer;
+ *   - not an agent session, because spending disk and money is not a front's
+ *     decision (the same check `brain enable` makes, from the environment
+ *     rather than from who anybody claims to be);
+ *   - **not** `--yes`. That flag means "do not ask me about the files you
+ *     write", and reading it as "download 209 MB" would be taking a much
+ *     larger permission than it granted.
+ */
+async function offerTheBrain(opts: InstallOptions): Promise<void> {
+  if (opts.json || opts.assumeYes || !process.stdin.isTTY) return;
+
+  const harness =
+    process.env.CLAUDE_CODE_SESSION_ID?.trim() ||
+    process.env.CODEX_SESSION_ID?.trim() ||
+    process.env.CURSOR_TRACE_ID?.trim();
+  if (harness) return;
+
+  const { BENCHMARK_SIZE, findModel, isEncoder, LEXICAL_FLOOR_SCORE, RECOMMENDED } =
+    await import("../brain/registry");
+  const model = findModel(RECOMMENDED);
+  if (!model) return;
+
+  const { brainIsOn } = await import("./brain-status");
+  if (await brainIsOn()) return;
+
+  const mb = Math.round(model.bytes / (1024 * 1024));
+  process.stdout.write(
+    `\nSemantic recall is off in this repository.\n` +
+      `The recommended model answers ${model.score} of ${BENCHMARK_SIZE} questions where\n` +
+      `keyword search alone answers ${LEXICAL_FLOOR_SCORE}. It runs on this machine — ${mb} MB,\n` +
+      `no network afterwards, and nothing leaves the repository.\n\n`,
+  );
+  if (!(await confirm("  Turn it on?"))) {
+    process.stdout.write(`  Left off. Turn it on any time with:  parley brain enable ${RECOMMENDED}\n`);
+    return;
+  }
+
+  const { bunAvailable, installBun, installEncoder } = await import("../brain/sidecar");
+  if (isEncoder(model) && !bunAvailable()) {
+    process.stdout.write(
+      `\n  ${model.name} runs as a local process, and bun is what runs it.\n` +
+        `  It is not installed here.\n\n`,
+    );
+    if (!(await confirm("  Install it from https://bun.sh/install?"))) {
+      process.stdout.write(
+        `  Left off. Install bun yourself and run:  parley brain enable ${RECOMMENDED}\n`,
+      );
+      return;
+    }
+    const bun = installBun();
+    if (!bun.ok) {
+      process.stdout.write(`\nparley: ${bun.error}\n  Then run:  parley brain enable ${RECOMMENDED}\n`);
+      return;
+    }
+  }
+
+  process.stdout.write(`\nparley: downloading ${model.name} (~${mb} MB)...\n`);
+  if (isEncoder(model)) {
+    const installed = installEncoder(undefined, model);
+    if (!installed.ok) {
+      // The install path already explains the cause it recognised; repeating
+      // it here would be the second copy of a sentence that has to stay true.
+      process.stdout.write(`\nparley: ${installed.error ?? "the install did not finish"}\n`);
+      return;
+    }
+  } else {
+    const { ensureModel } = await import("../brain/download");
+    if (!(await ensureModel(model))) {
+      process.stdout.write("\nparley: download or checksum verification failed — the brain stays off\n");
+      return;
+    }
+  }
+
+  const { enableBrain } = await import("./brain-status");
+  const enabled = await enableBrain(model.name);
+  process.stdout.write(
+    enabled
+      ? `\nparley: brain enabled — ${model.name}\n`
+      : `\nparley: ${model.name} is ready. Turn it on with:  parley brain enable ${model.name}\n`,
+  );
 }
 
 export async function runUninit(repo: RepoInfo, opts: { json: boolean; global?: boolean }): Promise<void> {

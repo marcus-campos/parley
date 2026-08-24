@@ -389,6 +389,34 @@ future session. Commit it when it makes sense; parley never commits for you.
 \`parley notes --import\` reads that file back onto the bus, which is what a
 fresh clone needs.
 
+## Ask the corpus a question instead of reading it
+
+\`parley notes\` gives you every note. That is the wrong tool once there are more
+than a handful, and it spends your context on notes about things you are not
+doing. Ask instead:
+
+\`\`\`
+parley notes --query "why does the deploy time out at the edge" --k 3
+parley results --query "flaky checkout test" --k 3
+\`\`\`
+
+You get the few that matter, ranked, and **nothing at all when nothing is close
+enough** — silence here means the corpus does not know, not that ranking gave
+up. Do not read that as a reason to fall back to dumping everything.
+
+Two channels answer this. Keyword matching always runs and is very good at the
+thing it is good at, so **query with the exact identifier when you have one**:
+\`HOOK_BUDGET_MS\` finds the note about \`HOOK_BUDGET_MS\`. When the person turned
+on semantic recall, a local model answers alongside it, and then a question
+phrased in your own words finds a note that shares no vocabulary with it — a
+Portuguese note about *o menu lateral* for an English question about *hidden
+sidebar*.
+
+Whether that model is on is not your call and never will be — it spends
+somebody's disk on somebody's machine. \`parley brain\` says whether it is on.
+If it is off, ask the question anyway: keyword matching answers, and it is the
+same command either way.
+
 ## If you lose your context
 
 Your inbox is incremental: \`parley drain\` only ever gives you what you have not
