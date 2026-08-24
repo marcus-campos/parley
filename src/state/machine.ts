@@ -64,7 +64,7 @@ export function apply(
     case "notes": return listNotes(state, frame, ctx);
     case "reverse": return reverse(state, actorId, frame, ctx);
     case "result": return recordResult(state, actorId, frame, ctx);
-    case "results": return listResults(state, frame);
+    case "results": return listResults(state, frame, ctx);
     case "question": return askFront(state, actorId, frame, ctx);
     case "reply": return replyToQuestion(state, actorId, frame, ctx);
     case "questions": return listQuestions(state, actorId, frame, ctx);
@@ -79,7 +79,7 @@ export function apply(
     case "take": return takeWork(state, actorId, frame, ctx);
     case "drop": return dropWork(state, actorId, frame, ctx);
     case "done": return finishWork(state, actorId, frame, ctx);
-    case "brain": return brain(state, actorId, frame);
+    case "brain": return brain(state, actorId, frame, ctx);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
@@ -141,10 +141,21 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
  * money is the one decision that is never a front's to make, so the check
  * has to live here, on the opposite kind, rather than anywhere ownership-based.
  */
-function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
+function brain(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   const acting = frame.enable !== undefined || frame.disable !== undefined;
   if (!acting) {
-    return { state, response: ok({ active: state.brain.active, model: state.brain.model }), broadcast: [] };
+    // `may_enable` lets a caller (the CLI) find out whether it is even worth
+    // attempting a download before spending one byte on it — the daemon
+    // already knows `me.kind` for free. This is a courtesy for callers that
+    // choose to probe first; it is not the gate. A client that skips the
+    // probe and sends `enable` directly is still refused below, by `me.kind
+    // !== "human"`, exactly as before.
+    const me = actorOf(state, actorId);
+    return {
+      state,
+      response: ok({ active: state.brain.active, model: state.brain.model, may_enable: me?.kind === "human" }),
+      broadcast: [],
+    };
   }
 
   const me = actorOf(state, actorId);
@@ -160,13 +171,15 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
     };
   }
 
+  const before = { active: state.brain.active, model: state.brain.model };
+
   if (frame.disable === true) {
     state.brain.active = false;
     state.brain.model = null;
     // A fresh "off" period earns its own one-time panel nudge, same as the
     // period that started at first boot.
     state.brain.askedAtMs = null;
-    return { state, response: ok({ active: false, model: null }), broadcast: [] };
+    return { state, response: ok({ active: false, model: null }), broadcast: brainChangeBroadcast(state, ctx, before) };
   }
 
   const name = String(frame.enable ?? "");
@@ -177,7 +190,25 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
   state.brain.active = true;
   state.brain.model = model.name;
   state.brain.askedAtMs = null;
-  return { state, response: ok({ active: true, model: model.name }), broadcast: [] };
+  return { state, response: ok({ active: true, model: model.name }), broadcast: brainChangeBroadcast(state, ctx, before) };
+}
+
+/**
+ * `setMode` and `setShape` announce a changed bus-wide setting once, and
+ * only when it actually changed — this is the same shape, deferred at Task 5
+ * because nothing conditioned behaviour on `brain.active` yet. This task is
+ * what changes that, so other fronts need to learn the brain came on (or
+ * off) without polling `brain` for it.
+ */
+function brainChangeBroadcast(
+  state: State, ctx: Ctx, before: { active: boolean; model: string | null },
+): ConvEvent[] {
+  const after = state.brain;
+  if (before.active === after.active && before.model === after.model) return [];
+  const text = after.active
+    ? `brain enabled: ${after.model} (semantic recall now backs every front on this bus)`
+    : `brain disabled (was ${before.model}) — back to the lexical floor for every front on this bus`;
+  return [pushEvent(state, ctx, { kind: "system", from: null, to: null, priority: "high", text })];
 }
 
 function status(state: State, ctx: Ctx): Outcome {

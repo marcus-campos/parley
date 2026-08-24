@@ -6,8 +6,13 @@ import { Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick } from "../state/machine";
-import type { ConvEvent, State } from "../state/types";
+import type { ConvEvent, Outcome, State } from "../state/types";
 import { indexFromState, type LexicalIndex } from "../brain/lexical";
+import { debias, embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
+import { calibrate, type Calibration } from "../brain/calibrate";
+import { loadVectors, saveVectors } from "../brain/vectors";
+import { findModel } from "../brain/registry";
+import { modelPath } from "../brain/download";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
@@ -29,6 +34,13 @@ export interface DaemonOptions {
   /** Injected in tests so a whole lifetime runs in milliseconds. */
   now?: () => number;
   onListening?: (endpoint: Endpoint) => void;
+  /**
+   * Where model files live. Defaults (via `modelPath`, `download.ts`) to the
+   * real machine-local models directory so every production caller is
+   * unchanged; tests inject a throwaway directory instead, the same
+   * discipline `download.ts` already keeps for `ensureModel`.
+   */
+  modelsDir?: string;
 }
 
 export class DaemonAlreadyRunning extends Error {
@@ -84,6 +96,23 @@ export class ParleyDaemon {
    * ever sees data.
    */
   private readonly index: LexicalIndex;
+  /**
+   * The optional layer above the lexical floor. `null` whenever the brain is
+   * off, or its model is missing, corrupt, or not in the registry — every
+   * one of those degrades silently to the floor rather than erroring, so
+   * this field being `null` is never itself a failure state.
+   */
+  private brain: { model: StaticModel; calibration: Calibration; vectors: VectorIndex } | null = null;
+  /**
+   * Whether the bus has already been told, for the *current* activation
+   * attempt, that this daemon cannot actually load what `state.brain`
+   * records as active. Reset at the top of every `loadBrain()` call — enable,
+   * disable, or a fresh boot — so a new attempt always earns its own
+   * one-time notice rather than inheriting silence from the last one. Never
+   * persisted: it is a fact about this process's ability to load a file
+   * right now, not a change to the bus's shared state.
+   */
+  private brainLoadNudged = false;
 
   constructor(private readonly opts: DaemonOptions) {
     this.now = opts.now ?? (() => Date.now());
@@ -94,7 +123,165 @@ export class ParleyDaemon {
     // journal, and the index is a read-side structure with nothing of its own
     // to lose — rebuilding it here is the same story as restoring state.
     this.index = indexFromState(this.state);
+    this.loadBrain();
     this.lastActivityMs = this.now();
+  }
+
+  /**
+   * Reflects `state.brain` into a loaded model plus its vector index, or
+   * clears both. Called on boot (replaying whatever the journal already
+   * decided) and again every time a `brain` frame is accepted, so enabling
+   * takes effect immediately rather than after a restart.
+   *
+   * Vectors persist beside the journal (`vectors.ts`) so a restart does not
+   * re-embed the whole corpus; when nothing is on disk yet — first
+   * activation — every note and result already in `state` is embedded once,
+   * right here, so there is no window where old knowledge is invisible to
+   * semantic recall.
+   *
+   * Every failure mode — unknown registry name, missing file, corrupt JSON,
+   * a disk error while backfilling — degrades to `this.brain = null`, never
+   * a throw. A broken model must never stop the daemon, only turn off the
+   * extra signal it was offering.
+   */
+  private loadBrain(): void {
+    this.brain = null;
+    this.brainLoadNudged = false;
+    if (!this.state.brain.active || !this.state.brain.model) return;
+    try {
+      const model = findModel(this.state.brain.model);
+      if (!model) return;
+      const staticModel = loadStaticModel(modelPath(model, this.opts.modelsDir));
+      if (!staticModel) return;
+
+      // No calibration, no brain. A model that cannot say what unrelated text
+      // scores like on its own table has not earned the right to say what
+      // related text scores like, and inventing a boundary for it would be
+      // the exact mistake the two previous floors made. Degrading here is the
+      // same honest degrade as a missing file: `reconcileBrainAnnouncement`
+      // and `maybeNudgeBrainLoadFailure` already tell the bus about it.
+      const calibration = calibrate(staticModel);
+      if (!calibration) {
+        process.stderr.write(
+          `parley: ${model.name} could not be calibrated (its vocabulary is too small to measure a ` +
+            `relevance floor against) — the lexical floor is answering instead\n`,
+        );
+        return;
+      }
+
+      const dir = dirname(this.opts.journalPath);
+      let vectors = loadVectors(dir, staticModel.dims, calibration.floor);
+      if (!vectors) {
+        vectors = new VectorIndex(staticModel.dims, calibration.floor);
+        for (const note of this.state.notes) {
+          if (note.reversedBy !== null) continue;
+          vectors.add(
+            note.id,
+            this.vectorFor(staticModel, calibration, [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" ")),
+            note.kind,
+          );
+        }
+        for (const result of Object.values(this.state.results)) {
+          vectors.add(
+            result.key,
+            this.vectorFor(staticModel, calibration, [result.key, result.summary, result.paths.join(" ")].join(" ")),
+            "result",
+          );
+        }
+        saveVectors(dir, vectors);
+      }
+      this.brain = { model: staticModel, calibration, vectors };
+    } catch (e) {
+      process.stderr.write(`parley: brain load failed, falling back to the lexical floor: ${(e as Error).message}\n`);
+    }
+  }
+
+  /**
+   * The one place text becomes a comparable vector: pool it, then take the
+   * table's own centre of mass back out (`debias`, embed.ts). Everything
+   * stored in the index and everything searched against it goes through here,
+   * so a document and a query are never compared in two different spaces.
+   */
+  private vectorFor(model: StaticModel, calibration: Calibration, text: string): Float32Array {
+    return debias(embed(model, text), calibration.mean);
+  }
+
+  /** Persists the vector index beside the journal; a failure here never surfaces as a write failure. */
+  private saveBrainVectors(): void {
+    if (!this.brain) return;
+    try {
+      saveVectors(dirname(this.opts.journalPath), this.brain.vectors);
+    } catch (e) {
+      process.stderr.write(`parley: could not persist vectors: ${(e as Error).message}\n`);
+    }
+  }
+
+  /**
+   * Corrects an already-computed `brain` outcome — response and broadcast —
+   * before either one is sent, so what the caller and the bus are told
+   * matches what `loadBrain` (called just before this, in `handle`) actually
+   * managed. `state.brain.active` is the person's decision and stands
+   * regardless; this only ever downgrades the *announcement* of it, never
+   * the decision itself.
+   *
+   * Nothing to correct when the two already agree: truly on (`active` and
+   * loaded), or truly off (`!active`, and `loadBrain` already cleared
+   * `this.brain` for that same reason). Only the mismatch — recorded active,
+   * not actually loaded — needs a correction.
+   */
+  private reconcileBrainAnnouncement(outcome: Outcome): void {
+    if (!this.state.brain.active || this.brain) return;
+    const response = outcome.response as unknown as Record<string, unknown>;
+    response.loaded = false;
+    response.note = `${this.state.brain.model} could not be loaded by this daemon — the lexical floor is answering instead`;
+    for (const event of outcome.broadcast) {
+      event.text = `${this.state.brain.model} was recorded as enabled, but this daemon could not load it — ` +
+        `the lexical floor is answering for every front on this bus until that changes`;
+    }
+    // Only actually correcting the bus-wide broadcast counts as having told
+    // anyone besides the direct caller; an empty broadcast (the state did
+    // not change — e.g. re-enabling an already-active model that has since
+    // stopped loading) leaves the ambient nudge armed to catch it instead.
+    if (outcome.broadcast.length > 0) this.brainLoadNudged = true;
+  }
+
+  /**
+   * The other half of the same finding: a mismatch discovered with no live
+   * `brain` frame to correct — a fresh boot replaying a journal whose model
+   * file has since gone missing or corrupt, or a disk error during a later
+   * backfill. Checked cheaply on every request; the moment there is at least
+   * one other connected, joined front to tell, it is told once and latches
+   * (`brainLoadNudged`) until the next `loadBrain()` attempt.
+   */
+  private maybeNudgeBrainLoadFailure(): void {
+    if (this.brainLoadNudged || !this.state.brain.active || this.brain) return;
+    const sent = this.notifyAllConnected(
+      `brain is recorded as enabled (${this.state.brain.model}), but this daemon could not load it — ` +
+        `the lexical floor is answering until that changes`,
+    );
+    if (sent) this.brainLoadNudged = true;
+  }
+
+  /**
+   * A daemon-local admin notice, not a bus event: it is never added to
+   * `state.events` and never touches `state.seq` or `state.cursors`, since it
+   * is a fact about *this* process's ability to load a file, not a change to
+   * the replayable, journaled conversation every front shares. A different
+   * daemon (after the file reappears, or a fresh restart) may succeed where
+   * this one didn't, and history should not remember this as a bus event.
+   */
+  private notifyAllConnected(text: string): boolean {
+    let sent = false;
+    const event = {
+      seq: this.state.seq, at: new Date(this.now()).toISOString(),
+      kind: "system" as const, from: null, to: null, priority: "high" as const, text,
+    };
+    for (const conn of this.conns) {
+      if (!conn.authed || !conn.participantId) continue;
+      this.send(conn, { v: PROTOCOL_VERSION, op: "push", events: [event] });
+      sent = true;
+    }
+    return sent;
   }
 
   /**
@@ -231,6 +418,14 @@ export class ParleyDaemon {
 
     const ctx = makeCtx(this.now(), this.counter);
 
+    // Cheap on every request; only ever does anything the first time there is
+    // someone connected to tell about a `state.brain.active` this particular
+    // daemon process cannot honor (a fresh boot replaying a journal whose
+    // model has since gone missing or corrupt — the silent branches the
+    // review named). Latches via `brainLoadNudged` once it actually reaches
+    // someone.
+    this.maybeNudgeBrainLoadFailure();
+
     // Expire before deciding: a claim held by a front that died two minutes ago
     // must not win a conflict against the front asking right now.
     const expired = tick(this.state, ctx, {});
@@ -261,8 +456,17 @@ export class ParleyDaemon {
         // already scores and sorts every candidate before slicing — the
         // kind filter below only changes where the slice happens.
         const wantsNote = frame.op === "notes";
-        const hits = this.index
-          .search(frame.q, this.index.size)
+        const lexicalHits = this.index.search(frame.q, this.index.size);
+        // Strictly additive: when the brain is off, missing, or corrupt,
+        // `vectorHits` is empty and `fuse` degrades to exactly the lexical
+        // ranking — the same floor this daemon has always answered from.
+        const vectorHits = this.brain
+          ? this.brain.vectors.search(
+              this.vectorFor(this.brain.model, this.brain.calibration, frame.q),
+              this.brain.vectors.size,
+            )
+          : [];
+        const hits = fuse(lexicalHits, vectorHits, this.index.size + vectorHits.length)
           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
       } catch (e) {
@@ -273,6 +477,20 @@ export class ParleyDaemon {
     }
 
     const outcome = apply(this.state, conn.participantId, toApply, ctx);
+
+    // A person just changed `state.brain` — enabled, disabled, or switched
+    // models. Reloading here, rather than waiting for a restart, is what
+    // makes that decision take effect immediately: enabling backfills every
+    // note already in state (see `loadBrain`), and disabling drops the
+    // vector index from memory right away. Done *before* the response and
+    // broadcast below are sent — never after — so both can be corrected by
+    // `reconcileBrainAnnouncement` if what actually loaded does not match
+    // what was just recorded, instead of the bus being told a success that
+    // this same function already knows, one line later, was not real.
+    if (frame.op === "brain" && outcome.response.ok) {
+      this.loadBrain();
+      this.reconcileBrainAnnouncement(outcome);
+    }
 
     if (frame.op === "join" && outcome.response.ok) {
       conn.participantId = (outcome.response as unknown as { id: string }).id;
@@ -304,6 +522,11 @@ export class ParleyDaemon {
    * daemon has to enforce the same rule itself instead of waiting for a
    * restart; `result` adds or replaces one keyed by its `key`. Nothing else
    * touches the corpus.
+   *
+   * The vector twin rides along on the same three ops, whenever the brain is
+   * actually loaded — embedding is cheap (microseconds, no forward pass), and
+   * keeping it here rather than a second pass over `state` later is what
+   * lets a restart skip re-embedding entirely (`vectors.ts`).
    */
   private maintainIndex(op: string, response: Record<string, unknown>): void {
     try {
@@ -311,19 +534,32 @@ export class ParleyDaemon {
         const id = typeof response.id === "string" ? response.id : null;
         const entry = id ? this.state.notes.find((n) => n.id === id) : undefined;
         if (entry) {
-          this.index.add(
-            entry.id, entry.kind,
-            [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" "),
-          );
+          const text = [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" ");
+          this.index.add(entry.id, entry.kind, text);
+          if (this.brain) {
+            this.brain.vectors.add(entry.id, this.vectorFor(this.brain.model, this.brain.calibration, text), entry.kind);
+            this.saveBrainVectors();
+          }
         }
       } else if (op === "reverse") {
         const id = typeof response.id === "string" ? response.id : null;
-        if (id) this.index.remove(id);
+        if (id) {
+          this.index.remove(id);
+          if (this.brain) {
+            this.brain.vectors.remove(id);
+            this.saveBrainVectors();
+          }
+        }
       } else if (op === "result") {
         const key = typeof response.key === "string" ? response.key : null;
         const entry = key ? this.state.results[key] : undefined;
         if (entry) {
-          this.index.add(entry.key, "result", [entry.key, entry.summary, entry.paths.join(" ")].join(" "));
+          const text = [entry.key, entry.summary, entry.paths.join(" ")].join(" ");
+          this.index.add(entry.key, "result", text);
+          if (this.brain) {
+            this.brain.vectors.add(entry.key, this.vectorFor(this.brain.model, this.brain.calibration, text), "result");
+            this.saveBrainVectors();
+          }
         }
       }
     } catch (e) {

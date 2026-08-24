@@ -9,6 +9,9 @@ import { canonicalizeRepoPath, detectEnv, repoId } from "../repo/canonical";
 import { NotARepository, locateRepo, type RepoInfo } from "../repo/locate";
 import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
+import { ensureModel } from "../brain/download";
+import { isLoadable } from "../brain/embed";
+import { findModel, MODELS } from "../brain/registry";
 import { join } from "node:path";
 import { flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
@@ -80,6 +83,13 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
 
   parley mode [off|advisory|enforced]
   parley shape [bus|pool|plan]
+
+  parley brain               is semantic recall on, and with which model
+  parley brain enable [<model>]
+                             human-only. With no model named, lists the
+                             registry — name, languages, size — so you can
+                             weigh it before anything downloads.
+  parley brain disable
 
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
   parley works [--state open|offered|taken|done] [--mine]
@@ -824,6 +834,10 @@ async function main(): Promise<void> {
           fresh: p.flags.fresh === true,
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // A query is the front asking for recall — spec §5.1's activation
+          // flow only fires on this flag, so an actual `--query` call is what
+          // has to set it, not just the daemon's own optional field existing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const list = (r as unknown as {
@@ -871,6 +885,9 @@ async function main(): Promise<void> {
           active: p.flags.active === true,
           q: query,
           k: query ? Number(flagString(p.flags, "k", "5")) : undefined,
+          // Same reasoning as `results` above: asking is what should surface
+          // the brain's existence to the panel, once — never a bare listing.
+          semantic: query ? true : undefined,
         });
         if (!r.ok) fail(p, describeError(r));
         const notes = (r as unknown as { notes: Parameters<typeof exportNotes>[0] }).notes;
@@ -904,6 +921,98 @@ async function main(): Promise<void> {
         const r = await send(wanted ? { op: "shape", shape: wanted } : { op: "shape" });
         if (!r.ok) fail(p, describeError(r));
         return out(p, `parley: shape ${(r as unknown as { shape: string }).shape}`, r);
+      }
+
+      case "brain": {
+        const sub = p.positional[0];
+
+        if (sub === "disable") {
+          const r = await send({ op: "brain", disable: true });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, "parley: brain disabled", r);
+        }
+
+        if (sub === "enable") {
+          // Probe before spending a single byte: the daemon already knows
+          // whether this participant may enable it (`me.kind`), so ask
+          // first rather than downloading ~100MB and only then finding out
+          // the answer was always going to be no. This probe is a courtesy,
+          // not the gate — `enable` below still refuses an agent on its own
+          // even if some other client skipped straight to it.
+          const probe = await send({ op: "brain" });
+          if (!probe.ok) fail(p, describeError(probe));
+          const mayEnable = (probe as unknown as { may_enable: boolean }).may_enable;
+          if (!mayEnable) {
+            fail(
+              p,
+              "brain enable/disable is the person's call, not a front's — it is somebody's disk and " +
+                "somebody's money. Ask the human on this bus to run it (with --human).",
+            );
+          }
+
+          const name = p.positional[1];
+          if (!name) {
+            // A menu offering a choice that cannot work is worse than a
+            // shorter menu — so every row says plainly whether this build
+            // can even load it, not just its size and languages.
+            const rows = MODELS.map((m) => {
+              const size = `~${Math.round(m.bytes / (1024 * 1024))} MB`;
+              const notice = isLoadable(m) ? "" : `  — not loadable in this build (needs the ${m.tokenizer} tokenizer)`;
+              return `  ${m.name}${notice}\n        ${m.languages} — ${size}`;
+            });
+            return out(
+              p,
+              `parley: no model named. Available:\n${rows.join("\n")}\n\n` +
+                `Choose one: parley brain enable <name>`,
+              {
+                ok: true,
+                models: MODELS.map((m) => ({
+                  name: m.name, languages: m.languages, bytes: m.bytes, loadable: isLoadable(m),
+                })),
+              },
+            );
+          }
+
+          const model = findModel(name);
+          if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
+
+          // Refuse before a single byte moves — the same suspicion Task 6
+          // already applies to the download itself, aimed here at whether
+          // this build could ever load the result. The registry knows about
+          // `xlmr` models; this build's loader (`src/brain/embed.ts`) only
+          // understands `wordlevel`. Downloading first and finding that out
+          // after would spend somebody's disk and time on an outcome that
+          // was already certain.
+          if (!isLoadable(model)) {
+            fail(
+              p,
+              `${model.name} needs the ${model.tokenizer} tokenizer, which this build does not carry — only ` +
+                `wordlevel loads today. That is a limitation of this build, not a bad download or a broken ` +
+                `model; it stays listed because the model is real. Run "parley brain enable" to see which ` +
+                `entries are loadable.`,
+            );
+          }
+
+          // The size is shown before anything is downloaded, unconditionally
+          // — even under --json, since this goes to stderr and never
+          // touches the JSON on stdout. A person agreeing to spend ~100MB of
+          // their own disk should see the number first, since that is the
+          // entire reason this is theirs to decide.
+          process.stderr.write(
+            `parley: downloading ${model.name} (~${Math.round(model.bytes / (1024 * 1024))} MB)...\n`,
+          );
+          const path = await ensureModel(model);
+          if (!path) fail(p, "download or checksum verification failed — the brain stays off");
+
+          const r = await send({ op: "brain", enable: model.name });
+          if (!r.ok) fail(p, describeError(r));
+          return out(p, `parley: brain enabled — ${model.name}`, r);
+        }
+
+        const r = await send({ op: "brain" });
+        if (!r.ok) fail(p, describeError(r));
+        const d = r as unknown as { active: boolean; model: string | null };
+        return out(p, d.active ? `parley: brain is on — ${d.model}` : "parley: brain is off", r);
       }
 
       case "work": {

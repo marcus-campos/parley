@@ -53,6 +53,34 @@ export function note(state: State, actorId: string | null, frame: Record<string,
   return { state, response: ok({ id: entry.id, kind: entry.kind }), broadcast };
 }
 
+/**
+ * A front asking for `semantic` recall cannot be blocked on a prompt it has no
+ * way to answer — a model choice and a ~100MB download are the person's call
+ * (see `brain` in machine.ts) — so the request is answered from the lexical
+ * floor unconditionally. What it earns instead is one notice, and only one:
+ * `askedAtMs` is the same once-only bookkeeping the permission and question
+ * nudges elsewhere in `src/state/` already use, so a front that keeps asking
+ * cannot turn this into noise.
+ *
+ * The once is bus-wide, not per-front, and deliberately so: it announces that
+ * *somebody* wants semantic recall, which is a fact about the bus and needs
+ * saying once, not once per front that happens to ask.
+ *
+ * Shared with `listResults` rather than duplicated there. `notes --query` and
+ * `results --query` are the same request against two corpora — the daemon even
+ * resolves them through the same ranking — so which of the two a front happens
+ * to reach for should not decide whether the person ever hears about the
+ * brain.
+ */
+export function brainNudge(state: State, frame: Record<string, unknown>, ctx: Ctx): ConvEvent[] {
+  if (frame.semantic !== true || state.brain.active || state.brain.askedAtMs !== null) return [];
+  state.brain.askedAtMs = ctx.nowMs;
+  return [pushEvent(state, ctx, {
+    kind: "system", from: null, to: null, priority: "high",
+    text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
+  })];
+}
+
 export function listNotes(state: State, frame: Record<string, unknown>, ctx: Ctx): Outcome {
   let notes = state.notes;
   if (typeof frame.tag === "string" && frame.tag) {
@@ -75,21 +103,7 @@ export function listNotes(state: State, frame: Record<string, unknown>, ctx: Ctx
   // daemon in front) has nothing to rank by, so `q` itself is never read here;
   // the honest degrade is the unranked list, not an attempt to search.
 
-  // A front asking for `semantic` recall cannot be blocked on a prompt it has
-  // no way to answer — a model choice and a ~100MB download are the person's
-  // call (see `brain` in machine.ts), so the request is answered from the
-  // floor unconditionally. What it earns instead is one nudge to the panel,
-  // never a repeat: `askedAtMs` is the same once-only bookkeeping as the
-  // permission and question nudges elsewhere in src/state/, so a front that
-  // keeps asking cannot turn this into noise.
-  const broadcast: ConvEvent[] = [];
-  if (frame.semantic === true && !state.brain.active && state.brain.askedAtMs === null) {
-    state.brain.askedAtMs = ctx.nowMs;
-    broadcast.push(pushEvent(state, ctx, {
-      kind: "system", from: null, to: null, priority: "high",
-      text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
-    }));
-  }
+  const broadcast = brainNudge(state, frame, ctx);
 
   if (Array.isArray(frame.ids)) {
     const byId = new Map(notes.map((n) => [n.id, n]));

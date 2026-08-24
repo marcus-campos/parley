@@ -285,6 +285,7 @@ export async function runHook(event: string): Promise<void> {
       const settled = claimed as unknown as {
         notes?: { title: string; body: string; authorName: string; kind: string }[];
         more_notes?: number;
+        more_decisions?: number;
         recent?: { byName: string; intent: string; at: string }[];
       };
 
@@ -292,6 +293,7 @@ export async function runHook(event: string): Promise<void> {
         const label = n.kind === "decision" ? "DECISION" : "note";
         return `  [${label}] ${n.title}${n.body ? `\n      ${n.body.replace(/\n+/g, " ")}` : ""} (${n.authorName})`;
       });
+      if (settled.more_decisions) known.push(`  ${settled.more_decisions} more decision(s) — parley notes --path ${target} --kind decision`);
       if (settled.more_notes) known.push(`  ${settled.more_notes} more — parley notes --path ${target}`);
       const knowledge = known.length
         ? `parley: what other fronts have written down about ${target}:\n${known.join("\n")}`
