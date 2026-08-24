@@ -159,23 +159,24 @@
 |   if (state.mode === "off") {
 |     return { state, response: ok({ mode: "off", state: "granted", reason: "territory disabled" }), broadcast: [] };
 |   }
-@ docs/concepts/presence.md src/state/participants.ts c4f77b8624f3
-| export function who(state: State, ctx: Ctx): Outcome {
+@ docs/concepts/presence.md src/state/participants.ts 37b8596d275a
+| export function who(state: State, ctx: Ctx, maxFronts = 6): Outcome {
+|   const live = liveParticipants(state);
 |   return {
 |     state,
 |     response: ok({
 |       mode: state.mode,
-|       participants: liveParticipants(state).map((p) => publicParticipant(p, state, ctx)),
-|     }),
-|     broadcast: [],
-|   };
-| }
-@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
+|       participants: live.map((p) => publicParticipant(p, state, ctx)),
+|       // Carried here rather than in `status` because this is the op a panel
+|       // already asks on every refresh, and a switch a person can throw has to
+|       // show what it is switching: whether parley may start fronts at all, the
+@ docs/concepts/presence.md src/state/machine.ts 6f30267a179c
 |   // 1. A front that stopped renewing its lease is gone. A live connection is
 |   //    proof on its own, so only lease-only participants can expire this way.
 |   for (const p of liveParticipants(state)) {
 |     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
 |     p.gone = true;
+|     died.push(p.id);
 |     const held = state.claims.filter((c) => c.ownerId === p.id);
 |     for (const c of held) c.orphanedAtMs = ctx.nowMs;
 |     broadcast.push(
@@ -186,7 +187,6 @@
 |           : `${p.name} dropped`,
 |       }),
 |     );
-|   }
 @ docs/concepts/presence.md src/protocol/types.ts 8b91b904cde7
 |   LEASE_TTL_MS: 5 * 60_000,
 @ docs/concepts/presence.md src/state/types.ts c8ccdbfef7ec
@@ -241,40 +241,40 @@
 |     }
 |     this.lastActivityMs = this.now();
 |   }
-@ docs/concepts/presence.md src/state/machine.ts 051c4d79b695
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
-|       }),
-|     );
-|   }
-@ docs/concepts/presence.md src/daemon/server.ts 403994b95104
+@ docs/concepts/presence.md src/state/machine.ts 48589f399696
+|
+| /**
+|  * What `tick` asks the daemon to do, never does itself. The state machine
+|  * decides that capacity is missing; spawning a process is a clock, a PID and
+|  * an exit code all at once, so it belongs on the other side of this line.
+|  */
+| export interface BirthIntent {
+|   reason: string;
+|   forItemIds: string[];
+| }
+|
+| /**
+|  * Every time-driven rule in one place, driven by an injected clock. Nothing
+|  * below expires on its own — the daemon calls `tick` on a timer and before
+|  * each command, so a bus that no one touches never invents events.
+|  */
+@ docs/concepts/presence.md src/daemon/server.ts 99e100cef6da
 |   private restore(mode: Mode): State {
 |     const state = initialState(mode);
 |     const { entries, discarded } = this.journal.replay();
-|     for (const entry of entries) {
+|     const failed: string[] = [];
+|     let orphaned = 0;
+|     entries.forEach((entry, index) => {
 |       const ms = Date.parse(entry.at);
-|       apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
-|     }
-|     // Nothing survives a restart connected; presence has to be re-proven.
-|     for (const p of Object.values(state.participants)) p.connected = false;
-|     if (discarded.length > 0) {
-|       process.stderr.write(
-|         `parley: discarded ${discarded.length} unreadable journal line(s); starting anyway\n`,
-|       );
-|     }
-|     return state;
-|   }
+|       const at = Number.isNaN(ms) ? 0 : ms;
+|       try {
+|         // Não é um frame que alguém enviou — ver `BIRTH_STAMP_OP`. `tick` é o
+|         // que carimba o cooldown e `tick` nunca vai para o journal, então esta
+|         // é a única forma de uma janela que o parley já gastou continuar gasta
+|         // depois de um restart. `apply` não conhece esta op e nunca deve recebê-la.
+|         if (entry.frame.op === BIRTH_STAMP_OP) {
+|           state.lastBirthMs = at;
+|           return;
 @ docs/concepts/recall.md src/brain/lexical.ts afa200c5f10d
 | /**
 |  * The floor. Always present, deterministic, no model, no download.
@@ -338,10 +338,10 @@
 |   }
 |   return index;
 | }
-@ docs/concepts/recall.md src/daemon/server.ts 041e9bae408b
+@ docs/concepts/recall.md src/daemon/server.ts 0d58e278b5af
 |       } else if (op === "reverse") {
 |         const id = typeof response.id === "string" ? response.id : null;
-|         if (id) this.index.remove(id);
+|         if (id) {
 @ docs/concepts/recall.md src/state/notes.ts fec2ba968283
 |   // The daemon resolves `q` into ranked `ids` before calling `apply` — this
 |   // module has no clock and no I/O, so it cannot search on its own. A direct
@@ -350,11 +350,11 @@
 |     // only touches the copy handed to `apply`, so a replay never has to agree
 |     // with what the index looked like at write time.
 |     let toApply = frame;
-@ docs/concepts/recall.md src/daemon/server.ts 411d145a71d7
-|         const hits = this.index
-|           .search(frame.q, this.index.size)
-|           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
-|         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
+@ docs/concepts/recall.md src/daemon/server.ts d4c8f4e97cfc
+|       }
+|
+|       const dir = dirname(this.opts.journalPath);
+|       let vectors = loadVectors(dir, staticModel.dims, calibration.floor);
 @ docs/concepts/recall.md src/daemon/server.ts 32292d6e5fd0
 |         // `search` ranks across every kind in one corpus-wide score, and its
 |         // distinctiveness threshold is a property of the whole corpus — a
@@ -390,11 +390,22 @@
 |    * raised the first time a front wants semantic recall while it is off.
 |    */
 |   brain: { active: boolean; model: string | null; askedAtMs: number | null };
-@ docs/concepts/recall.md src/state/machine.ts 9ef5b31ef43d
-| function brain(state: State, actorId: string | null, frame: Record<string, unknown>): Outcome {
+@ docs/concepts/recall.md src/state/machine.ts f7a0fc239b98
+| function brain(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
 |   const acting = frame.enable !== undefined || frame.disable !== undefined;
 |   if (!acting) {
-|     return { state, response: ok({ active: state.brain.active, model: state.brain.model }), broadcast: [] };
+|     // `may_enable` lets a caller (the CLI) find out whether it is even worth
+|     // attempting a download before spending one byte on it — the daemon
+|     // already knows `me.kind` for free. This is a courtesy for callers that
+|     // choose to probe first; it is not the gate. A client that skips the
+|     // probe and sends `enable` directly is still refused below, by `me.kind
+|     // !== "human"`, exactly as before.
+|     const me = actorOf(state, actorId);
+|     return {
+|       state,
+|       response: ok({ active: state.brain.active, model: state.brain.model, may_enable: me?.kind === "human" }),
+|       broadcast: [],
+|     };
 |   }
 |
 |   const me = actorOf(state, actorId);
@@ -410,25 +421,14 @@
 |     };
 |   }
 |
+|   const before = { active: state.brain.active, model: state.brain.model };
+|
 |   if (frame.disable === true) {
 |     state.brain.active = false;
 |     state.brain.model = null;
 |     // A fresh "off" period earns its own one-time panel nudge, same as the
 |     // period that started at first boot.
 |     state.brain.askedAtMs = null;
-|     return { state, response: ok({ active: false, model: null }), broadcast: [] };
-|   }
-|
-|   const name = String(frame.enable ?? "");
-|   const model = findModel(name);
-|   if (!model) {
-|     return { state, response: err("UNKNOWN_OP", `no such model in the registry: ${name}`), broadcast: [] };
-|   }
-|   state.brain.active = true;
-|   state.brain.model = model.name;
-|   state.brain.askedAtMs = null;
-|   return { state, response: ok({ active: true, model: model.name }), broadcast: [] };
-| }
 @ docs/concepts/recall.md src/state/machine.ts a793951a7c83
 |  * front is stuck on the floor. Turning the brain on or off is a different
 |  * matter: a ~100MB download and a model choice spend somebody's disk and
@@ -471,22 +471,22 @@
 @ docs/concepts/recall.md src/brain/registry.ts ec07b2909527
 |  * Fill in the real sha256 for each entry when the asset is published; the tests
 |  * assert the shape, and the downloader refuses anything that does not match.
-@ docs/concepts/recall.md src/state/notes.ts 4f95c6a8955f
-|   // A front asking for `semantic` recall cannot be blocked on a prompt it has
-|   // no way to answer — a model choice and a ~100MB download are the person's
-|   // call (see `brain` in machine.ts), so the request is answered from the
-|   // floor unconditionally. What it earns instead is one nudge to the panel,
-|   // never a repeat: `askedAtMs` is the same once-only bookkeeping as the
-|   // permission and question nudges elsewhere in src/state/, so a front that
-|   // keeps asking cannot turn this into noise.
-|   const broadcast: ConvEvent[] = [];
-|   if (frame.semantic === true && !state.brain.active && state.brain.askedAtMs === null) {
-|     state.brain.askedAtMs = ctx.nowMs;
-|     broadcast.push(pushEvent(state, ctx, {
-|       kind: "system", from: null, to: null, priority: "high",
-|       text: "a front asked for semantic recall and the brain is off — `parley brain enable` to pick a model",
-|     }));
-|   }
+@ docs/concepts/recall.md src/state/notes.ts b1d78a61af91
+|  * A front asking for `semantic` recall cannot be blocked on a prompt it has no
+|  * way to answer — a model choice and a ~100MB download are the person's call
+|  * (see `brain` in machine.ts) — so the request is answered from the lexical
+|  * floor unconditionally. What it earns instead is one notice, and only one:
+|  * `askedAtMs` is the same once-only bookkeeping the permission and question
+|  * nudges elsewhere in `src/state/` already use, so a front that keeps asking
+|  * cannot turn this into noise.
+|  *
+|  * The once is bus-wide, not per-front, and deliberately so: it announces that
+|  * *somebody* wants semantic recall, which is a fact about the bus and needs
+|  * saying once, not once per front that happens to ask.
+|  *
+|  * Shared with `listResults` rather than duplicated there. `notes --query` and
+|  * `results --query` are the same request against two corpora — the daemon even
+|  * resolves them through the same ranking — so which of the two a front happens
 @ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
 |       } catch (e) {
 |         // A broken index must never take the query down with it — the honest
@@ -536,7 +536,7 @@
 |   });
 |   return best.ownerId;
 | }
-@ docs/concepts/shapes.md src/state/work.ts 3eb1f3452188
+@ docs/concepts/shapes.md src/state/work.ts e72af7e04e80
 |   const created: WorkItem[] = [];
 |   for (const path of paths) {
 |     const ownerId = ownerForPath(state, path, me.id);
@@ -548,19 +548,19 @@
 |       publishedById: me.id,
 |       publishedByName: me.name,
 |       kind,
-|       origin,
+|       // NOT read off the frame. `origin` decides whether the item can be
+|       // refused (see `droppable`), so a front able to set it could publish
+|       // work its offeree is forbidden to hand back — and this routes the item
+|       // straight AT the front that already holds the path. That is the
+|       // hierarchy `ownerForPath` above exists to prevent: the front that
+|       // discovered the work acquiring authority over the front that holds the
+|       // file. Only a dispatched plan makes a planned item, and `openWave` is
+|       // the only place that says so.
+|       origin: "discovered",
 |       state: ownerId ? "offered" : "open",
 |       offeredToId: ownerId,
 |       offeredAtMs: ownerId ? ctx.nowMs : null,
 |       takenById: null,
-|       orphanedAtMs: null,
-|       reviewOf: typeof frame.reviewOf === "string" ? frame.reviewOf : null,
-|       at: ctx.now,
-|       nudgedAtMs: null,
-|     };
-|     state.work.push(item);
-|     created.push(item);
-|   }
 @ docs/concepts/shapes.md src/state/work.ts 95645e2cc957
 |   if (state.shape === "bus") {
 |     return { state, response: err("UNKNOWN_OP", "there is no pool in shape bus — parley shape pool"), broadcast: [] };
@@ -574,16 +574,6 @@
 @ docs/concepts/shapes.md src/protocol/types.ts 666da802ade6
 | export type Shape = "bus" | "pool" | "plan";
 | export const SHAPES = ["bus", "pool", "plan"] as const;
-@ docs/concepts/shapes.md src/state/machine.ts 126f4b9de02f
-|   if (wanted !== "bus" && wanted !== "pool" && wanted !== "plan") {
-@ docs/concepts/shapes.md src/state/work.ts b06aa24f19ff
-|   if (state.shape === "bus") {
-@ docs/concepts/shapes.md src/state/work.ts 9f1b47ec858e
-|   if (state.shape === "bus") return "";
-@ docs/concepts/shapes.md src/state/types.ts 25679391e9e8
-|   origin: "discovered" | "planned";
-@ docs/concepts/shapes.md src/state/work.ts b5f091e36191
-|   const origin = frame.origin === "planned" ? "planned" : "discovered";
 @ docs/concepts/shapes.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.
@@ -688,12 +678,13 @@
 |     // no system at all.
 |     if (e instanceof ParleyUnreachable) return emit({});
 |     throw e;
-@ docs/concepts/territory.md src/state/machine.ts 051c4d79b695
+@ docs/concepts/territory.md src/state/machine.ts 6f30267a179c
 |   // 1. A front that stopped renewing its lease is gone. A live connection is
 |   //    proof on its own, so only lease-only participants can expire this way.
 |   for (const p of liveParticipants(state)) {
 |     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
 |     p.gone = true;
+|     died.push(p.id);
 |     const held = state.claims.filter((c) => c.ownerId === p.id);
 |     for (const c of held) c.orphanedAtMs = ctx.nowMs;
 |     broadcast.push(
@@ -704,7 +695,6 @@
 |           : `${p.name} dropped`,
 |       }),
 |     );
-|   }
 @ docs/concepts/territory.md src/protocol/types.ts ee6591a650f7
 |   ORPHAN_GRACE_MS: 60_000,
 @ docs/concepts/territory.md src/state/territory.ts c6ba02966fcc
@@ -735,7 +725,7 @@
 |   });
 |   return best.ownerId;
 | }
-@ docs/concepts/work-pool.md src/state/work.ts 3eb1f3452188
+@ docs/concepts/work-pool.md src/state/work.ts e72af7e04e80
 |   const created: WorkItem[] = [];
 |   for (const path of paths) {
 |     const ownerId = ownerForPath(state, path, me.id);
@@ -747,20 +737,20 @@
 |       publishedById: me.id,
 |       publishedByName: me.name,
 |       kind,
-|       origin,
+|       // NOT read off the frame. `origin` decides whether the item can be
+|       // refused (see `droppable`), so a front able to set it could publish
+|       // work its offeree is forbidden to hand back — and this routes the item
+|       // straight AT the front that already holds the path. That is the
+|       // hierarchy `ownerForPath` above exists to prevent: the front that
+|       // discovered the work acquiring authority over the front that holds the
+|       // file. Only a dispatched plan makes a planned item, and `openWave` is
+|       // the only place that says so.
+|       origin: "discovered",
 |       state: ownerId ? "offered" : "open",
 |       offeredToId: ownerId,
 |       offeredAtMs: ownerId ? ctx.nowMs : null,
 |       takenById: null,
-|       orphanedAtMs: null,
-|       reviewOf: typeof frame.reviewOf === "string" ? frame.reviewOf : null,
-|       at: ctx.now,
-|       nudgedAtMs: null,
-|     };
-|     state.work.push(item);
-|     created.push(item);
-|   }
-@ docs/concepts/work-pool.md src/state/work.ts 320f03609132
+@ docs/concepts/work-pool.md src/state/work.ts 6c8c249b5257
 | const MAX_NAMED_OFFERS = 3;
 |
 | /**
@@ -780,16 +770,16 @@
 |
 |   const lines: string[] = [];
 |   for (const item of mine.slice(0, MAX_NAMED_OFFERS)) {
-|     lines.push(`  ${item.paths[0]} — ${item.title} (parley take ${item.id}, or parley drop ${item.id})`);
+|     // The `drop` half is offered only where `drop` would be accepted. A footer
+|     // that names a command the reducer then refuses is worse than a footer
+|     // that says less: the front runs it, gets an error, and reads parley as
+|     // broken.
+|     const how = droppable(item)
+|       ? `parley take ${item.id}, or parley drop ${item.id}`
+|       : `parley take ${item.id}`;
+|     lines.push(`  ${item.paths[0]} — ${item.title} (${how})`);
 |   }
 |   if (mine.length > MAX_NAMED_OFFERS) {
-|     lines.push(`  ${mine.length - MAX_NAMED_OFFERS} more offered to you — parley works --mine`);
-|   }
-|   if (open.length > 0) {
-|     lines.push(`  ${open.length} open in the pool, owned by nobody — parley works --state open`);
-|   }
-|   return `parley pool:\n${lines.join("\n")}`;
-| }
 @ docs/concepts/work-pool.md src/state/work.ts 579df1924479
 | /**
 |  * Notes and results named by an item, resolved once so the taker never
@@ -809,7 +799,7 @@
 |   };
 | }
 |
-@ docs/concepts/work-pool.md src/state/work.ts 0606db750e4a
+@ docs/concepts/work-pool.md src/state/work.ts 8cb7c726a775
 | export function takeWork(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
 |   const me = actorOf(state, actorId);
 |   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
@@ -834,33 +824,33 @@
 |     };
 |   }
 |
+|   // The item under review, resolved here for the same reason the evidence is:
+|   // so the reviewer does not have to go and look it up. It travels on its own
+|   // key rather than through `evidenceIds`, which is typed and documented as
+|   // note and result ids — a `WorkItem` in there would resolve to nothing and
+|   // widening `evidenceFor` would push one into a field both its consumers read
+|   // as `{notes, results}`. Always present, `null` for anything but a review.
+|   const reviewing = item.reviewOf ? state.work.find((w) => w.id === item.reviewOf) ?? null : null;
+|
+|   // Refusing to compel AND not stating the fact would not soften the
+|   // never-your-own-review rule, it would delete it: every surface would report
+|   // a reviewed wave and nothing would ever say who reviewed it. Always
+|   // present, so `false` can never be confused with a build that does not send
+|   // it. See `isSelfReview` for why this is a disclosure and not a gate.
+|   const selfReview = isSelfReview(item, me.id);
+|
 |   item.state = "taken";
 |   item.takenById = me.id;
-|   item.offeredToId = null;
-|   item.offeredAtMs = null;
-|   item.orphanedAtMs = null;
-|   me.lastSeenMs = ctx.nowMs;
+@ docs/concepts/work-pool.md src/state/work.ts 94a91c86119e
+|   // Dispatch is not an offer. A planned task stays where the plan put it — a
+|   // planned review does not, because a review was offered to a named front.
+|   if (!droppable(item)) {
+|     return { state, response: err("NOT_OWNER", "a planned task is dispatched, not offered — it cannot be dropped"), broadcast: [] };
+|   }
 |
-|   return {
-|     state,
-|     response: ok({ id: item.id, title: item.title, paths: item.paths, evidence: evidenceFor(state, item) }),
-|     broadcast: [pushEvent(state, ctx, {
-|       kind: "system", from: null, to: null, priority: "normal",
-|       text: `${me.name} took ${item.paths[0]} — ${item.title}`,
-|       about: me.id,
-|     })],
-|   };
-| }
-@ docs/concepts/work-pool.md src/state/work.ts 7454e1b4e435
 |   item.state = "open";
 |   item.offeredToId = null;
 |   item.offeredAtMs = null;
-|   item.takenById = null;
-|   // A front handing work back is a new stale episode, not a continuation of
-|   // whichever one earned the last nudge — drop is supposed to be free, and it
-|   // would quietly stop being free if the pool remembered past the hand-back.
-|   item.nudgedAtMs = null;
-|   me.lastSeenMs = ctx.nowMs;
 @ docs/concepts/work-pool.md src/state/work.ts 51aed18319ad
 |   item.nudgedAtMs = null;
 @ docs/concepts/work-pool.md src/cli/main.ts ca80ad26ef47
@@ -883,10 +873,17 @@
 |  * Resolving the evidence here, on take, is why the front that picks the item
 |  * up does not repay the discovery. An item whose evidence does not travel is
 |  * a chat message that moved house.
-@ docs/concepts/work-pool.md src/state/work.ts 99f3d73bce40
+@ docs/concepts/work-pool.md src/state/work.ts f3ca4d6e945d
 | /**
-|  * Alive fronts holding no explicit claim and no taken item — spare capacity
-|  * the doorbell may address.
+|  * Is this front spare capacity right now?
+|  *
+|  * One definition, because there were two and they disagreed: `idleFronts`
+|  * treated a non-auto, non-orphaned claim as busy, and `shouldRetire` ignored
+|  * claims entirely — so a parley-born front that had claimed `src/api/**` with
+|  * a declared intent, provably mid-edit, was simultaneously "busy, do not ring
+|  * it" and "idle, retire it". Whichever of the two is right, they cannot both
+|  * be, and a front cannot be too busy to be offered work and idle enough to be
+|  * sent home in the same tick.
 |  *
 |  * A human watching the panel is filtered out: they are not a front to
 |  * dispatch to, and counting them as idle capacity would ring the bell at
@@ -895,13 +892,6 @@
 |  * An auto-claim does not count as busy either: it is the footprint of an
 |  * edit, not a declaration of what a front is doing — a session that swept
 |  * the repository would otherwise look permanently occupied.
-|  *
-|  * In practice this only ever names a front holding a live connection.
-|  * `ORPHAN_POOL_MS` is longer than `LEASE_TTL_MS` on purpose: a front that has
-|  * gone this long without renewing its lease is not idle capacity waiting to
-|  * be pinged, it is a session waiting for a person to type — the same "on its
-|  * next tool call, possibly not soon" front `tick`'s rule 1 already declares
-|  * gone before the doorbell would get the chance to ring for it.
 |  */
 @ docs/concepts/work-pool.md src/protocol/types.ts b7f7625d424d
 |   /**
@@ -913,7 +903,7 @@
 |   ORPHAN_POOL_MS: 10 * 60_000,
 @ docs/concepts/work-pool.md src/protocol/types.ts 8b91b904cde7
 |   LEASE_TTL_MS: 5 * 60_000,
-@ docs/concepts/work-pool.md src/state/machine.ts 9854d9c7fd01
+@ docs/concepts/work-pool.md src/state/machine.ts 9075b3cc8c56
 |   // 6. A pool left open beside spare capacity is the failure this whole shape
 |   //    exists to prevent: nobody blocked, nothing broken, and an idle front
 |   //    that never learns there is something to pick up. Rung once per item —
@@ -921,20 +911,20 @@
 |   //    that reads nothing is never pushed round in circles.
 |   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
 |   const stale = state.work.filter(
-|     (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
+|     (w) => w.state === "open" && ctx.nowMs - Date.parse(w.at) > orphanPool,
 |   );
+|   let birth: BirthIntent | null = null;
 |   if (stale.length > 0) {
 |     const idle = idleFronts(state);
 |     if (idle.length > 0) {
-|       const target = idle[0]!;
-|       for (const w of stale) w.nudgedAtMs = ctx.nowMs;
-|       broadcast.push(pushEvent(state, ctx, {
-|         // Addressed to the front it is about, same as ask/grant/deny — every
-|         // other front already gets the pool count from poolFooterFor on its
-|         // own next call, so broadcasting this too would only be noise for them.
-|         kind: "system", from: null, to: target.name, priority: "high",
-|         text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
-|       }));
+|       // Recycle before creating. A front idle beside an orphan pool is the
+|       // larger waste, and reviving it costs nothing: no worktree, no
+|       // dependency install, no cold context. Creating is the fallback, never
+|       // the first move.
+|       //
+|       // `nudgedAtMs` governs *this* branch and only this one. It used to be
+|       // part of the `stale` filter above, which meant one ring disqualified an
+|       // item from ever asking for a front again: the idle front that was rung
 @ docs/concepts/work-pool.md src/protocol/types.ts 95bcbad39181
 |   OFFER_TTL_MS: 5 * 60_000,
 @ docs/concepts/work-pool.md src/state/machine.ts 06453dd29b27
@@ -990,13 +980,16 @@
 |       else process.stderr.write(`parley: ${e.message} — continuing without coordination\n`);
 |       process.exit(0);
 |     }
-@ docs/concepts/work-pool.md src/state/work.ts 532a12aeb20f
-|   // Dispatch is not an offer. A planned item stays where the plan put it.
-|   if (item.origin === "planned") {
-|     return { state, response: err("NOT_OWNER", "a planned item is dispatched, not offered — it cannot be dropped"), broadcast: [] };
-|   }
-@ docs/concepts/work-pool.md src/state/work.ts b5f091e36191
-|   const origin = frame.origin === "planned" ? "planned" : "discovered";
+@ docs/concepts/work-pool.md src/state/work.ts e7d433d39dc6
+|       // NOT read off the frame. `origin` decides whether the item can be
+|       // refused (see `droppable`), so a front able to set it could publish
+|       // work its offeree is forbidden to hand back — and this routes the item
+|       // straight AT the front that already holds the path. That is the
+|       // hierarchy `ownerForPath` above exists to prevent: the front that
+|       // discovered the work acquiring authority over the front that holds the
+|       // file. Only a dispatched plan makes a planned item, and `openWave` is
+|       // the only place that says so.
+|       origin: "discovered",
 @ docs/guide/panel.md src/cli/watch.ts 7fd22d3f8c3c
 |     if (composer === "none") {
 |       if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }

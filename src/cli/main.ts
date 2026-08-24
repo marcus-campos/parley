@@ -19,7 +19,7 @@ import { isSelfReview } from "../state/work";
 import type { WorkItem } from "../state/types";
 import { flagBool, flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
-import { resolveIdentity, wakeAddress } from "./identity";
+import { joinFrame, resolveIdentity, wakeAddress } from "./identity";
 
 const COMPILED_CLI = import.meta.url.includes("$bunfs");
 
@@ -191,31 +191,20 @@ async function withSession(
   }
 
   const identity = resolveIdentity(repo.cwd, repo.cwd, flagString(parsed.flags, "as"));
-  let response = await client.request({
-    op: "join",
-    name: identity.name,
+  const join = (name?: string) => joinFrame(identity, {
     mission: flagString(parsed.flags, "mission", identity.mission),
-    harness: identity.harness,
     cwd: repo.cwd,
-    kind: flagBool(parsed.flags, "human") ? "human" : "agent",
-    branch: identity.branch,
+    kind: name ? "agent" : flagBool(parsed.flags, "human") ? "human" : "agent",
     wake: wakeAddress(),
     session: sessionFor(repo.discoveryDir, repo.cwd),
+    ...(name ? { name } : {}),
   });
+  let response = await client.request(join());
 
   // A derived name that collides takes the suggestion rather than failing: the
   // hook path has no human to retype it.
   if (!response.ok && response.error.code === "NAME_TAKEN" && identity.provisional && "suggestion" in response.error) {
-    response = await client.request({
-      op: "join",
-      name: String(response.error.suggestion),
-      mission: flagString(parsed.flags, "mission", identity.mission),
-      harness: identity.harness,
-      cwd: repo.cwd,
-      kind: "agent",
-      branch: identity.branch,
-      session: sessionFor(repo.discoveryDir, repo.cwd),
-    });
+    response = await client.request(join(String(response.error.suggestion)));
   }
   if (!response.ok) {
     client.close();

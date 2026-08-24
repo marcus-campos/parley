@@ -3,6 +3,7 @@ import { workDetailLines, workSummaryLines } from "../../src/cli/watch";
 import { panelWorkRows } from "../../src/cli/web";
 import { PAGE } from "../../src/cli/web-page";
 import type { WorkItem } from "../../src/state/types";
+import { tailCursor, tailToFeed } from "../../src/cli/panel-tail";
 
 interface Row {
   id: string; paths: string[]; title: string; state: string;
@@ -186,5 +187,55 @@ describe("the WORK section of the web panel", () => {
     const handler = PAGE.slice(start, end);
     expect(handler).toContain('!speaking && (e.key === "w" || e.key === "W")');
     expect(handler).toContain('$("work").open = !$("work").open');
+  });
+});
+
+describe("a newborn's output in the panel feed", () => {
+  test("it arrives under the front's name, as something that front said", () => {
+    // Not as a system event and not as parley speaking: for a front parley
+    // bore this is how it speaks, because there is no session a person can
+    // open and read over its shoulder.
+    const [one, two] = tailToFeed([
+      { n: 1, name: "POOL-1", text: "reading the pool", at: "2026-08-20T12:00:00.000Z" },
+      { n: 2, name: "POOL-2", text: "taking w_1", at: "2026-08-20T12:00:01.000Z" },
+    ]);
+    expect(one!.from.name).toBe("POOL-1");
+    expect(one!.kind).toBe("say");
+    expect(one!.text).toBe("reading the pool");
+    expect(one!.to).toBeNull();
+    expect(two!.from.name).toBe("POOL-2");
+  });
+
+  test("the cursor only ever moves forward, and an empty batch does not move it", () => {
+    expect(tailCursor([{ n: 7, name: "POOL-1", text: "x", at: "" }], 3)).toBe(7);
+    // Out of order, because a batch is what the daemon had, not what it sent.
+    expect(tailCursor([{ n: 9, name: "P", text: "x", at: "" }, { n: 4, name: "P", text: "y", at: "" }], 0)).toBe(9);
+    expect(tailCursor([], 12)).toBe(12);
+  });
+});
+
+describe("the spending switch, in both panels", () => {
+  test("the web page has a control that says what it is switching", () => {
+    // §4.7: the one thing on this bus a person decides and no front does. The
+    // page carries the ceiling and how much of it is in use, because a switch
+    // whose label is only "off" tells nobody whether it matters yet.
+    expect(PAGE).toContain('id="births"');
+    expect(PAGE).toContain("births off");
+    expect(PAGE).toContain('post("/births"');
+    expect(PAGE).toContain("b.live");
+    expect(PAGE).toContain("b.max");
+  });
+
+  test("pressing b toggles it, the same key the terminal panel answers to", () => {
+    expect(PAGE).toContain('e.key === "b" || e.key === "B"');
+    expect(PAGE).toContain('$("births").click()');
+  });
+
+  test("and it still refuses to be a route for grant, deny or mode", () => {
+    // The page grew a control that acts. That is exactly the moment to check
+    // it did not grow the ones that were left out on purpose.
+    expect(PAGE).not.toContain('post("/grant"');
+    expect(PAGE).not.toContain('post("/deny"');
+    expect(PAGE).not.toContain('post("/mode"');
   });
 });

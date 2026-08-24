@@ -92,12 +92,61 @@ describe("the doorbell", () => {
     expect(again.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(0);
   });
 
-  test("no idle front means no bell at all", () => {
+  test("no idle front means no recycle bell — capacity asks for a front instead", () => {
     apply(state, core, { v: 1, op: "claim", paths: ["src/**"] }, at(50));
     apply(state, develop, { v: 1, op: "claim", paths: ["other/**"] }, at(60));
     apply(state, core, { v: 1, op: "work", title: "x", paths: ["a.ts"] }, at(100));
     const out = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 1));
-    expect(out.broadcast.filter((e) => e.text.includes("pool"))).toHaveLength(0);
+    // Recycling only ever targets someone idle, and nobody here is — neither
+    // busy front is named or addressed by the recycle message specifically.
+    expect(out.broadcast.some((e) => e.text.includes("is idle and the pool"))).toBe(false);
+    expect(out.broadcast.some((e) => e.to === "CORE" || e.to === "DEVELOP")).toBe(false);
+    // With both busy, capacity fills the gap instead of leaving it silent —
+    // see tests/state/capacity.test.ts for the birth intent itself.
+    expect(out.birth).not.toBeNull();
+  });
+
+  test("an item the bell already rang is not disqualified from asking for a front for ever", () => {
+    // Rule 6 stamps `nudgedAtMs` on every stale item when it rings, and the
+    // same field is what `stale` filters on — so one ring used to disqualify
+    // an item from *ever* triggering a birth, however long the pool stayed
+    // open and whoever left in the meantime. Since the bell runs before the
+    // birth by design (recycle before creating), the bell is the common path:
+    // this disarmed capacity for the majority of items, which is the feature
+    // this branch exists to build.
+    apply(state, core, { v: 1, op: "claim", paths: ["src/**"] }, at(50));
+    apply(state, core, { v: 1, op: "work", title: "32 triviais", paths: ["a.ts"] }, at(100));
+
+    const rung = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 1));
+    expect(rung.broadcast.filter((e) => e.text.includes("DEVELOP"))).toHaveLength(1);
+    // Recycle before creating: with somebody idle, nothing is born.
+    expect(rung.birth).toBeNull();
+
+    // The front that was rung never took it, and has gone home. The item is
+    // exactly as open as it was, and now there is nobody to ring at all.
+    apply(state, develop, { v: 1, op: "leave" }, at(100 + DEFAULTS.ORPHAN_POOL_MS + 200));
+    expect(idleFronts(state)).toHaveLength(0);
+
+    const after = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 400));
+    expect(after.birth).not.toBeNull();
+    expect(after.birth!.forItemIds).toEqual([state.work[0]!.id]);
+  });
+
+  test("a second ring is never sent to a front that already heard about the same item", () => {
+    // The other half of the same change: making the birth path stop reading
+    // `nudgedAtMs` must not turn the bell into something that rings on every
+    // tick. One ring per item, still.
+    apply(state, core, { v: 1, op: "claim", paths: ["src/**"] }, at(50));
+    apply(state, core, { v: 1, op: "work", title: "x", paths: ["a.ts"] }, at(100));
+
+    tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 1));
+    const again = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 2));
+    const third = tick(state, at(100 + DEFAULTS.ORPHAN_POOL_MS + 60_000));
+    expect(again.broadcast.filter((e) => e.text.includes("is idle and the pool"))).toHaveLength(0);
+    expect(third.broadcast.filter((e) => e.text.includes("is idle and the pool"))).toHaveLength(0);
+    // And with somebody idle the whole time, nothing is ever born.
+    expect(again.birth).toBeNull();
+    expect(third.birth).toBeNull();
   });
 
   test("an explicit orphanPoolMs governs the bell, not just the default", () => {

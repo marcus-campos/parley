@@ -15,6 +15,43 @@ function suggestName(state: State, wanted: string): string {
 
 const str = (v: unknown, fallback = ""): string => (typeof v === "string" ? v : fallback);
 
+/**
+ * The longest thing that can still be an address rather than a paragraph.
+ */
+const MAX_WAKE_CHARS = 512;
+
+/**
+ * A wake address, or nothing.
+ *
+ * This is a fact a front reports **about itself** — `wakeAddress()` in
+ * `src/cli/identity.ts` builds it from the socket the harness publishes — and
+ * parley's only use for it is to hand it back to whoever asked that front a
+ * question, rendered into their tool response as *"To wake it now: <address>
+ * — use your harness's session-message tool"*. That makes it the one string on
+ * this bus that is presented to another agent as something to act on.
+ *
+ * So it is held to the shape of an address: one line, bounded. Something with
+ * newlines in it is not a wake address whatever else it is, and refusing it
+ * costs nothing, because no harness publishes one.
+ *
+ * What it is deliberately **not** gated on is `born`. The plan's Task 6 asked
+ * for `wake` to be accepted only from a front parley bore, on the grounds that
+ * *"parley never guesses how to wake a session it did not start"* — but
+ * `frame.wake` is not parley guessing, it is the front reporting, and §4.6 of
+ * the design says the person-opened path is **unchanged**. Gating it on `born`
+ * would have silently emptied `wake` for every front a person opened, which is
+ * every front the question doorbell exists for: `src/state/questions.ts` reads
+ * `target.wake` to tell an asker how to reach a front that has gone quiet, and
+ * `src/adapters/hook.ts` prints it. The doorbell would have gone dark and no
+ * test would have said so.
+ */
+function wakeOf(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const address = value.trim();
+  if (!address || address.length > MAX_WAKE_CHARS || /[\r\n]/.test(address)) return null;
+  return address;
+}
+
 /** Your own territory, with how long since each path was last touched. */
 function ownClaims(state: State, ownerId: string, ctx: Ctx) {
   return state.claims
@@ -45,7 +82,16 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
       known.gone = false;
       known.lastSeenMs = ctx.nowMs;
       if (typeof frame.branch === "string" && frame.branch) known.branch = frame.branch;
-      if (typeof frame.wake === "string" && frame.wake) known.wake = frame.wake;
+      // Where it is *now*. A session's cwd is not fixed for its lifetime — a
+      // person walks from the repository root into `.parley/worktrees/pool-1`
+      // to read what a newborn did, and every tool call after that re-joins
+      // from there. This branch read `branch`, `wake`, `connected` and
+      // `mission` off the frame and dropped `cwd`, so `src/daemon/server.ts`'s
+      // sweep — whose whole question is "is anybody still standing in that
+      // directory" — was answering it from an address the front had left.
+      if (typeof frame.cwd === "string" && frame.cwd) known.cwd = frame.cwd;
+      const wake = wakeOf(frame.wake);
+      if (wake) known.wake = wake;
       if (frame.connected === true) known.connected = true;
       // Coming back renews the territory. A front that paused — thinking, or
       // waiting on the person — must not lose files it is still holding just
@@ -142,7 +188,9 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
     // A front that holds the connection open is pushed to; one that connects,
     // speaks and exits reads its inbox on its next call.
     delivery: frame.connected === true ? "live" : frame.harness === "shell" ? "manual" : "hooks",
-    wake: str(frame.wake) || null,
+    wake: wakeOf(frame.wake),
+    born: frame.born === "parley" ? "parley" : "person",
+    retireNudgedAtMs: null,
   };
   state.participants[id] = participant;
 
@@ -238,12 +286,22 @@ export function leave(state: State, actorId: string | null, ctx: Ctx): Outcome {
   return { state, response: ok({ released }), broadcast: [event, ...settled] };
 }
 
-export function who(state: State, ctx: Ctx): Outcome {
+export function who(state: State, ctx: Ctx, maxFronts = 6): Outcome {
+  const live = liveParticipants(state);
   return {
     state,
     response: ok({
       mode: state.mode,
-      participants: liveParticipants(state).map((p) => publicParticipant(p, state, ctx)),
+      participants: live.map((p) => publicParticipant(p, state, ctx)),
+      // Carried here rather than in `status` because this is the op a panel
+      // already asks on every refresh, and a switch a person can throw has to
+      // show what it is switching: whether parley may start fronts at all, the
+      // ceiling it would stop at, and how much of that ceiling is in use.
+      births: {
+        allowed: state.birthsAllowed,
+        max: maxFronts,
+        live: live.filter((p) => p.kind === "agent").length,
+      },
     }),
     broadcast: [],
   };

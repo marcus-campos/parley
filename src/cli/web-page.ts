@@ -126,6 +126,9 @@ export const PAGE = String.raw`<!doctype html>
   #reader .nav{margin-left:auto;display:flex;gap:8px;align-items:center}
   #reader .count{color:var(--mute);font-size:12px}
   button:disabled{opacity:.35;cursor:default}
+  /* The one control here that acts rather than speaks. Off is loud on purpose:
+     a bus that will not grow when it needs to has to say so, not hide it. */
+  #births.off{color:var(--danger);border-bottom-color:var(--danger)}
 </style>
 </head>
 <body>
@@ -134,6 +137,7 @@ export const PAGE = String.raw`<!doctype html>
   <span class="mode" id="mode">&mdash;</span>
   <span class="grow"></span>
   <span class="meta" id="repo"></span>
+  <button class="who-btn" id="births" title="whether parley may start more fronts &mdash; it is your money"></button>
   <button class="who-btn" id="you" title="click to change how you appear on the bus"></button>
   <span class="meta" id="conn">connecting&hellip;</span>
 </header>
@@ -218,11 +222,23 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault(); openNote(0);
   } else if (!speaking && (e.key === "w" || e.key === "W") && !e.metaKey && !e.ctrlKey) {
     e.preventDefault(); $("work").open = !$("work").open;
+  } else if (!speaking && (e.key === "b" || e.key === "B") && !e.metaKey && !e.ctrlKey) {
+    // The same key the terminal panel answers to.
+    e.preventDefault(); $("births").click();
   } else if (e.key === "Escape") {
     setSpeaking(false);
   }
 });
 $("cancel").addEventListener("click", () => setSpeaking(false));
+
+// Stopping parley spending money is a click, not a config file: the moment it
+// matters is the moment somebody is watching the bill go up.
+$("births").addEventListener("click", async () => {
+  const off = $("births").className.indexOf("off") >= 0;
+  if (!off && !window.confirm("Stop parley starting any more fronts?\n\nThe pool stays open and the fronts already here keep working.")) return;
+  const r = await post("/births", { allow: off });
+  if (!r.ok) window.alert("parley: " + (r.error && (r.error.code || r.error) || "could not change it"));
+});
 
 // Your name is set here, not with a command-line flag, and it is remembered.
 $("you").addEventListener("click", async () => {
@@ -295,6 +311,12 @@ function render(s) {
   $("mode").className = "mode " + s.mode;
   $("repo").textContent = s.repo.split("/").pop();
   $("you").textContent = "you are " + s.you;
+
+  // §4.7: a human here has a voice and not a vote, except on spending. The
+  // label says what the switch is switching, not just that it exists.
+  var b = s.births || { allowed: true, max: 6, live: 0 };
+  $("births").textContent = (b.allowed ? "fronts " : "births off \u00b7 ") + b.live + "/" + b.max;
+  $("births").className = "who-btn" + (b.allowed ? "" : " off");
 
   allNotes = (s.notes || []).slice().reverse();
   $("notes").innerHTML = allNotes.length ? allNotes.map((n, i) =>

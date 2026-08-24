@@ -7,7 +7,7 @@ import { listNotes, note, reverse } from "./notes";
 import { ask, deny, expirePermissions, grant, listRequests } from "./permissions";
 import { join, leave, rename, who } from "./participants";
 import { claim, release } from "./territory";
-import { dispatchPlan, dropWork, finishWork, idleFronts, listWork, publishWork, takeWork } from "./work";
+import { dispatchPlan, dropWork, finishWork, idleFronts, listWork, publishWork, shouldRetire, summonCapacity, takeWork } from "./work";
 import {
   actorOf, emptyState, liveParticipants, pushEvent,
   type ConvEvent, type Ctx, type Outcome, type State,
@@ -29,6 +29,11 @@ export function apply(
   actorId: string | null,
   frame: Record<string, unknown>,
   ctx: Ctx,
+  // Threaded from the daemon's SpawnConfig (Task 1) so `summon` is refused at
+  // the same ceiling a repository configured for itself. Defaults to
+  // SPAWN_DEFAULTS.maxFronts for every caller that has not wired it through —
+  // tests included.
+  maxFronts: number = 6,
 ): Outcome {
   const version = typeof frame.v === "number" ? frame.v : null;
   if (version !== null && version !== PROTOCOL_VERSION) {
@@ -50,7 +55,7 @@ export function apply(
     case "join": return join(state, frame, ctx);
     case "rename": return rename(state, actorId, frame, ctx);
     case "leave": return leave(state, actorId, ctx);
-    case "who": return who(state, ctx);
+    case "who": return who(state, ctx, maxFronts);
     case "say": return say(state, actorId, frame, ctx);
     case "drain": return drain(state, actorId, ctx);
     case "history": return history(state, actorId, frame);
@@ -81,6 +86,7 @@ export function apply(
     case "done": return finishWork(state, actorId, frame, ctx);
     case "brain": return brain(state, actorId, frame, ctx);
     case "plan": return dispatchPlan(state, actorId, frame, ctx);
+    case "summon": return summonCapacity(state, actorId, frame, ctx, maxFronts);
     default:
       return { state, response: err("UNKNOWN_OP", `unknown op: ${String(frame.op)}`), broadcast: [] };
   }
@@ -235,6 +241,22 @@ export interface TickOptions {
   orphanGraceMs?: number;
   offerTtlMs?: number;
   orphanPoolMs?: number;
+  /** Ceiling on live agent fronts. Same number `summon` is refused against. */
+  maxFronts?: number;
+  /** At most one birth intent per window, regardless of pool size. */
+  birthCooldownMs?: number;
+  /** How long a newborn is left alone before it can be invited to go home. */
+  retireGraceMs?: number;
+}
+
+/**
+ * What `tick` asks the daemon to do, never does itself. The state machine
+ * decides that capacity is missing; spawning a process is a clock, a PID and
+ * an exit code all at once, so it belongs on the other side of this line.
+ */
+export interface BirthIntent {
+  reason: string;
+  forItemIds: string[];
 }
 
 /**
@@ -242,17 +264,33 @@ export interface TickOptions {
  * below expires on its own — the daemon calls `tick` on a timer and before
  * each command, so a bus that no one touches never invents events.
  */
-export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: State; broadcast: ConvEvent[] } {
+export function tick(
+  state: State,
+  ctx: Ctx,
+  opts: TickOptions = {},
+): { state: State; broadcast: ConvEvent[]; birth: BirthIntent | null; retire: string[]; died: string[] } {
   const autoTtl = opts.autoClaimTtlMs ?? DEFAULTS.AUTO_CLAIM_TTL_MS;
   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
   const broadcast: ConvEvent[] = [];
+  /**
+   * Who this tick just declared dead. §4.4 promises a newborn's worktree is
+   * removed on death, and the only thing that ever asked for one was `leave` —
+   * so a front killed by SIGKILL, by a crash, by a closed laptop, or by a
+   * harness that never fires `SessionEnd` was marked `gone` (freeing the
+   * ceiling, correctly) and kept its checkout and its branch for ever.
+   *
+   * Reported rather than acted on, for the same reason `birth` and `retire`
+   * are: what is on disk is the daemon's business and never this file's.
+   */
+  const died: string[] = [];
 
   // 1. A front that stopped renewing its lease is gone. A live connection is
   //    proof on its own, so only lease-only participants can expire this way.
   for (const p of liveParticipants(state)) {
     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
     p.gone = true;
+    died.push(p.id);
     const held = state.claims.filter((c) => c.ownerId === p.id);
     for (const c of held) c.orphanedAtMs = ctx.nowMs;
     broadcast.push(
@@ -356,24 +394,99 @@ export function tick(state: State, ctx: Ctx, opts: TickOptions = {}): { state: S
   //    that reads nothing is never pushed round in circles.
   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
   const stale = state.work.filter(
-    (w) => w.state === "open" && w.nudgedAtMs === null && ctx.nowMs - Date.parse(w.at) > orphanPool,
+    (w) => w.state === "open" && ctx.nowMs - Date.parse(w.at) > orphanPool,
   );
+  let birth: BirthIntent | null = null;
   if (stale.length > 0) {
     const idle = idleFronts(state);
     if (idle.length > 0) {
-      const target = idle[0]!;
-      for (const w of stale) w.nudgedAtMs = ctx.nowMs;
+      // Recycle before creating. A front idle beside an orphan pool is the
+      // larger waste, and reviving it costs nothing: no worktree, no
+      // dependency install, no cold context. Creating is the fallback, never
+      // the first move.
+      //
+      // `nudgedAtMs` governs *this* branch and only this one. It used to be
+      // part of the `stale` filter above, which meant one ring disqualified an
+      // item from ever asking for a front again: the idle front that was rung
+      // could ignore it and go home, and no later tick would ever ask for
+      // capacity for that item — `birth` stayed null at +400s, at +5000s and
+      // at +50000s. And since recycling runs before creating by design, the
+      // bell is the common path, so that permanently disarmed the birth path
+      // for the majority of items. Ring once per item; ask for capacity
+      // whenever there is nobody left to ring.
+      const unrung = stale.filter((w) => w.nudgedAtMs === null);
+      if (unrung.length > 0) {
+        const target = idle[0]!;
+        for (const w of unrung) w.nudgedAtMs = ctx.nowMs;
+        broadcast.push(pushEvent(state, ctx, {
+          // Addressed to the front it is about, same as ask/grant/deny — every
+          // other front already gets the pool count from poolFooterFor on its
+          // own next call, so broadcasting this too would only be noise for them.
+          kind: "system", from: null, to: target.name, priority: "high",
+          text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
+        }));
+      }
+    } else if (canBearFront(state, ctx, opts)) {
+      // Stamped when the intent is emitted, not when a spawn succeeds. A
+      // spawn that fails therefore costs one cooldown window and then asks
+      // again — self-healing, and it cannot spin the way stamping on success
+      // would if a permanently failing spawn were retried on every tick.
+      state.lastBirthMs = ctx.nowMs;
+      birth = {
+        reason: `${stale.length} open item(s) and no idle front`,
+        forItemIds: stale.map((w) => w.id),
+      };
       broadcast.push(pushEvent(state, ctx, {
-        // Addressed to the front it is about, same as ask/grant/deny — every
-        // other front already gets the pool count from poolFooterFor on its
-        // own next call, so broadcasting this too would only be noise for them.
-        kind: "system", from: null, to: target.name, priority: "high",
-        text: `${target.name} is idle and the pool has ${stale.length} open item(s) — parley works --state open, then parley take <id>`,
+        kind: "system", from: null, to: null, priority: "high",
+        text: `the pool has ${stale.length} open item(s) and nobody is idle — providing a front`,
       }));
     }
   }
 
-  return { state, broadcast };
+  // 7. A newborn parley bore, idle, beside a pool that has gone empty, is not
+  //    spare capacity waiting for work — it is money being spent on nobody
+  //    working. A front a person opened never qualifies; `shouldRetire` is the
+  //    line that keeps it that way.
+  //
+  //    Invited once, not once per tick. The discipline is stated ten lines
+  //    above for the doorbell and it applies here for the same reason and one
+  //    more: an invitation the front has already read, re-sent every five
+  //    seconds and before every command it makes, is not a stronger
+  //    invitation. `retireNudgedAtMs` clears the moment the front stops
+  //    qualifying, so a pool that refills and empties again rings a second
+  //    time — one ring per episode, not one per lifetime.
+  const retireGrace = opts.retireGraceMs ?? DEFAULTS.RETIRE_GRACE_MS;
+  const retire: string[] = [];
+  for (const p of liveParticipants(state)) {
+    if (!shouldRetire(state, p, ctx, retireGrace)) {
+      p.retireNudgedAtMs = null;
+      continue;
+    }
+    if (p.retireNudgedAtMs !== null) continue;
+    p.retireNudgedAtMs = ctx.nowMs;
+    retire.push(p.id);
+  }
+
+  return { state, broadcast, birth, retire, died };
+}
+
+/**
+ * Whether `tick` may hand the daemon a birth intent: under the ceiling, and
+ * outside the cooldown window. The daemon still decides whether the spawn
+ * actually happens — this only decides whether the state machine is allowed
+ * to ask.
+ */
+function canBearFront(state: State, ctx: Ctx, opts: TickOptions): boolean {
+  // A person said no. Not a ceiling and not a cooldown — those bound how fast
+  // parley may spend; this settles whether it may at all. Checked first
+  // because it is the only one of the three that is somebody's decision rather
+  // than a number.
+  if (!state.birthsAllowed) return false;
+  const ceiling = opts.maxFronts ?? 6;
+  if (liveParticipants(state).filter((p) => p.kind === "agent").length >= ceiling) return false;
+  const cooldown = opts.birthCooldownMs ?? DEFAULTS.BIRTH_COOLDOWN_MS;
+  if (state.lastBirthMs !== null && ctx.nowMs - state.lastBirthMs < cooldown) return false;
+  return true;
 }
 
 /** Deterministic Ctx factory for the daemon. Tests build their own. */

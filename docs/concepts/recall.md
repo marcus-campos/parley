@@ -41,7 +41,7 @@ the corpus" is one or two notes, not a real signal. Reversed decisions never
 enter the index at all: `indexFromState` skips any note with a
 `reversedBy`, and a live daemon removes one the moment it is reversed, so a
 reversed decision cannot surface as a recall hit even between rebuilds
-(`src/brain/lexical.ts:107-118`; `src/daemon/server.ts:660-662`).
+(`src/brain/lexical.ts:107-118`; `src/daemon/server.ts:795-797`).
 
 ## Reaching it: `parley notes --query`
 
@@ -60,7 +60,7 @@ The daemon does the ranking, on its own in-memory copy of the index, before
 the frame ever reaches `apply` — and only that copy is touched; the journal
 keeps exactly the frame that came in over the wire, so a replay never has to
 agree with what the index looked like at write time
-(`src/daemon/server.ts:558-561`). It searches across the *whole* corpus —
+(`src/daemon/server.ts:673-676`). It searches across the *whole* corpus —
 notes, decisions, and results together — then filters by which op asked, and
 only then slices to `k` (`src/daemon/server.ts:264-267`). The order is the
 whole point:
@@ -70,32 +70,32 @@ whole point:
 > cannot be handed to `search` directly: the top-k across all kinds can be
 > entirely the other op's kind, which would starve this op of a real match
 > it actually has.
-> (`src/daemon/server.ts:565-573`)
+> (`src/daemon/server.ts:680-688`)
 
 `k` itself is bounded regardless of what is asked for — between 1 and 20,
-defaulting to 5 (`src/daemon/server.ts:564`). That is the same discipline
+defaulting to 5 (`src/daemon/server.ts:679`). That is the same discipline
 the work pool's footer uses for offers: never hand back the corpus, only the
 top of it, because that gap is exactly where the token saving comes from —
-ranking and a small `k`, not a vector (`src/state/work.ts:775-782`;
+ranking and a small `k`, not a vector (`src/state/work.ts:811-818`;
 `src/daemon/server.ts:253,267`).
 
 If the index itself throws, the query does not fail — it falls back to the
 same unranked list a plain `notes` call without `--query` gets
-(`src/daemon/server.ts:588-592`), which is the same "never let a broken part
+(`src/daemon/server.ts:703-707`), which is the same "never let a broken part
 stop the work" shape territory and permission already follow.
 
 ## The brain: designed as the second layer, not operable here
 
 A `brain` field already exists on state — `{ active, model, askedAtMs }`
-(`src/state/types.ts:248-254`) — and a daemon-side handler for `parley brain
+(`src/state/types.ts:269-275`) — and a daemon-side handler for `parley brain
 enable <model>` / `disable` exists in the state machine
-(`src/state/machine.ts:165-202`). Turning it on is deliberately gated to a
+(`src/state/machine.ts:151-188`). Turning it on is deliberately gated to a
 human, not a front:
 
 > A ~100MB download and a model choice spend somebody's disk and somebody's
 > money, on somebody's machine, and an agent cannot answer the interactive
 > prompt that decision deserves on that person's behalf.
-> (`src/state/machine.ts:132-135`)
+> (`src/state/machine.ts:138-141`)
 
 The model registry backs that up with a size up front rather than after the
 fact — one static model listed today, `potion-multilingual-128M-int8`, with
@@ -112,7 +112,7 @@ the MCP server nor the terminal/web panel wires it up. A front that asks for
 `semantic` recall while the brain is off is still answered from the floor,
 unconditionally — and earns exactly one high-priority nudge into the
 conversation feed, never a repeat, so asking again cannot turn this into
-noise (`src/state/notes.ts:78-92`). It is a plain system event today, not a
+noise (`src/state/notes.ts:57-71`). It is a plain system event today, not a
 dedicated control; the person's decision this page describes is designed to
 happen in the panel, and is not wired to one here.
 
@@ -120,7 +120,7 @@ happen in the panel, and is not wired to one here.
 
 The floor cannot really go down: it holds no clock and no I/O of its own,
 and a broken index degrades a ranked query to the same unranked list a plain
-`notes` call returns rather than failing it (`src/daemon/server.ts:588-592`).
+`notes` call returns rather than failing it (`src/daemon/server.ts:703-707`).
 If the daemon itself cannot be reached, `parley notes` behaves like every
 other direct CLI command — it reports the problem on stderr and exits clean
 rather than blocking, `parley: <reason> — continuing without coordination`

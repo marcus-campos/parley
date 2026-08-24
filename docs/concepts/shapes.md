@@ -9,14 +9,14 @@ from**. The state machine's own comment puts it plainly —
 > Where work comes from. Orthogonal to `mode`, which is how strict territory
 > is. Repo-scoped for the same reason: a front in `bus` inside a `plan` would
 > ignore dispatch, and the plan would be theatre.
-> (`src/state/types.ts:229-233`)
+> (`src/state/types.ts:250-254`)
 
 They compose rather than substitute for each other: nothing about `mode`
 changes what shape a front runs, and nothing about `shape` changes how strict
 a claim is. Three values are recognised at the protocol level —
 `"bus" | "pool" | "plan"` (`src/protocol/types.ts:6-7`) — and a repository
 that never sets one runs `bus`, the default `emptyState` starts every new
-bus with (`src/state/types.ts:279`).
+bus with (`src/state/types.ts:320`).
 
 ## `bus` — conversation and territory, nothing more
 
@@ -67,17 +67,17 @@ and leaves to a human to execute by hand today.
 
 **None of that exists on this branch.** `"plan"` is accepted wherever a shape
 value is accepted — the type includes it (`src/protocol/types.ts:6-7`) and
-`parley shape plan` is a valid switch (`src/state/machine.ts:112`) — but
-nothing in the code branches on it beyond the same "is this bus?" check
-`pool` already gets (`src/state/work.ts:61`, `src/state/work.ts:784`). There
-is no `parley plan <path>`, nothing parses a `**Files:**` block, and nothing
-publishes an item with `origin: "planned"` — that value exists in the
-`WorkItem` type (`src/state/types.ts:171`), and `publishWork` will honour it
-when a frame carries it, but no caller in this repository passes it, so a work
-item published through the CLI is always `"discovered"`
-(`src/state/work.ts:62`). So today, setting `shape plan` does not turn on
-plan-driven dispatch — it leaves a repository running exactly the `pool`
-machinery described above, because nothing distinguishes the two yet.
+`parley shape plan` reads a plan written with `superpowers:writing-plans` and
+dispatches its tasks as waves: `parley plan <path>` parses the `**Files:**`
+block of each task, computes which tasks can run at the same time from the
+paths they declare, and publishes the first wave onto the pool. A wave does not
+advance until every item in it — including the review each finished task
+spawns — is done.
+
+`origin: "planned"` is what separates a dispatched task from a discovered one,
+and it is never read off the wire: a front able to set it could publish work
+its offeree is forbidden to hand back. Only `openWave` says `"planned"`;
+everything published through `parley work` is `"discovered"`.
 
 ## Why it is built this way
 
@@ -107,7 +107,7 @@ other direct CLI command: it reports the problem on stderr —
 `parley: <reason> — continuing without coordination` — and exits clean
 rather than blocking (`src/cli/main.ts:183-189`). A shape change that does
 land is announced loudly to everyone on the bus, at high priority, naming
-both the new value and the one it replaced (`src/state/machine.ts:119-126`),
+both the new value and the one it replaced (`src/state/machine.ts:125-132`),
 for the same reason a mode change is: this setting belongs to the repository,
 and a front picking one for itself would make it theatre for every front
 that did not agree.

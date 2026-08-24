@@ -9,3 +9,4 @@ docs/.vitepress/cache
 
 # .parley/notes.md is versioned on purpose; only local runtime state is ignored
 .parley/state/
+.parley/worktrees/

@@ -38,6 +38,27 @@ export interface Participant {
    * id where there is one. This, not the name, is what identity is keyed on.
    */
   session: string | null;
+  /**
+   * Who created this session. `parley` fronts are the only ones parley can
+   * genuinely wake, because it owns their process — see §4.6 of the spec.
+   *
+   * Written from `PARLEY_BORN`, which `bearFront` puts in the newborn's
+   * environment and `resolveIdentity` reads back. Set once, at the join that
+   * created this participant, and never revised: the only direction a later
+   * revision could take is `person` -> `parley`, and that is the direction
+   * that makes a person's session retirable by a frame anybody can send.
+   */
+  born: "person" | "parley";
+  /**
+   * When this front was last invited to retire, or `null` when it has no
+   * standing invitation.
+   *
+   * Rung once per episode — the same discipline as `nudgedAtMs` on a work
+   * item and `ownerNudgedAtMs` on a permission request. Without it the daemon
+   * re-sent the notice and re-attempted the cleanup on every tick and before
+   * every command, for as long as the front stayed on the bus.
+   */
+  retireNudgedAtMs: number | null;
 }
 
 export interface Claim {
@@ -254,6 +275,26 @@ export interface State {
   brain: { active: boolean; model: string | null; askedAtMs: number | null };
   /** Set by `parley plan <file>` under `shape plan`; null otherwise. */
   plan: PlanState | null;
+  /** When capacity was last asked for. The cooldown is what stops a big pool becoming six fronts in ten seconds. */
+  lastBirthMs: number | null;
+  /**
+   * Whether parley may start any more fronts. A person's switch, and the only
+   * thing on this bus that is.
+   *
+   * §4.7 of the design: a human on this bus has a voice and not a vote —
+   * territory and permission are for the fronts to settle among themselves,
+   * because an unanswered request that degrades into a request for a person's
+   * attention is the failure the whole design avoids. Capacity is the one
+   * exception, and it is narrow: starting a front spends somebody's money on
+   * somebody's account, and no front is ever the right one to decide that.
+   *
+   * It is on the state and not in `spawn.json` because it is a decision, not a
+   * configuration: it is journalled, it survives a restart, and it appears in
+   * the panel of everyone watching the moment it is taken. A ceiling of six
+   * that a person has to edit a file to change is a different thing from a
+   * switch they can throw while they watch the bill.
+   */
+  birthsAllowed: boolean;
 }
 
 /**
@@ -278,7 +319,7 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
-    work: [], plan: null,
+    work: [], plan: null, lastBirthMs: null, birthsAllowed: true,
     brain: { active: false, model: null, askedAtMs: null },
   };
 }

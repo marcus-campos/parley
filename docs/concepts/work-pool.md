@@ -29,7 +29,7 @@ FINANCEIRO does not have to poll for this. The offers ride the same footer
 every hook and MCP response already carries, capped at three named lines
 before it falls back to a count so the pool itself never becomes the token
 cost it exists to avoid (`poolFooterFor`, `MAX_NAMED_OFFERS = 3`,
-`src/state/work.ts:773-801`).
+`src/state/work.ts:809-837`).
 
 FINANCEIRO takes ten of the twelve:
 
@@ -51,7 +51,7 @@ parley drop w_0011 --reason "does not apply in this file"
 ```
 
 Dropping costs nothing: the item goes straight back to `open`
-(`src/state/work.ts:723-731`), and its earlier nudge state is cleared too, so
+(`src/state/work.ts:717-725`), and its earlier nudge state is cleared too, so
 returning an item to the pool always starts a clean clock rather than
 inheriting whatever staleness it had before (`src/state/work.ts:730`).
 
@@ -104,7 +104,7 @@ five-minute presence lease on purpose (`DEFAULTS.LEASE_TTL_MS`,
 `src/protocol/types.ts:69`), so a front that stopped renewing that long ago
 reads as gone rather than as idle capacity waiting to be pinged. It addresses exactly one idle front, at high priority, and stamps
 every stale item as nudged so the same one is never rung twice
-(`src/state/machine.ts:352-372`).
+(`src/state/machine.ts:390-410`).
 
 ## What happens when it fails
 
@@ -113,13 +113,13 @@ pool automatically after five minutes, the same window an unanswered
 permission request gets, matched on purpose
 (`DEFAULTS.OFFER_TTL_MS`, `src/protocol/types.ts:75`), and the return is
 announced by name rather than happening quietly
-(`src/state/machine.ts:333-349`).
+(`src/state/machine.ts:371-387`).
 
 A front holding a **taken** item that goes dark does not lose it the instant
 its lease lapses either. The item is stamped orphaned immediately but only
 actually returned to the pool after the same sixty-second grace period a
 claim gets (`DEFAULTS.ORPHAN_GRACE_MS`, `src/protocol/types.ts:73`;
-`src/state/machine.ts:308-331`), so a front that is merely restarting does
+`src/state/machine.ts:346-369`), so a front that is merely restarting does
 not come back to find its work already given away.
 
 If the daemon cannot be reached at all, `work`, `works`, `take`, `drop` and

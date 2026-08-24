@@ -41,7 +41,7 @@ Claims come in two strengths for the same reason. An **auto-claim**, taken
 by a first edit rather than declared, expires after 15 idle minutes so a
 front that swept the repository does not end up owning half of it forever;
 an explicit `claim` over an existing auto-claim promotes it and it stops
-expiring (`src/state/territory.ts:174-181`, `src/state/machine.ts:268-284`,
+expiring (`src/state/territory.ts:174-181`, `src/state/machine.ts:306-322`,
 `DEFAULTS.AUTO_CLAIM_TTL_MS` at `src/protocol/types.ts:67`). Explicit claims
 never expire from inactivity — only from a dead front, and even then not
 immediately (see below).
@@ -64,7 +64,7 @@ minutes — is marked gone, and its claims are stamped `orphaned` immediately
 rather than dropped on the spot: they are released only after a 60-second
 grace period, so a session that is merely restarting gets its territory
 back instead of having to fight for it
-(`src/state/machine.ts:251-266`, `DEFAULTS.ORPHAN_GRACE_MS` at
+(`src/state/machine.ts:288-303`, `DEFAULTS.ORPHAN_GRACE_MS` at
 `src/protocol/types.ts:73`). And in `off` mode, `claim` is a documented
 no-op — `{"claimed": [], "ignored": true}` — rather than an error, so
 turning territory off never breaks a script written against it

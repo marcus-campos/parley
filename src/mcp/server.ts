@@ -1,7 +1,7 @@
 import { ParleyClient, ParleyUnreachable } from "../client/client";
 import { createDecoder } from "../protocol/codec";
 import { locateRepo, type RepoInfo } from "../repo/locate";
-import { resolveIdentity } from "../cli/identity";
+import { joinFrame, resolveIdentity } from "../cli/identity";
 import { VERSION } from "../version";
 
 /**
@@ -402,6 +402,8 @@ export async function runMcpServer(): Promise<void> {
 
   let client: ParleyClient | null = null;
   let joined = false;
+  /** Unsolicited frames, held until the next tool response can carry them. */
+  const pushed: unknown[] = [];
 
   async function ensure(): Promise<ParleyClient | null> {
     if (!repo) return null;
@@ -414,19 +416,24 @@ export async function runMcpServer(): Promise<void> {
     }
     if (!joined) {
       const identity = resolveIdentity(repo.cwd, repo.cwd);
-      let response = await client.request({
-        op: "join", name: identity.name, mission: identity.mission,
-        harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
-        connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
+      const join = (name?: string) => joinFrame(identity, {
+        cwd: repo.cwd, kind: "agent", connected: true,
+        session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
+        ...(name ? { name } : {}),
       });
+      let response = await client.request(join());
       if (!response.ok && response.error.code === "NAME_TAKEN" && "suggestion" in response.error) {
-        response = await client.request({
-          op: "join", name: String(response.error.suggestion), mission: identity.mission,
-          harness: identity.harness, cwd: repo.cwd, kind: "agent", branch: identity.branch,
-          connected: true, session: process.env.PARLEY_SESSION ?? `mcp-${process.pid}`,
-        });
+        response = await client.request(join(String(response.error.suggestion)));
       }
       joined = response.ok;
+      // This front joins `connected: true`, which is what tells the daemon it
+      // is reachable immediately and may be pushed to. Declaring that and then
+      // registering no handler meant every unsolicited frame was dropped by
+      // the client while the daemon marked those events read — the same
+      // "generated, never delivered" shape the retirement notice had. There is
+      // no place to render a push here, so it is held and folded into the next
+      // tool response's footer, which is where this harness reads everything.
+      client.onPush((events) => { for (const e of events) pushed.push(e); });
     }
     return client;
   }
@@ -443,8 +450,12 @@ export async function runMcpServer(): Promise<void> {
       pool?: string;
     };
     const parts: string[] = [];
-    if (d.events.length) {
-      const lines = d.events.map(
+    // Whatever arrived unsolicited since the last tool call, ahead of the
+    // drain that follows it. `drain` will not return these a second time: the
+    // daemon moved the cursor past them when it pushed them.
+    const events = [...(pushed.splice(0) as typeof d.events), ...d.events];
+    if (events.length) {
+      const lines = events.map(
         (e) => `${e.priority === "high" ? "[!] " : ""}${e.from ? `${e.from.name}${e.from.kind === "human" ? " (human)" : ""}` : "parley"}: ${e.text}`,
       );
       parts.push(`Messages from the other sessions working in this repository:\n${lines.join("\n")}`);

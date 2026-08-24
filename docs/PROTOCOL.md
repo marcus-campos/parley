@@ -226,10 +226,48 @@ this is a clean exit.
     {"id":"p_0001","name":"FINANCEIRO","mission":"month-end closing",
      "harness":"claude-code","kind":"agent","connected":true,
      "since":"2026-08-18T13:50:00Z","idle_s":12,
-     "claims":["src/backend/finance/**"]}]}
+     "claims":["src/backend/finance/**"]}],
+   "births":{"allowed":true,"max":6,"live":1}}
 ```
 
+`births` is whether parley may start more fronts, the ceiling from `spawn.json`,
+and how many agent fronts are live against it — carried here so a panel showing
+that switch needs no second round trip. See `summon` in §6.9.
+
 This is the memory of "who touches what" that a markdown board never had.
+
+#### `wake`, and the one front parley may wake
+
+`join` may carry `wake`: **an address the front's own harness published for
+it**, and nothing else. Claude Code puts one in `CLAUDE_CODE_MESSAGING_SOCKET`;
+a front reads its own environment and reports what it finds. parley never
+writes this field and never uses it to act — it hands the address back to
+whoever asked that front a question and has been waiting, so *they* can wake it
+with the session tool their own harness gives them. It is kept to the shape of
+an address: one line, at most 512 characters. Anything else is not recorded.
+
+The reason parley does not do the waking is stated in `src/state/types.ts` and
+holds for every front a person opened: the format belongs to the harness, and
+guessing it means sending malformed bytes into somebody's live session.
+
+**A front parley started is the one place that reasoning does not apply**, and
+it is worth stating because it is the only exception in the protocol. parley is
+the parent of that process: it chose the command, it holds the pipes, and
+`born: "parley"` on the participant is what records it. That is what licenses
+the two things parley will do to such a front and to no other — invite it to
+retire when the pool is empty, and collect its worktree once it has gone — and
+neither of those is anything a person's session can be subjected to.
+
+What that exception does **not** license today is waking. A front parley bears
+is started as a one-shot run (`claude -p …`) with its standard input closed,
+and in `terminal` mode the process parley holds is the terminal launcher rather
+than the agent. So parley owns the newborn's *output*, not its attention: see
+`output` below, which is why the panel is a newborn's window.
+
+`born` is set once, from `PARLEY_BORN`, at the join that creates the
+participant, and is never revised by a later frame. The only direction a
+revision could take is `person` → `parley`, which would make somebody's own
+session retirable by a frame anyone can send.
 
 ### 6.2 Conversation
 
@@ -581,6 +619,7 @@ otherwise they would hold only for as long as every client behaved.
 | `join`, `who`, `drain`, `requests`, `notes`, `status` | **allowed** — this is what watching is |
 | `say` | **allowed**, always delivered at `priority: "high"`, marked as human |
 | `claim`, `release`, `ask`, `grant`, `deny` | **allowed**, exactly like an agent — none of them is gated by `kind` |
+| `summon` with `allow` | **allowed, and refused for an agent** — see §6.9 |
 
 None of the five share one mechanism, and it would overstate things to say so.
 `release`, `grant` and `deny` are ownership-gated: refused `NOT_OWNER` unless
@@ -590,6 +629,14 @@ overlap with anyone's territory, human or agent, regardless of who is asking.
 else holds is the entire point of the op. What all five have in common, and
 the only thing this row claims, is that a human hits exactly the same check
 an agent would — never a `kind`-only refusal.
+
+**Spending is the one thing that runs the other way.** Starting a front spends
+somebody's money on somebody's account, and no front is ever the right one to
+decide that — so `summon` with an `allow` field is refused for an *agent* with
+the same `OBSERVER_ONLY`, in the opposite direction from every other use of that
+code in this document. It is the narrow exception §4.7 of the design describes:
+a human here has a voice and not a vote, except on the bill.
+
 
 `grant` and `deny` refuse with `NOT_OWNER` unless `request.ownerId === me.id`,
 for a human the same as for an agent. That check is what keeps this safe: a
@@ -775,6 +822,69 @@ offeree is forbidden to hand back, aimed by construction at whoever already
 holds the path — the front that discovered the work acquiring authority over the
 front that holds the file. `planned` items are created by `plan` and by the
 review a `done` spawns, and by nothing else.
+### 6.9 Fronts parley started
+
+#### `summon`
+
+```json
+→ {"v":1,"op":"summon","reason":"three items in the pool and nobody free"}
+← {"ok":true,"summoned":true,"reason":"three items in the pool and nobody free"}
+```
+
+A front asking for capacity. Refused with `NO_CAPACITY` at the ceiling
+(`maxFronts` in `spawn.json`), and refused with `NO_CAPACITY` while a person has
+stopped parley starting fronts.
+
+```json
+→ {"v":1,"op":"summon","allow":false}
+← {"ok":true,"birthsAllowed":false,"maxFronts":6,"live":2}
+```
+
+The same op with an `allow` field is a **different frame with a different
+owner**: it settles whether parley may start fronts at all, and only a
+participant that joined as `kind: "human"` may send it. An agent gets
+`OBSERVER_ONLY`.
+
+The veto stops both routes to a birth — the automatic one in `tick`, and a
+front asking by name — and stops nothing else. The pool stays open, every front
+already on the bus keeps working, and nothing is retired. It is journalled, so
+it survives a restart: a person's decision about their own money is not
+something an unrelated daemon restart quietly reverses.
+
+The change is broadcast at high priority, once, on the change. Re-affirming a
+veto already in place is not a louder veto.
+
+`who` carries `births: {allowed, max, live}` so a panel can show what the switch
+is switching without a second round trip.
+
+#### `output`
+
+```json
+→ {"v":1,"op":"output","after":41}
+← {"ok":true,"lines":[
+    {"n":42,"name":"POOL-1","text":"reading the pool","at":"2026-08-20T12:00:00Z"}]}
+```
+
+The tail of what fronts parley bore have printed — stdout and stderr, one line
+each, in the order they arrived. `after` is a cursor: pass the highest `n` you
+have already seen and only newer lines come back. Omit it for everything the
+daemon still holds.
+
+**This is not the bus, on purpose.** Bus events are journalled and drained into
+every other front's context; a harness printing its answer there would cost
+every agent on the repository the tokens to read it, which is the exact trade
+the pool footer exists to avoid. So these lines are held in the daemon, are
+never journalled, do not survive a restart, and reach nobody who does not ask.
+Panels ask.
+
+The buffer is a ring — the last 300 lines across all newborns, each truncated
+to 240 characters — so a runaway child overwrites its own oldest output rather
+than growing the daemon. Reading these pipes is also what keeps a newborn from
+wedging: a pipe nobody drains fills at 64KB and blocks the child on its next
+write, forever.
+
+Only `panel` mode produces any. A front started in `terminal` mode prints into
+its own window, which is where a person can already see it.
 
 ---
 
