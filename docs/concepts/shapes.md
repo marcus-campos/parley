@@ -18,6 +18,27 @@ a claim is. Three values are recognised at the protocol level —
 that never sets one runs `bus`, the default `emptyState` starts every new
 bus with (`src/state/types.ts:320`).
 
+
+```mermaid
+flowchart TB
+    subgraph bus["<b>bus</b> — the default"]
+        direction LR
+        B1["you find work"] --> B2["you say it<br/>in chat"] --> B3["it evaporates<br/>with the scrollback"]
+    end
+    subgraph pool["<b>pool</b>"]
+        direction LR
+        P1["you find work"] --> P2["parley work"] --> P3["whoever holds<br/>the path is offered it"] --> P4["or it waits<br/>in the pool"]
+    end
+    subgraph plan["<b>plan</b>"]
+        direction LR
+        L1["a written plan"] --> L2["parley plan"] --> L3["waves computed<br/>from declared paths"] --> L4["each finished task<br/>spawns its review"]
+    end
+```
+
+`shape` is a separate axis from `mode`. `mode` decides what happens when two
+sessions want the same file; `shape` decides where work comes from. They do not
+interact, and setting one never changes the other.
+
 ## `bus` — conversation and territory, nothing more
 
 `bus` is everything parley shipped first: presence, talking, claiming,

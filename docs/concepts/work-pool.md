@@ -5,6 +5,25 @@ sweep that turns up more than the task that started it. Turn it on with
 `parley shape pool` (see [shapes](/concepts/shapes) for how that setting
 relates to `mode`); everything below only runs once that is set.
 
+
+```mermaid
+stateDiagram-v2
+    [*] --> offered: published, and somebody<br/>holds one of its paths
+    [*] --> open: published, nobody holds it
+    offered --> taken: they take it
+    offered --> open: they drop it
+    offered --> open: 5 min, no answer
+    open --> taken: anybody idle takes it
+    taken --> done: parley done
+    taken --> open: its holder died
+    done --> [*]
+```
+
+Two things worth reading twice. **An offer expires** — silence returns the item
+to the pool rather than parking it forever on somebody who stopped reading. And
+**a dead holder's item comes back**, because the alternative is work that
+disappears with a window nobody noticed closing.
+
 ## Walking one item through it
 
 Hypothetically, a front is chasing something unrelated and notices the

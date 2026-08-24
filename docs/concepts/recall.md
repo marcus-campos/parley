@@ -8,10 +8,43 @@ Recall has two layers, and only one of them is ever guaranteed to be there.
 > The brain is strictly additive on top of this.
 > (`src/brain/lexical.ts:23-29`)
 
-This page describes that floor in full, because it is what exists on this
-branch. The second layer — an opt-in embedding model — is designed and
-partly built elsewhere; what is true of it here is stated plainly, and
-nothing more.
+Both layers exist. The floor is always on; the brain is opt-in, off until a
+person turns it on and chooses a model.
+
+```mermaid
+flowchart TB
+    Q["parley notes --query 'how does the footer cap work'"] --> L
+    L["<b>lexical floor</b><br/>identifier-aware tokens → BM25<br/>→ distinctiveness check"] --> F
+    B{"is the brain on?"}
+    Q --> B
+    B -- "no (default)" --> F
+    B -- yes --> V["<b>vector search</b><br/>debias → cosine<br/>→ absolute floor"]
+    V --> F["<b>fuse</b><br/>reciprocal rank"]
+    F --> R["the k that matter,<br/>or nothing at all"]
+```
+
+The brain is **strictly additive**. Remove it and every query still answers —
+that is the property the whole design is arranged around, and it is why the
+floor is described first here.
+
+## Two ways a note reaches you
+
+Anchored notes arrive without anyone asking; queried notes are pulled. They are
+different channels and it is worth knowing which is which.
+
+```mermaid
+flowchart LR
+    subgraph Push["pushed at you"]
+        C["you claim src/api/**"] --> N1["notes anchored to<br/>those paths arrive<br/>in your footer"]
+    end
+    subgraph Pull["you ask"]
+        Q2["parley notes --query '...'"] --> N2["the k best,<br/>ranked"]
+    end
+```
+
+The first costs you nothing and needs no query: someone left a note anchored to
+a path, and you claimed that path. The second is for the question that has no
+single path to anchor on.
 
 ## The floor: tokens, then BM25, then a distinctiveness check
 
@@ -84,37 +117,82 @@ same unranked list a plain `notes` call without `--query` gets
 (`src/daemon/server.ts:703-707`), which is the same "never let a broken part
 stop the work" shape territory and permission already follow.
 
-## The brain: designed as the second layer, not operable here
+## The brain: opt-in, local, and the person's call
 
-A `brain` field already exists on state — `{ active, model, askedAtMs }`
-(`src/state/types.ts:269-275`) — and a daemon-side handler for `parley brain
-enable <model>` / `disable` exists in the state machine
-(`src/state/machine.ts:151-188`). Turning it on is deliberately gated to a
-human, not a front:
+Above the floor sits an optional embedding model. It runs locally, it is off by
+default, and turning it on is a decision only a person can make:
 
 > A download this size and a model choice spend somebody's disk and somebody's
 > money, on somebody's machine, and an agent cannot answer the interactive
 > prompt that decision deserves on that person's behalf.
 > (`src/state/machine.ts:138-141`)
 
-The model registry backs that up with a size up front rather than after the
-fact — one static model listed today, `potion-multilingual-128M`, with
-its size, checksum, and source declared before anything is fetched
-(`src/brain/registry.ts:1-33`).
+An agent that runs `parley brain enable` is refused — `OBSERVER_ONLY`, with that
+sentence attached. That refusal is the *only* place in parley where a front is
+turned away for being a front rather than for holding the wrong thing.
 
-That is as far as this branch goes. There is no `src/brain/embed.ts` and no
-`src/brain/download.ts` — nothing here actually fetches or runs a model, and
-the registry's own comment is explicit that the downloader described is a
-separate piece: *"the downloader refuses anything that does not match"*
-(`src/brain/registry.ts:20-21`) — a downloader this branch does not contain.
-Nor is there a shipped way to reach `op: "brain"` at all: neither the CLI nor
-the MCP server nor the terminal/web panel wires it up. A front that asks for
-`semantic` recall while the brain is off is still answered from the floor,
-unconditionally — and earns exactly one high-priority nudge into the
-conversation feed, never a repeat, so asking again cannot turn this into
-noise (`src/state/notes.ts:57-71`). It is a plain system event today, not a
-dedicated control; the person's decision this page describes is designed to
-happen in the panel, and is not wired to one here.
+### What the person sees before anything downloads
+
+```mermaid
+sequenceDiagram
+    participant P as Person
+    participant CLI as parley
+    participant HF as the model host
+
+    P->>CLI: parley brain enable --human
+    CLI-->>P: the registry — name, languages,<br/>size, and whether this build can load it
+    P->>CLI: parley brain enable <name> --human
+    CLI-->>P: "downloading <name> (~489 MB)…"
+    Note over CLI: the size is said before a byte moves
+    CLI->>HF: fetch
+    HF-->>CLI: bytes
+    CLI->>CLI: verify sha256
+    alt checksum matches
+        CLI-->>P: brain enabled
+    else it does not
+        CLI-->>P: refused — the brain stays off
+    end
+```
+
+The listing marks entries this build cannot load, rather than offering a choice
+that cannot work. Downloading first and finding that out afterwards would spend
+somebody's disk on an outcome that was already certain.
+
+### How it changes a query
+
+Once on, every ranked query runs both layers and fuses them by reciprocal rank.
+What the brain buys is **paraphrase**: a Portuguese note about *"o menu
+lateral"* found by an English query about *"hidden sidebar"* — no shared tokens
+at all, which is exactly what the floor cannot do.
+
+The vector side has its own floor, measured from the model rather than guessed:
+
+```mermaid
+flowchart LR
+    A["the model's<br/>own vocabulary"] --> B["sample pairs<br/>that share no token"]
+    B --> C["that is the null:<br/>what 'unrelated' scores"]
+    C --> D["floor = mean + 4σ"]
+    D --> E{"a hit scores<br/>above it?"}
+    E -- yes --> F[returned]
+    E -- no --> G[silence]
+```
+
+A fixed threshold cannot work here: against dense models nearly every cosine is
+positive, so *"greater than zero"* filters nothing. The floor is computed when
+the model loads, from that model's own distribution — so it is right for
+whichever model a person chose, and needs no per-model tuning.
+
+### What you should do about it
+
+Nothing, mostly. Query the same way whether it is on or off:
+
+```bash
+parley notes --query "how does the footer cap work" --k 3
+```
+
+If the brain is off and you asked for semantic recall, the bus says so once —
+one high-priority notice, never repeated, so asking again cannot turn it into
+noise. You still get an answer; it comes from the floor.
 
 ## What happens when it fails
 

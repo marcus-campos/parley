@@ -46,8 +46,14 @@ describe("what the site cites", () => {
 
     // Vacuity: if the regex or the walker ever finds nothing, every
     // comparison below passes over an empty set.
-    expect(pinned.length).toBeGreaterThanOrEqual(90);
-    expect(current.length).toBeGreaterThanOrEqual(90);
+    //
+    // 80, not 90: the README shrank to an introduction and the five citations
+    // that lived in the sections it lost went with them. The number moved
+    // because the corpus did — the re-pin that came with it was 100 lines
+    // removed and zero added, which is what says no surviving citation
+    // changed where it points.
+    expect(pinned.length).toBeGreaterThanOrEqual(80);
+    expect(current.length).toBeGreaterThanOrEqual(80);
 
     // Compared per (page, source file) so the report can say which page went
     // stale and against which file, rather than diffing 1000 lines.

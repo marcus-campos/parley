@@ -71,7 +71,8 @@ function shingleOverlap(a: string, b: string): number {
 describe("the site never becomes a second copy", () => {
   test("every guide page exists", () => {
     expect(guidePages().sort()).toEqual([
-      "install.md", "panel.md", "setup.md", "what-it-is.md", "where-it-fits.md",
+      "for-agents.md", "getting-started.md", "install.md", "panel.md",
+      "setup.md", "what-it-is.md", "where-it-fits.md", "workspaces.md",
     ]);
   });
 

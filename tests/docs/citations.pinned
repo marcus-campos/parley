@@ -382,111 +382,11 @@
 |         // degrade is the same unranked list a plain notes/results call gets.
 |         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
 |       }
-@ docs/concepts/recall.md src/state/types.ts 2b5fb96f7212
-|   /**
-|    * The optional layer above the lexical floor. `active`/`model` are the
-|    * person's decision (`parley brain enable`, human-only — see machine.ts);
-|    * `askedAtMs` is parley's own nudge-once bookkeeping for the panel notice
-|    * raised the first time a front wants semantic recall while it is off.
-|    */
-|   brain: { active: boolean; model: string | null; askedAtMs: number | null };
-@ docs/concepts/recall.md src/state/machine.ts f7a0fc239b98
-| function brain(state: State, actorId: string | null, frame: Record<string, unknown>, ctx: Ctx): Outcome {
-|   const acting = frame.enable !== undefined || frame.disable !== undefined;
-|   if (!acting) {
-|     // `may_enable` lets a caller (the CLI) find out whether it is even worth
-|     // attempting a download before spending one byte on it — the daemon
-|     // already knows `me.kind` for free. This is a courtesy for callers that
-|     // choose to probe first; it is not the gate. A client that skips the
-|     // probe and sends `enable` directly is still refused below, by `me.kind
-|     // !== "human"`, exactly as before.
-|     const me = actorOf(state, actorId);
-|     return {
-|       state,
-|       response: ok({ active: state.brain.active, model: state.brain.model, may_enable: me?.kind === "human" }),
-|       broadcast: [],
-|     };
-|   }
-|
-|   const me = actorOf(state, actorId);
-|   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
-|   if (me.kind !== "human") {
-|     return {
-|       state,
-|       response: err(
-|         "OBSERVER_ONLY",
-|         "brain enable/disable is the person's call, not a front's — it is somebody's disk and somebody's money",
-|       ),
-|       broadcast: [],
-|     };
-|   }
-|
-|   const before = { active: state.brain.active, model: state.brain.model };
-|
-|   if (frame.disable === true) {
-|     state.brain.active = false;
-|     state.brain.model = null;
-|     // A fresh "off" period earns its own one-time panel nudge, same as the
-|     // period that started at first boot.
-|     state.brain.askedAtMs = null;
 @ docs/concepts/recall.md src/state/machine.ts 0375a6f707bc
 |  * front is stuck on the floor. Turning the brain on or off is a different
 |  * matter: a download this size and a model choice spend somebody's disk and
 |  * somebody's money, on somebody's machine, and an agent cannot answer the
 |  * interactive prompt that decision deserves on that person's behalf.
-@ docs/concepts/recall.md src/brain/registry.ts ee630e39b493
-| export interface BrainModel {
-|   name: string;
-|   dims: number;
-|   /** Human-readable, shown at the prompt before anyone agrees to a download. */
-|   languages: string;
-|   bytes: number;
-|   url: string;
-|   sha256: string;
-|   /** `wordlevel` needs only a regex split. `xlmr` needs a real tokenizer. */
-|   tokenizer: "wordlevel" | "xlmr";
-| }
-|
-| /**
-|  * Static models only.
-|  *
-|  * A token lookup table plus pooling: deterministic, microseconds, and no
-|  * per-platform native runtime — which is what keeps the Windows, WSL and arm64
-|  * work intact. Transformer models are excluded on all three counts.
-|  *
-|  * `sha256` and `bytes` are the published asset's, read from the host's own
-|  * metadata rather than guessed: the hash is what the downloader refuses on, and
-|  * the size is what a person is shown before they agree to spend their disk. A
-|  * placeholder in either is worse than no entry — one refuses every download
-|  * that would have worked, and the other asks for consent against a number that
-|  * is not the number.
-|  */
-| export const MODELS: BrainModel[] = [
-|   {
-|     // Not "-int8": there is no int8 asset in that repository, and the URL
-|     // below serves the full-precision weights. The name promised a file that
-|     // does not exist.
-|     name: "potion-multilingual-128M",
-|     dims: 256,
-@ docs/concepts/recall.md src/brain/registry.ts a73cb5e1c0d6
-|  * `sha256` and `bytes` are the published asset's, read from the host's own
-|  * metadata rather than guessed: the hash is what the downloader refuses on, and
-@ docs/concepts/recall.md src/state/notes.ts a3e0fe85b248
-|  * A front asking for `semantic` recall cannot be blocked on a prompt it has no
-|  * way to answer — a model choice and a download this size are the person's call
-|  * (see `brain` in machine.ts) — so the request is answered from the lexical
-|  * floor unconditionally. What it earns instead is one notice, and only one:
-|  * `askedAtMs` is the same once-only bookkeeping the permission and question
-|  * nudges elsewhere in `src/state/` already use, so a front that keeps asking
-|  * cannot turn this into noise.
-|  *
-|  * The once is bus-wide, not per-front, and deliberately so: it announces that
-|  * *somebody* wants semantic recall, which is a fact about the bus and needs
-|  * saying once, not once per front that happens to ask.
-|  *
-|  * Shared with `listResults` rather than duplicated there. `notes --query` and
-|  * `results --query` are the same request against two corpora — the daemon even
-|  * resolves them through the same ranking — so which of the two a front happens
 @ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
 |       } catch (e) {
 |         // A broken index must never take the query down with it — the honest

@@ -384,114 +384,29 @@ describe("a flag that only exists on one side is an error too", () => {
 // missing from the "Talking" table. This is the third cross-check — README rows
 // against the dispatch — so the tables cannot drift again while the page holds
 // still.
-describe("the README's command tables agree with the CLI", () => {
+describe("the README does not keep a second command list", () => {
   /** The first cell of every `| `parley ...` |` row, prose column dropped. */
   function commandCells(): string[] {
     const readme = readFileSync(join(root, "README.md"), "utf8");
     return [...readme.matchAll(/^\| (`parley [^|]*?) *\|/gm)].map((m) => m[1]!);
   }
 
-  test("every command the CLI dispatches has a row, and every row a command", () => {
-    const cells = commandCells();
-    // A regex that stopped matching would make both set comparisons trivially
-    // equal to each other and to nothing.
-    expect(cells.length).toBeGreaterThanOrEqual(40);
-
-    const inTables = new Set<string>();
-    for (const cell of cells) {
-      for (const m of cell.matchAll(/`parley ([a-z][a-z0-9-]*)/g)) inTables.add(m[1]!);
-    }
-    // Both directions: a row for a command nobody can run is the same defect
-    // pointing the other way.
-    expect([...inTables].sort()).toEqual(dispatchedCommands(mainSource).sort());
+  // This check used to run the other way: the README carried the command tables
+  // and this asserted they matched the CLI in both directions. They are gone —
+  // `docs/reference/commands.md` is generated from `USAGE` and is the one list.
+  //
+  // Inverting the assertion rather than deleting it is the point. A deleted
+  // check would let the tables come back, and a hand-written table beside a
+  // generated one is exactly the second source of truth the generator was built
+  // to remove: it goes stale silently, and it is the copy a reader is likelier
+  // to land on first.
+  test("the tables are gone, and stay gone — the generated reference is the list", () => {
+    expect(commandCells()).toEqual([]);
   });
 
-  test("every flag the tables spell is a flag the help text offers", () => {
-    // `parley history [--limit N] [--since SEQ]` sat here while main.ts's
-    // history case sends only `limit` — the daemon op takes `since`, the
-    // command line never passes it, and the README promised it anyway.
-    const usage = parseUsage(mainSource);
-    const documented = new Set<string>();
-    for (const group of usage.groups) {
-      for (const command of group.commands) {
-        for (const variant of command.variants) for (const flag of variant.flags) documented.add(flag);
-      }
-    }
-    for (const line of usage.globalFlags) {
-      for (const m of line.matchAll(/--[a-z][a-z0-9-]*/g)) documented.add(m[0]);
-    }
-
-    let checked = 0;
-    const unknown: string[] = [];
-    for (const cell of commandCells()) {
-      for (const m of cell.matchAll(/--[a-z][a-z0-9-]*/g)) {
-        if (!documented.has(m[0])) unknown.push(`${m[0]} (in ${cell.trim()})`);
-        checked++;
-      }
-    }
-    expect(checked).toBeGreaterThanOrEqual(20);
-    expect(unknown).toEqual([]);
-  });
-
-  test("every flag any published page spells is one the CLI actually reads", () => {
-    // Two rounds of this class, found the same way and one page apart.
-    //
-    // `--open=false` sat in a README bullet under "In the browser" for the
-    // whole life of this branch, promising a flag read nowhere: the spelling
-    // is `--no-open`, and `parley watch --web --open=false` opened the browser
-    // anyway. It survived a whole-branch review and two fix rounds because
-    // reconcileFlags check 3 reads USAGE and the README cross-check above
-    // reads *table rows*, and this was a bullet.
-    //
-    // The guard built for it read `README.md` and nothing else, so
-    // `docs/ARCHITECTURE.md:72` kept documenting `--speak` — a flag that
-    // exists nowhere in `src/`; speaking on the terminal panel is the `i`
-    // keypress at `src/cli/watch.ts:469`, which USAGE itself says. That page
-    // is in the sidebar (docs/.vitepress/config.ts). A guard whose scope is
-    // one file closes the class for one file.
-    //
-    // WHAT THIS STILL CANNOT SEE, all accepted. The `--` anchor is what makes
-    // the scan cheap enough to run over every page without false positives,
-    // and it is the whole cost:
-    //   - a flag written without it ("the `open` flag", "pass open=false");
-    //   - a flag whose first character is not [a-z] (`--Web`, `--2fa`) — the
-    //     CLI has none, and loosening it makes `--` in prose match;
-    //   - a flag hard-wrapped across a line break.
-    // Each needs a reader. What is closed is the spelled, unbroken, published
-    // `--flag` — which is every instance either round actually found.
-    const known = flagsTheCliReads();
-
-    // Flags of other people's tools, quoted on a page as examples. Asserted by
-    // equality, so the list cannot quietly grow to swallow a real defect — the
-    // same arrangement as the sidebar exclusion set.
-    const NOT_PARLEYS: Record<string, string> = {
-      "--compile": "bun build --compile, in the packaging section",
-      "--git-common-dir": "git rev-parse --git-common-dir, the bus key",
-      "--noEmit": "tsc --noEmit",
-    };
-    expect(known.size).toBeGreaterThanOrEqual(20);
-
-    const pages = ["README.md", ...sitePages(join(root, "docs"))];
-    // Vacuity: a `sitePages` that returned nothing would pass silently.
-    expect(pages.length).toBeGreaterThanOrEqual(10);
-
-    let checked = 0;
-    const unknown: string[] = [];
-    const foreign = new Set<string>();
-    for (const page of pages) {
-      const text = readFileSync(join(root, page), "utf8");
-      for (const flag of new Set([...text.matchAll(/--[a-z][A-Za-z0-9-]*/g)].map((m) => m[0]))) {
-        checked++;
-        if (known.has(flag)) continue;
-        if (flag in NOT_PARLEYS) foreign.add(flag);
-        else unknown.push(`${flag} (in ${page})`);
-      }
-    }
-    expect(checked).toBeGreaterThanOrEqual(40);
-    expect(unknown.sort()).toEqual([]);
-    // Both directions: an entry nobody needs is a hole waiting for a real
-    // defect to fall into.
-    expect([...foreign].sort()).toEqual(Object.keys(NOT_PARLEYS).sort());
+  test("and the README says where the list actually is", () => {
+    const readme = readFileSync(join(root, "README.md"), "utf8");
+    expect(readme).toContain("reference/commands");
   });
 });
 

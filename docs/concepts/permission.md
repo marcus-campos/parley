@@ -17,6 +17,22 @@ path; `scope: transfer` moves the whole overlapping claim to the requester
 (`src/state/permissions.ts:78-96`). A request's state machine is
 `pending → granted | denied | granted_by_timeout`.
 
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: parley ask &lt;path&gt; --reason
+    pending --> granted: the holder grants
+    pending --> denied: the holder denies,<br/>with a reason
+    pending --> granted_by_timeout: nobody answered
+    granted --> [*]
+    denied --> [*]
+    granted_by_timeout --> [*]: and it is said<br/>out loud on the bus
+```
+
+The timeout is the load-bearing part. A request that can hang forever costs
+every front waiting on it, so silence resolves — and resolves *toward* the
+asker, loudly enough that the holder finds out it happened.
+
 ## Why it is built this way
 
 An unanswered request does not stay pending forever — it becomes

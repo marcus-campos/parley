@@ -20,6 +20,22 @@ seen: immediately for a live connection, "on its next tool call" for a hook
 runs parley there" for a shell-only front with no hook at all
 (`src/state/types.ts:357-392`).
 
+
+```mermaid
+flowchart LR
+    J["join"] --> L["lease<br/><i>renewed on every call</i>"]
+    L -->|"renewed"| L
+    L -->|"5 min of silence"| G["gone"]
+    C["socket closes"] --> G
+    S["SessionEnd hook"] --> G
+    G --> R["what they held<br/>goes back"]
+```
+
+Three ways to leave, and only one of them is polite. The lease exists because
+the other two are what actually happens: a laptop closes, a process is killed,
+a window is shut. Presence that depends on saying goodbye is presence that
+lies.
+
 ## Why it is built this way
 
 The alternative — presence as nothing but an open socket — does not fit the

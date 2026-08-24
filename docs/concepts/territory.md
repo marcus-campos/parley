@@ -13,6 +13,26 @@ waiting: releasing a path that somebody has already asked for hands it to
 them immediately and announces it, rather than merely freeing it for them to
 race for.
 
+
+```mermaid
+flowchart TD
+    E["a session edits src/api/client.ts"] --> H{"the hook asks:<br/>does anybody hold it?"}
+    H -- "nobody" --> A["auto-claim it, quietly<br/><i>15 min, renewed on every edit</i>"]
+    H -- "you already do" --> W[work]
+    H -- "somebody else" --> M{mode}
+    M -- advisory --> T["told who, and what<br/>they said they were doing"]
+    M -- enforced --> R["refused, with the same<br/>information attached"]
+    A --> W
+    T --> W
+    R --> K["parley ask &lt;path&gt;"]
+```
+
+An **auto-claim** is what makes territory work without anyone remembering to
+claim: editing a file you nobody holds takes it, quietly, for fifteen minutes.
+An explicit `parley claim` is louder and lasts until you release it — it also
+carries an intent, which is what turns a collision into a conversation instead
+of a surprise.
+
 ## Why it is built this way
 
 Deciding whether two glob patterns can ever describe the same concrete path

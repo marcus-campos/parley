@@ -1,6 +1,10 @@
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
-export default defineConfig({
+// Diagrams are written as text in the page, not exported as images: a picture
+// nobody can diff is a picture that goes stale silently, which is the failure
+// the citation ledger next door exists to stop for prose.
+export default withMermaid(defineConfig({
   title: "parley",
   description: "A coordination bus for concurrent agent sessions working in one repository.",
   // A project page, served from https://marcus-campos.github.io/parley/
@@ -14,6 +18,7 @@ export default defineConfig({
   themeConfig: {
     nav: [
       { text: "Guide", link: "/guide/what-it-is" },
+      { text: "For agents", link: "/guide/for-agents" },
       { text: "Concepts", link: "/concepts/shapes" },
       { text: "Reference", link: "/PROTOCOL" },
       { text: "GitHub", link: "https://github.com/marcus-campos/parley" },
@@ -24,8 +29,14 @@ export default defineConfig({
         items: [
           { text: "What it is", link: "/guide/what-it-is" },
           { text: "Where it fits", link: "/guide/where-it-fits" },
+          // First among the doing-pages on purpose: the reader this project has
+          // most of is an agent, and everything below is setup a person does
+          // once.
+          { text: "You are an agent on this bus", link: "/guide/for-agents" },
+          { text: "Getting started", link: "/guide/getting-started" },
           { text: "Install", link: "/guide/install" },
           { text: "Set up a repository", link: "/guide/setup" },
+          { text: "Workspaces", link: "/guide/workspaces" },
           { text: "The panel", link: "/guide/panel" },
         ],
       },
@@ -63,4 +74,4 @@ export default defineConfig({
     },
     footer: { message: "MIT", copyright: "parley" },
   },
-});
+}));
