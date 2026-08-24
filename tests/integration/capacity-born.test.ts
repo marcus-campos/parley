@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ParleyDaemon } from "../../src/daemon/server";
 import { DEFAULTS } from "../../src/protocol/types";
 import { joinFrame, resolveIdentity } from "../../src/cli/identity";
-import { bearFront } from "../../src/spawn/birth";
+import { bearFront, harnessBin } from "../../src/spawn/birth";
 import { removeWorktreeIfClean, type WorktreeRemoval } from "../../src/spawn/worktree";
 import { RawClient } from "./harness";
 
@@ -62,7 +62,11 @@ function bearOne(repo: string): { env: Record<string, string>; worktree: string 
     index: 1,
     spawnFn: ((_cmd: string, _args: string[], opts: Record<string, unknown>) => {
       calls.push({ opts });
-      return { pid: 4242, unref() { /* detached */ } };
+      // `on` is not decoration. A real ChildProcess reports a binary it could
+      // not resolve asynchronously, as an `error` event, and an `error` event
+      // with no listener is an uncaught exception in the daemon's own process.
+      // A fake without `on` is a fake that cannot tell you that.
+      return { pid: 4242, unref() { /* detached */ }, on() { /* no events from a fake */ } };
     }) as never,
   });
   expect(born).not.toBeNull();
@@ -143,12 +147,57 @@ function pausedCollector(pretend?: WorktreeRemoval) {
 
 /** The real producer of a `join` frame, fed the real newborn environment. */
 function joinAsNewborn(env: Record<string, string>, worktree: string, session: string) {
-  savedEnv = { ...process.env };
+  savedEnv ??= { ...process.env };
   process.env.PARLEY_NAME = env.PARLEY_NAME;
   process.env.PARLEY_MISSION = env.PARLEY_MISSION;
   process.env.PARLEY_BORN = env.PARLEY_BORN;
   const identity = resolveIdentity(worktree, worktree);
   return joinFrame(identity, { cwd: worktree, kind: "agent", session });
+}
+
+/**
+ * A PATH with `git` on it and no harness anywhere, so the daemon's real birth
+ * path can be run end to end without ever starting a real agent session.
+ *
+ * This is the production failure verbatim: §the terminal a birth opens runs
+ * the person's shell, and a PATH or an auth difference yields a window
+ * printing `claude: command not found`. Everything that matters about that
+ * case happens *after* `addWorktree` has already created a full checkout and a
+ * branch.
+ *
+ * The probe at the end is a hard gate, not a courtesy: if `claude` were still
+ * reachable this would spawn a live, unsupervised, billed agent session in a
+ * temp repository, which is the one thing every test in this tree is written
+ * to avoid. It throws rather than degrading.
+ *
+ * The probe is written as the exact call `bearFront` makes — same binary, same
+ * explicit `env` — because that is the only thing that proves anything.
+ * Mutating `process.env.PATH` alone does *not* move a spawn under Bun: the
+ * lookup follows the `env` handed to the call, and `bearFront` hands it
+ * `{...process.env, ...identity}`. Written any other way this gate would pass
+ * while the real spawn still resolved.
+ */
+function harnessOffThePath(): void {
+  const binDir = mkdtempSync(join(tmpdir(), "parley-bin-"));
+  dirs.push(binDir);
+  const gitBin = (process.env.PATH ?? "").split(":")
+    .map((d) => join(d, "git"))
+    .find((candidate) => existsSync(candidate));
+  if (!gitBin) throw new Error("no `git` on PATH to hand the test");
+  symlinkSync(gitBin, join(binDir, "git"));
+
+  savedEnv ??= { ...process.env };
+  process.env.PATH = binDir;
+
+  // git still works…
+  execFileSync("git", ["--version"], { stdio: "ignore" });
+  // …and the harness does not. Anything but "could not be found" and the test
+  // refuses to run at all.
+  const bin = harnessBin("claude-code");
+  const probe = spawnSync(bin, ["--version"], { env: { ...process.env } });
+  if (!probe.error) {
+    throw new Error(`refusing to run: \`${bin}\` is still reachable, and this test must never start one`);
+  }
 }
 
 /**
@@ -317,6 +366,155 @@ describe("the newborn's worktree", () => {
     // also what makes this assertion a fact rather than a sleep.
     await daemon.close();
     expect(existsSync(worktree)).toBe(false);
+  });
+
+  test("a harness that is not there does not take the bus down with it", async () => {
+    // `spawn` reports a binary it could not resolve *asynchronously*, as an
+    // `error` event on the child, after it has already returned — and an
+    // `error` event with no listener is an uncaught exception. Nothing in
+    // `bearFront` listened. So the most ordinary failure there is, `claude`
+    // not on this PATH, killed the daemon process: every front on the
+    // repository lost the bus, mid-work, and the try/catch around the spawn
+    // could not help because nothing throws.
+    harnessOffThePath();
+    const repo = gitRepo();
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const core = await connectTo(endpoint.address);
+    await core.send({ op: "join", name: "CORE", cwd: repo });
+    await core.send({ op: "shape", shape: "pool" });
+    const mine = await core.send({ op: "work", title: "what CORE is on", paths: ["a.ts"] });
+    await core.send({ op: "work", title: "what nobody took", paths: ["b.ts"] });
+    const mineId = (mine as unknown as { items: { id: string }[] }).items[0]!.id;
+    await core.send({ op: "take", id: mineId });
+
+    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await core.send({ op: "who" });
+
+    // The error event lands on its own schedule, a turn or two after `spawn`
+    // returned. This is the window the process used to die in.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(await core.send({ op: "who" })).toMatchObject({ ok: true });
+
+    // And it is not a silence: the panel is told why, at the moment it is
+    // known, rather than two minutes later when `sweepBirths` notices nothing
+    // ever joined.
+    const out = await core.send({ op: "output" });
+    const lines = ((out.lines ?? []) as { text: string }[]).map((l) => l.text).join("\n");
+    expect(lines).toContain("could not start claude");
+    await daemon.close();
+  });
+
+  test("a birth that never joins leaves no checkout and no branch behind", async () => {
+    // `bearFront` creates the worktree *before* it spawns, so a birth that
+    // fails has already produced `.parley/worktrees/pool-1` and a
+    // `parley/pool-1` branch. That front never joins and never leaves, so
+    // nothing ever asked for it to be collected — and `nextFrontIndexIn` reads
+    // the surviving branch and skips that index for ever after. A repository
+    // whose PATH is wrong accumulated one full checkout per BIRTH_COOLDOWN_MS,
+    // permanently, while `sweepBirths` announced the silence and collected
+    // nothing.
+    harnessOffThePath();
+    const repo = gitRepo();
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const { daemon, endpoint } = await daemonFor(repo, () => clock);
+    const core = await connectTo(endpoint.address);
+    await core.send({ op: "join", name: "CORE", cwd: repo });
+    await core.send({ op: "shape", shape: "pool" });
+    const mine = await core.send({ op: "work", title: "what CORE is on", paths: ["a.ts"] });
+    await core.send({ op: "work", title: "what nobody took", paths: ["b.ts"] });
+    const mineId = (mine as unknown as { items: { id: string }[] }).items[0]!.id;
+    await core.send({ op: "take", id: mineId });
+
+    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await core.send({ op: "who" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    // The cost, as it happens: a full checkout with its own `.git`, and a
+    // branch, for a front that does not exist.
+    const worktree = join(repo, ".parley", "worktrees", "pool-1");
+    expect(existsSync(join(worktree, "a.txt"))).toBe(true);
+
+    clock += DEFAULTS.BIRTH_JOIN_GRACE_MS + 1;
+    await core.send({ op: "who" });
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await core.send({ op: "who" });
+    await daemon.close();
+
+    const said = daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).toContain("POOL-1 was started and never joined");
+    expect(existsSync(worktree)).toBe(false);
+    // And the index is free again. A branch left behind is an index
+    // `nextFrontIndexIn` can never hand out, which is the phantom failure the
+    // whole counter-from-git change existed to stop.
+    const branches = execFileSync(
+      "git", ["branch", "--list", "--format=%(refname:short)", "parley/*"],
+      { cwd: repo, encoding: "utf8" },
+    );
+    expect(branches).not.toContain("parley/pool-1");
+  });
+
+  test("a name somebody carried in an earlier session is not proof this birth arrived", async () => {
+    // `sweepBirths` matched any participant that has ever carried the name,
+    // live or `gone`, from this session or replayed out of the journal. Names
+    // are reused: an index is handed out again the moment the branch behind it
+    // is collected, so after a restart a genuinely never-joining POOL-1 was
+    // matched by the POOL-1 of a previous session and the announcement — the
+    // only thing that ever tells somebody their PATH is wrong — was lost.
+    harnessOffThePath();
+    const repo = gitRepo();
+    const sockDir = mkdtempSync(join(tmpdir(), "parley-sock-"));
+    dirs.push(sockDir);
+    const journalPath = join(sockDir, "journal.ndjson");
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    const boot = async (sock: string) => {
+      const daemon = new ParleyDaemon({
+        gitCommonDir: join(repo, ".git", "parley"),
+        address: { kind: "unix", address: join(sockDir, sock) },
+        journalPath,
+        tickIntervalMs: 100_000,
+        now: () => clock,
+      });
+      daemons.push(daemon);
+      return { daemon, endpoint: await daemon.listen() };
+    };
+
+    // An earlier session: something called POOL-1 was on this bus and left.
+    const first = await boot("p1.sock");
+    const old = await connectTo(first.endpoint.address);
+    await old.send({ op: "join", name: "POOL-1", cwd: repo });
+    await old.send({ op: "leave" });
+    old.close();
+    await first.daemon.close();
+
+    // A new daemon, the same journal. No `parley/pool-*` branch was ever
+    // created, so the index starts at 1 again — and the replayed POOL-1 is
+    // still sitting in the state, `gone`.
+    const second = await boot("p2.sock");
+    expect(Object.values(second.daemon.snapshot().participants).some((p) => p.name === "POOL-1")).toBe(true);
+
+    const core = await connectTo(second.endpoint.address);
+    await core.send({ op: "join", name: "CORE", cwd: repo });
+    await core.send({ op: "shape", shape: "pool" });
+    const mine = await core.send({ op: "work", title: "what CORE is on", paths: ["a.ts"] });
+    await core.send({ op: "work", title: "what nobody took", paths: ["b.ts"] });
+    const mineId = (mine as unknown as { items: { id: string }[] }).items[0]!.id;
+    await core.send({ op: "take", id: mineId });
+
+    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await core.send({ op: "who" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-1", "a.txt"))).toBe(true);
+
+    clock += DEFAULTS.BIRTH_JOIN_GRACE_MS + 1;
+    await core.send({ op: "who" });
+    const said = second.daemon.snapshot().events.map((e) => e.text).join("\n");
+    expect(said).toContain("POOL-1 was started and never joined");
+
+    clock += DEFAULTS.COLLECT_AFTER_LEAVE_MS + 1;
+    await core.send({ op: "who" });
+    await second.daemon.close();
+    expect(existsSync(join(repo, ".parley", "worktrees", "pool-1"))).toBe(false);
   });
 
   test("is collected when the front dies without ever saying goodbye", async () => {

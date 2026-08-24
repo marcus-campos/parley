@@ -117,8 +117,9 @@ export class ParleyDaemon {
   private tailSeq = 0;
   /** How to stop reading each newborn's pipes. Called on `close()`. */
   private readonly outputReaders: (() => void)[] = [];
-  /** Fronts parley started that have not reached the bus yet. */
-  private readonly pendingBirth = new Map<string, { atMs: number; mode: "panel" | "terminal" }>();
+  /** Fronts parley started that have not reached the bus yet, and what each one already cost on disk. */
+  private readonly pendingBirth =
+    new Map<string, { atMs: number; mode: "panel" | "terminal"; worktree: string }>();
   /** Removals in flight. Nothing waits on these except `close`. */
   private readonly collecting = new Set<Promise<void>>();
   private readonly removeWorktree: typeof removeWorktreeIfClean;
@@ -458,7 +459,7 @@ export class ParleyDaemon {
     // `osascript`'s, and whether the agent itself ever starts depends on a
     // PATH the daemon cannot see. `sweepBirths` is what turns silence into a
     // sentence.
-    this.pendingBirth.set(born.name, { atMs: ctx.nowMs, mode: born.mode });
+    this.pendingBirth.set(born.name, { atMs: ctx.nowMs, mode: born.mode, worktree: born.worktree });
     if (born.stopOutput) this.outputReaders.push(born.stopOutput);
 
     if (born.mode !== wanted) {
@@ -535,6 +536,34 @@ export class ParleyDaemon {
    * but "git would have refused" is not the guarantee to rely on when the
    * failure mode is deleting somebody's checkout.
    */
+  /**
+   * What a birth that never arrived left behind.
+   *
+   * `bearFront` creates the worktree *before* it spawns, so a terminal that
+   * opens and prints `claude: command not found` has already produced
+   * `.parley/worktrees/pool-N` and a `parley/pool-N` branch. That front never
+   * joins and never leaves, so nothing ever asked for it to be collected — and
+   * `nextFrontIndexIn` reads the surviving branch and skips that index for
+   * ever after. `sweepBirths` announced the silence and collected nothing, so
+   * a repository whose PATH is wrong accumulated one full checkout per
+   * BIRTH_COOLDOWN_MS, permanently.
+   *
+   * Handed to the same queue a departed front's worktree goes into, so it
+   * inherits every lock already there: only under `.parley/worktrees/`, only
+   * with nobody standing in it, only if it is clean, retried and then said out
+   * loud. A newborn that joins late — after BIRTH_JOIN_GRACE_MS — cancels its
+   * own collection by being in there, exactly like a front that came back.
+   */
+  private collectAbandonedBirth(name: string, cwd: string): void {
+    const root = this.repoRootForExport();
+    if (!root || !cwd || !isNewbornWorktree(root, cwd)) return;
+    // Keyed by the birth, not by a participant: there is no participant. The
+    // prefix is what keeps it from ever colliding with one.
+    this.pendingCollection.set(`birth:${name}`, {
+      name, cwd, sinceMs: this.now(), attempts: 0, collecting: false,
+    });
+  }
+
   private scheduleCollection(p: Participant | undefined): void {
     if (!p || p.born !== "parley" || !p.cwd) return;
     const root = this.repoRootForExport();
@@ -587,8 +616,15 @@ export class ParleyDaemon {
     if (this.pendingBirth.size === 0) return;
     for (const [name, pending] of [...this.pendingBirth]) {
       // Any participant that has ever carried the name, not just a live one:
-      // a newborn that joined, worked and left did reach the bus.
-      if (Object.values(this.state.participants).some((p) => p.name === name)) {
+      // a newborn that joined, worked and left did reach the bus. But it has
+      // to have joined *after* this birth — names are reused, indices restart
+      // when the branches behind them are collected, and a `gone` POOL-1
+      // replayed out of the journal is not evidence that today's POOL-1
+      // arrived. Matching on the name alone lost the announcement entirely
+      // after any restart that reset the index.
+      if (Object.values(this.state.participants).some(
+        (p) => p.name === name && !(Date.parse(p.joinedAt) < pending.atMs),
+      )) {
         this.pendingBirth.delete(name);
         continue;
       }
@@ -599,6 +635,7 @@ export class ParleyDaemon {
           ? `the window it opened runs your shell, so \`${harnessBin(this.spawnConfig.harness)}\` has to be on *your* PATH`
           : "its harness did not start";
       this.announce(makeCtx(nowMs, this.counter), `${name} was started and never joined — ${hint}`);
+      this.collectAbandonedBirth(name, pending.worktree);
     }
   }
 

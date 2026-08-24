@@ -141,6 +141,11 @@ function defaultOpenTerminal(spawnFn: SpawnFn): OpenTerminalFn {
           : { bin: process.env.TERMINAL ?? "x-terminal-emulator", args: ["-e", "sh", "-c", command] };
 
     const child = spawnFn(launch.bin, launch.args, { cwd, detached: true, stdio: "ignore", windowsHide: true });
+    // Never optional. A `spawn` that cannot resolve its binary reports it
+    // asynchronously, as an `error` event, and an `error` event with no
+    // listener is an uncaught exception — in the daemon's process, which
+    // serves every front on the repository. See the headless spawn below.
+    child.on("error", () => { /* `pid === undefined` below is the answer */ });
     child.unref();
     if (child.pid === undefined) throw new Error("terminal did not report a pid");
     return child.pid;
@@ -218,6 +223,17 @@ export function bearFront(opts: {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    // The most ordinary failure there is — `claude` not on this PATH — is
+    // reported asynchronously, after `spawn` has already returned, as an
+    // `error` event on the child. An `error` event with no listener is an
+    // uncaught exception, and this runs inside the daemon: one missing binary
+    // took down the bus for every front on the repository. The try/catch
+    // around this block cannot help, because nothing throws here.
+    //
+    // Said into the panel rather than swallowed: `sweepBirths` will report
+    // two minutes later that nothing ever joined, and this is the line that
+    // says why, at the moment it is known.
+    child.on("error", (e: Error) => opts.onOutput?.(`could not start ${command.bin}: ${e.message}`));
     child.unref();
     const stopOutput = opts.onOutput ? readLines(child, opts.onOutput) : undefined;
     return { name, pid: child.pid ?? -1, worktree: worktree.path, mode: "panel", stopOutput };
