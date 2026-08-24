@@ -1024,28 +1024,27 @@ async function main(): Promise<void> {
         }
 
         if (sub === "enable") {
-          // Probe before spending a single byte: the daemon already knows
-          // whether this participant may enable it (`me.kind`), so ask
-          // first rather than downloading hundreds of megabytes and only then finding out
-          // the answer was always going to be no. This probe is a courtesy,
-          // not the gate — `enable` below still refuses an agent on its own
-          // even if some other client skipped straight to it.
-          const probe = await send({ op: "brain" });
-          if (!probe.ok) fail(p, describeError(probe));
-          const mayEnable = (probe as unknown as { may_enable: boolean }).may_enable;
-          if (!mayEnable) {
+          // An agent running this is what the refusal is for, and the honest
+          // signal is the environment it runs in — not who it is on the bus.
+          // A harness stamps its session into the environment; a person's shell
+          // does not. That fact is here, before anything downloads, and it does
+          // not require anybody to join anything.
+          const harness =
+            process.env.CLAUDE_CODE_SESSION_ID?.trim() ||
+            process.env.CODEX_SESSION_ID?.trim() ||
+            process.env.CURSOR_TRACE_ID?.trim();
+          if (harness && !flagBool(parsed.flags, "human")) {
             fail(
               p,
-              "brain enable/disable is the person's call, not a front's — it is somebody's disk and " +
-                "somebody's money. Ask the human on this bus to run it (with --human).",
+              "brain enable/disable spends somebody's disk and somebody's money, so it is theirs to run: " +
+                "this looks like an agent session. Ask the person to run it in their own shell " +
+                "(or pass --human if you are the person and this is your terminal).",
             );
           }
 
-          // With one loadable entry there is no choice to present, and asking
-          // somebody to name a thing when there is only one thing is a menu
-          // that exists for the menu's sake. `enable` should download, verify,
-          // and turn it on. The listing below is for when there is genuinely
-          // something to choose between.
+          // With one loadable entry there is no choice to present: asking
+          // somebody to name a thing when there is one thing is a menu for the
+          // menu's sake.
           const loadable = MODELS.filter(isLoadable);
           const name = p.positional[1] ?? (loadable.length === 1 ? loadable[0]!.name : undefined);
           if (!name) {

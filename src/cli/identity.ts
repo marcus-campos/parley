@@ -124,7 +124,12 @@ function detectHarness(): string {
  * `--as` still wins, for somebody who wants to be called something else.
  */
 export function personIdentity(preferred?: string): Identity {
-  const name = (preferred?.trim() || userInfo().username || "person")
+  // Not the machine's account name. It leaks who owns the laptop onto a bus
+  // other people read, and it is usually meaningless anyway — `ubuntu`,
+  // `admin`, `runner`. A person who wants to be called something says so with
+  // `--as`; until then they are simply the person, which is the only thing the
+  // bus needs to know about them.
+  const name = (preferred?.trim() || "person")
     .replace(/[^A-Za-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .toUpperCase()
@@ -150,5 +155,7 @@ export function personIdentity(preferred?: string): Identity {
  * commands are one participant wherever they run them, and never a front's.
  */
 export function personSession(): string {
+  // Stable per machine account, and never sent: this is a key the daemon uses
+  // to recognise the same shell coming back, not a name anybody reads.
   return `person:${userInfo().username || "unknown"}`;
 }

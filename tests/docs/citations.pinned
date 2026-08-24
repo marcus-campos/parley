@@ -170,23 +170,23 @@
 |   return { state, response: ok({ released }), broadcast: [event, ...settled] };
 | }
 |
-@ docs/concepts/presence.md src/state/machine.ts 6f30267a179c
+@ docs/concepts/presence.md src/state/machine.ts a47ef0682eeb
+|   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
+|   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
+|   const broadcast: ConvEvent[] = [];
+|   /**
+|    * Who this tick just declared dead. §4.4 promises a newborn's worktree is
+|    * removed on death, and the only thing that ever asked for one was `leave` —
+|    * so a front killed by SIGKILL, by a crash, by a closed laptop, or by a
+|    * harness that never fires `SessionEnd` was marked `gone` (freeing the
+|    * ceiling, correctly) and kept its checkout and its branch for ever.
+|    *
+|    * Reported rather than acted on, for the same reason `birth` and `retire`
+|    * are: what is on disk is the daemon's business and never this file's.
+|    */
+|   const died: string[] = [];
+|
 |   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     died.push(p.id);
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
-|       }),
-|     );
 @ docs/concepts/presence.md src/protocol/types.ts 8b91b904cde7
 |   LEASE_TTL_MS: 5 * 60_000,
 @ docs/concepts/presence.md src/state/types.ts c8ccdbfef7ec
@@ -226,9 +226,9 @@
 |     idle_s: Math.max(0, Math.round((ctx.nowMs - p.lastSeenMs) / 1000)),
 |     claims: state.claims.filter((c) => c.ownerId === p.id).map((c) => c.pattern),
 |   };
-@ docs/concepts/presence.md src/state/machine.ts 6fcf2b7f98eb
-|   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
+@ docs/concepts/presence.md src/state/machine.ts e1a008bd1e09
+|   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
+|   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
 @ docs/concepts/presence.md src/daemon/server.ts 9fa6c5d85cbd
 |   private dropConn(conn: Conn): void {
 |     if (!this.conns.delete(conn)) return;
@@ -241,23 +241,23 @@
 |     }
 |     this.lastActivityMs = this.now();
 |   }
-@ docs/concepts/presence.md src/state/machine.ts 48589f399696
-|
-| /**
-|  * What `tick` asks the daemon to do, never does itself. The state machine
-|  * decides that capacity is missing; spawning a process is a clock, a PID and
-|  * an exit code all at once, so it belongs on the other side of this line.
-|  */
-| export interface BirthIntent {
-|   reason: string;
-|   forItemIds: string[];
+@ docs/concepts/presence.md src/state/machine.ts 5dbf28872a54
 | }
 |
-| /**
-|  * Every time-driven rule in one place, driven by an injected clock. Nothing
-|  * below expires on its own — the daemon calls `tick` on a timer and before
-|  * each command, so a bus that no one touches never invents events.
-|  */
+| export interface TickOptions {
+|   autoClaimTtlMs?: number;
+|   leaseTtlMs?: number;
+|   orphanGraceMs?: number;
+|   offerTtlMs?: number;
+|   orphanPoolMs?: number;
+|   /** Ceiling on live agent fronts. Same number `summon` is refused against. */
+|   maxFronts?: number;
+|   /** At most one birth intent per window, regardless of pool size. */
+|   birthCooldownMs?: number;
+|   /** How long a newborn is left alone before it can be invited to go home. */
+|   retireGraceMs?: number;
+| }
+|
 @ docs/concepts/presence.md src/daemon/server.ts 99e100cef6da
 |   private restore(mode: Mode): State {
 |     const state = initialState(mode);
@@ -539,24 +539,24 @@
 |         mine.auto = false;
 |         if (intent) mine.intent = intent;
 |       }
-@ docs/concepts/territory.md src/state/machine.ts d5f88b112d0e
+@ docs/concepts/territory.md src/state/machine.ts 79622efaa67f
+|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
+|     p.gone = true;
+|     died.push(p.id);
+|     const held = state.claims.filter((c) => c.ownerId === p.id);
+|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
+|     broadcast.push(
+|       pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "high",
+|         text: held.length
+|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
+|           : `${p.name} dropped`,
+|       }),
+|     );
+|   }
+|
 |   // 2. Auto-claims decay. Without this, a front that swept the repository would
 |   //    end up owning half of it. Explicit claims never expire by inactivity.
-|   const staleAuto = state.claims.filter(
-|     (c) => c.auto && c.orphanedAtMs === null && ctx.nowMs - c.lastTouchMs > autoTtl,
-|   );
-|   if (staleAuto.length) {
-|     state.claims = state.claims.filter((c) => !staleAuto.includes(c));
-|     for (const c of staleAuto) {
-|       const owner = state.participants[c.ownerId];
-|       broadcast.push(
-|         pushEvent(state, ctx, {
-|           kind: "system", from: null, to: null, priority: "normal",
-|           text: `auto-claim on ${c.pattern} expired (${owner?.name ?? "gone"} stopped editing it)`,
-|         }),
-|       );
-|     }
-|   }
 @ docs/concepts/territory.md src/protocol/types.ts a739aeb69ae4
 |   AUTO_CLAIM_TTL_MS: 15 * 60_000,
 @ docs/concepts/territory.md src/cli/main.ts c9e7a0ce3c44
@@ -578,23 +578,23 @@
 |     // no system at all.
 |     if (e instanceof ParleyUnreachable) return emit({});
 |     throw e;
-@ docs/concepts/territory.md src/state/machine.ts 6f30267a179c
+@ docs/concepts/territory.md src/state/machine.ts a47ef0682eeb
+|   const leaseTtl = opts.leaseTtlMs ?? DEFAULTS.LEASE_TTL_MS;
+|   const grace = opts.orphanGraceMs ?? DEFAULTS.ORPHAN_GRACE_MS;
+|   const broadcast: ConvEvent[] = [];
+|   /**
+|    * Who this tick just declared dead. §4.4 promises a newborn's worktree is
+|    * removed on death, and the only thing that ever asked for one was `leave` —
+|    * so a front killed by SIGKILL, by a crash, by a closed laptop, or by a
+|    * harness that never fires `SessionEnd` was marked `gone` (freeing the
+|    * ceiling, correctly) and kept its checkout and its branch for ever.
+|    *
+|    * Reported rather than acted on, for the same reason `birth` and `retire`
+|    * are: what is on disk is the daemon's business and never this file's.
+|    */
+|   const died: string[] = [];
+|
 |   // 1. A front that stopped renewing its lease is gone. A live connection is
-|   //    proof on its own, so only lease-only participants can expire this way.
-|   for (const p of liveParticipants(state)) {
-|     if (p.connected || ctx.nowMs - p.lastSeenMs <= leaseTtl) continue;
-|     p.gone = true;
-|     died.push(p.id);
-|     const held = state.claims.filter((c) => c.ownerId === p.id);
-|     for (const c of held) c.orphanedAtMs = ctx.nowMs;
-|     broadcast.push(
-|       pushEvent(state, ctx, {
-|         kind: "system", from: null, to: null, priority: "high",
-|         text: held.length
-|           ? `${p.name} dropped holding ${held.length} claim(s): ${held.map((c) => c.pattern).join(", ")} — released in ${Math.round(grace / 1000)}s`
-|           : `${p.name} dropped`,
-|       }),
-|     );
 @ docs/concepts/territory.md src/protocol/types.ts ee6591a650f7
 |   ORPHAN_GRACE_MS: 60_000,
 @ docs/concepts/territory.md src/state/territory.ts c6ba02966fcc
@@ -803,35 +803,7 @@
 |   ORPHAN_POOL_MS: 10 * 60_000,
 @ docs/concepts/work-pool.md src/protocol/types.ts 8b91b904cde7
 |   LEASE_TTL_MS: 5 * 60_000,
-@ docs/concepts/work-pool.md src/state/machine.ts 9075b3cc8c56
-|   // 6. A pool left open beside spare capacity is the failure this whole shape
-|   //    exists to prevent: nobody blocked, nothing broken, and an idle front
-|   //    that never learns there is something to pick up. Rung once per item —
-|   //    same discipline as the question and permission nudges — so a front
-|   //    that reads nothing is never pushed round in circles.
-|   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
-|   const stale = state.work.filter(
-|     (w) => w.state === "open" && ctx.nowMs - Date.parse(w.at) > orphanPool,
-|   );
-|   let birth: BirthIntent | null = null;
-|   if (stale.length > 0) {
-|     const idle = idleFronts(state);
-|     if (idle.length > 0) {
-|       // Recycle before creating. A front idle beside an orphan pool is the
-|       // larger waste, and reviving it costs nothing: no worktree, no
-|       // dependency install, no cold context. Creating is the fallback, never
-|       // the first move.
-|       //
-|       // `nudgedAtMs` governs *this* branch and only this one. It used to be
-|       // part of the `stale` filter above, which meant one ring disqualified an
-|       // item from ever asking for a front again: the idle front that was rung
-@ docs/concepts/work-pool.md src/protocol/types.ts 95bcbad39181
-|   OFFER_TTL_MS: 5 * 60_000,
-@ docs/concepts/work-pool.md src/state/machine.ts 06453dd29b27
-|     // An offer is exclusive — only the offeree may take it — for exactly this
-|     // long. Without an expiry, one unresponsive front could hold a file's
-|     // worth of work away from everybody forever.
-|     if (item.state === "offered" && item.offeredAtMs !== null && ctx.nowMs - item.offeredAtMs > offerTtl) {
+@ docs/concepts/work-pool.md src/state/machine.ts 8591dedf0af2
 |       const owner = state.participants[item.offeredToId ?? ""];
 |       item.state = "open";
 |       item.offeredToId = null;
@@ -845,19 +817,17 @@
 |         text: `${owner?.name ?? "the owner"} did not answer on ${item.paths[0]} — it is in the pool`,
 |       }));
 |     }
-@ docs/concepts/work-pool.md src/protocol/types.ts ee6591a650f7
-|   ORPHAN_GRACE_MS: 60_000,
-@ docs/concepts/work-pool.md src/state/machine.ts dd4ac6f215d9
-|   for (const item of state.work) {
-|     if (item.state === "done") continue;
+|   }
 |
-|     if (item.state === "taken" && item.takenById) {
-|       const holder = state.participants[item.takenById];
-|       if (holder?.gone) {
-|         if (item.orphanedAtMs === null) item.orphanedAtMs = ctx.nowMs;
-|       } else {
-|         item.orphanedAtMs = null;
-|       }
+|   // 6. A pool left open beside spare capacity is the failure this whole shape
+|   //    exists to prevent: nobody blocked, nothing broken, and an idle front
+|   //    that never learns there is something to pick up. Rung once per item —
+|   //    same discipline as the question and permission nudges — so a front
+|   //    that reads nothing is never pushed round in circles.
+|   const orphanPool = opts.orphanPoolMs ?? DEFAULTS.ORPHAN_POOL_MS;
+@ docs/concepts/work-pool.md src/protocol/types.ts 95bcbad39181
+|   OFFER_TTL_MS: 5 * 60_000,
+@ docs/concepts/work-pool.md src/state/machine.ts e31c7659802c
 |       if (item.orphanedAtMs !== null && ctx.nowMs - item.orphanedAtMs > grace) {
 |         const name = holder?.name ?? "a front";
 |         item.state = "open";
@@ -872,6 +842,36 @@
 |       }
 |       continue;
 |     }
+|
+|     // An offer is exclusive — only the offeree may take it — for exactly this
+|     // long. Without an expiry, one unresponsive front could hold a file's
+@ docs/concepts/work-pool.md src/protocol/types.ts ee6591a650f7
+|   ORPHAN_GRACE_MS: 60_000,
+@ docs/concepts/work-pool.md src/state/machine.ts ab6149caabde
+|       pushEvent(state, ctx, {
+|         kind: "system", from: null, to: null, priority: "normal",
+|         text: `released orphaned claim(s): ${expiredOrphans.map((c) => c.pattern).join(", ")}`,
+|       }),
+|     );
+|   }
+|
+|   // 4. Unanswered permission requests are granted, loudly.
+|   broadcast.push(...expirePermissions(state, ctx));
+|
+|   // 5. Rule 1 above already marks dead participants and stamps their claims;
+|   //    this stamps their work the same way, so a front that is merely
+|   //    restarting gets its item back instead of having to fight for it.
+|   const offerTtl = opts.offerTtlMs ?? DEFAULTS.OFFER_TTL_MS;
+|
+|   for (const item of state.work) {
+|     if (item.state === "done") continue;
+|
+|     if (item.state === "taken" && item.takenById) {
+|       const holder = state.participants[item.takenById];
+|       if (holder?.gone) {
+|         if (item.orphanedAtMs === null) item.orphanedAtMs = ctx.nowMs;
+|       } else {
+|         item.orphanedAtMs = null;
 @ docs/concepts/work-pool.md src/cli/main.ts c9e7a0ce3c44
 |   } catch (e) {
 |     // parley broken must never stop the work: say so, exit clean for hooks.

@@ -57,29 +57,50 @@ async function withTempRepo(fn: (repo: string, env: NodeJS.ProcessEnv) => Promis
 // refuse-and-stop, with no download in between) without inventing a seam
 // that doesn't exist in production.
 describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", () => {
-  test("an agent is refused before a single byte is downloaded", async () => {
+  test("an agent session is refused before a single byte is downloaded", async () => {
     await withTempRepo(async (repo, env) => {
-      // No --human: this is an agent. The registry name is real, so a bug
-      // that downloads before checking `may_enable` would actually reach
-      // the network — this proves it never gets that far.
-      const p = Bun.spawn([BIN, "brain", "enable", MODELS[0]!.name], {
-        cwd: repo, env, stdout: "pipe", stderr: "pipe",
+      // The signal is the harness's own session variable. A person's shell does
+      // not carry one; every agent harness stamps one in. That is the fact the
+      // refusal needs, and unlike the old `kind` check it does not require the
+      // caller to have joined anything — which is what used to drag a person
+      // into the fronts' namespace and get them refused as an agent.
+      const p = Bun.spawn([BIN, "brain", "enable"], {
+        cwd: repo,
+        env: { ...env, CLAUDE_CODE_SESSION_ID: "a-harness-session" },
+        stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([
-        new Response(p.stdout).text(),
-        new Response(p.stderr).text(),
-        p.exited,
+        new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited,
       ]);
-
       expect(code).not.toBe(0);
-      expect(stdout + stderr).toContain("somebody's disk and somebody's money");
-      // The download line only prints after the probe passes — its absence
-      // is direct evidence `ensureModel` was never reached, not just that
-      // the command happened to exit non-zero for some other reason.
-      expect(stdout + stderr).not.toContain("downloading");
+      const text = stdout + stderr;
+      expect(text).toContain("agent session");
+      expect(text).not.toContain("downloading");
       expect(existsSync(expectedModelsDir(env.HOME as string))).toBe(false);
     });
   }, 15_000);
+
+  test("and a person's shell is not — no flag, nothing to join", async () => {
+    await withTempRepo(async (repo, env) => {
+      // Not run to completion: this would download 54 MB. What is asserted is
+      // that it gets past the refusal and reaches the download, which is the
+      // whole of what the previous version could not do for a person standing
+      // in a repository where an agent was already working.
+      const clean = { ...env } as Record<string, string>;
+      delete clean.CLAUDE_CODE_SESSION_ID;
+      delete clean.CODEX_SESSION_ID;
+      delete clean.CURSOR_TRACE_ID;
+      const p = Bun.spawn([BIN, "brain", "enable"], {
+        cwd: repo, env: clean, stdout: "pipe", stderr: "pipe",
+      });
+      // Give it long enough to print the size and start, then stop it.
+      await new Promise((r) => setTimeout(r, 1500));
+      p.kill();
+      const text = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
+      expect(text).not.toContain("agent session");
+      expect(text).toContain("downloading");
+    });
+  }, 20_000);
 
   /**
    * The refusal is about the loader, not about the registry's contents.

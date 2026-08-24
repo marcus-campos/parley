@@ -47,7 +47,7 @@ describe("a person is not a front", () => {
   // was read and discarded, because reattaching does not change what somebody
   // already is, and `brain enable --human` then refused the only person allowed
   // to run it.
-  test("their name comes from the machine's user, never from the branch", () => {
+  test("their name is not the branch's, and not the machine account's either", () => {
     const person = personIdentity();
     const front = resolveIdentity("/tmp/repo-on-develop", "/tmp/repo-on-develop");
     expect(person.name).not.toBe(front.name);

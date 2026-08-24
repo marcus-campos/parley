@@ -167,16 +167,31 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
 
   const me = actorOf(state, actorId);
   if (!me) return { state, response: err("NOT_JOINED"), broadcast: [] };
-  if (me.kind !== "human") {
-    return {
-      state,
-      response: err(
-        "OBSERVER_ONLY",
-        "brain enable/disable is the person's call, not a front's — it is somebody's disk and somebody's money",
-      ),
-      broadcast: [],
-    };
-  }
+  // There is deliberately no `kind` check here.
+  //
+  // It used to require the caller to be a participant of a particular kind,
+  // which meant a person had to join the bus to spend their own disk — and
+  // joining put them in the fronts' namespace, where a branch-derived name
+  // already belonged to the agent working on that branch. They reattached to
+  // it, arrived as an agent, and were refused by this very check.
+  //
+  // What matters is where the command was run from, and that is known at the
+  // CLI (`src/cli/main.ts`), from the harness session variables an agent's
+  // environment carries. The refusal lives there, before a byte is downloaded.
+  //
+  // What this op can still do, reached directly over the socket, was measured
+  // rather than assumed: with no model on disk it flips a flag and buys
+  // nothing — the search degrades to the lexical floor, verified. With a model
+  // already there it turns on something the person already paid for. Neither
+  // spends anything, because the spending is the download and the download is
+  // CLI-side.
+  //
+  // The old check did not cover this either. It refused an agent that did not
+  // pass `--human`, and its own error message told the reader to pass
+  // `--human` — which the reducer then trusted. Verified against the shipped
+  // 0.7.1 binary: an agent passing that flag was enabled. It was a speed bump
+  // wearing the shape of a control, and it cost a person their identity to
+  // stand there.
 
   const before = { active: state.brain.active, model: state.brain.model };
 

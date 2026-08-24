@@ -82,13 +82,29 @@ describe("turning the brain on", () => {
   });
 
   // The CLI probes `may_enable` first so it never spends a download on an
-  // answer the daemon already knows — but that probe is a courtesy, not the
-  // gate. This test calls `apply` directly with an agent actor, skipping any
-  // probe entirely, so it proves the enforcement still lives here and did
-  // not quietly move to the CLI.
-  test("an agent may not turn it on — it is somebody's disk and somebody's money", () => {
+  // This block used to assert the reducer refused an agent, and its comment
+  // said the point was proving enforcement "did not quietly move to the CLI".
+  // It moved, deliberately, and the reason is worth keeping rather than
+  // deleting with the assertion:
+  //
+  //   * The old check refused an agent that did not pass `--human`, and its own
+  //     error message told the reader to pass `--human`. Verified against the
+  //     shipped 0.7.1 binary: an agent passing it was enabled. A control whose
+  //     bypass is printed in its own refusal is a speed bump.
+  //   * Standing there cost a person their identity. Requiring `kind: "human"`
+  //     meant joining the bus, and joining derived a name from the branch —
+  //     which already belonged to the agent working on it. The person
+  //     reattached to that agent and was refused by this very check.
+  //   * What the rule protects is the download, and the download is CLI-side.
+  //     Measured, not assumed: reaching this op directly with no model on disk
+  //     flips a flag and buys nothing — the search degrades to the lexical
+  //     floor. With a model already there it turns on what somebody paid for.
+  //
+  // So the reducer accepts, and the refusal lives where the fact it needs is:
+  // `tests/cli/brain.test.ts` pins it against the compiled binary.
+  test("the reducer accepts whoever reaches it, because the spending is CLI-side", () => {
     const out = apply(state, core, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
-    expect(out.response.ok).toBe(false);
+    expect(out.response.ok).toBe(true);
   });
 
   test("the watching human may", () => {
@@ -157,11 +173,11 @@ describe("turning the brain on or off is announced, the same way mode and shape 
     expect(out.broadcast).toHaveLength(0);
   });
 
-  test("a refused attempt — wrong actor, unknown model — announces nothing", () => {
-    const byAgent = apply(state, core, { v: 1, op: "brain", enable: MODELS[0]!.name }, at(300));
-    expect(byAgent.broadcast).toHaveLength(0);
-
+  test("a refused attempt — an unknown model — announces nothing", () => {
+    // The "wrong actor" half is gone with the `kind` gate above. What is left
+    // is the half that was always about the frame rather than the caller.
     const unknownModel = apply(state, human, { v: 1, op: "brain", enable: "not-a-model" }, at(300));
+    expect(unknownModel.response.ok).toBe(false);
     expect(unknownModel.broadcast).toHaveLength(0);
   });
 
