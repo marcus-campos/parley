@@ -1,0 +1,18 @@
+# Windows checks out with core.autocrlf by default, which rewrites every file
+# to CRLF on the way to disk. Several guards in this repository read a file and
+# compare it against text they hold — the citation ledger pins the exact lines a
+# page cites, the command reference is regenerated and diffed, and the docs
+# tests read the workflows to check a step is still there. All of them fail on
+# Windows for a reason that has nothing to do with what they guard.
+#
+# Forcing LF is the fix rather than teaching each reader to normalise, because
+# the readers are the part that keeps growing: the next guard would have to
+# remember, and the failure it produces looks like a real defect.
+* text=auto eol=lf
+
+# Never touched: byte-for-byte is the point.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary

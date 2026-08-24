@@ -1,8 +1,15 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync as readFile, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { forgetRepo, pruneRegistry, readRegistry, registerRepo } from "../../src/adapters/registry";
+
+// The temp state directory comes from `tests/preload.ts`, which sets it for
+// every test file. This one only needs the witness below: `refreshAllAdapters`
+// rewrites the hooks and skill of every repository in the registry, so if the
+// redirect ever fails, this file is where it edits the person's own projects.
+const realRegistry = join(homedir(), "Library", "Application Support", "parley", "repos.json");
+const realBefore = existsSync(realRegistry) ? readFile(realRegistry, "utf8") : null;
 
 const made: string[] = [];
 function repo(): { gitCommonDir: string; root: string } {
@@ -105,5 +112,27 @@ describe("refreshing without ceremony", () => {
 
     await refreshAllAdapters({ assumeYes: true, json: true });
     expect(adapterStatus(r.root).skillCurrent).toBe(true);
+  });
+});
+
+describe("the machine's own registry", () => {
+  // The witness. Everything above registers repositories and refreshes them;
+  // this is what says the blast radius stayed inside the temp directory. It
+  // reads the real file directly rather than through `readRegistry`, because
+  // the whole point is to check the thing the override is hiding.
+  test("is never read, written, or refreshed by this file", () => {
+    expect(process.env.PARLEY_STATE_DIR).toBeTruthy();
+    const now = existsSync(realRegistry) ? readFile(realRegistry, "utf8") : null;
+    expect(now).toBe(realBefore);
+  });
+
+  test("the override is what redirects it, and production sets no such thing", () => {
+    // A deletion detector for the seam itself: remove the override branch in
+    // `registryPath` and the tests above go back to walking the real registry
+    // silently, which is exactly the failure this file exists to have stopped.
+    const src = readFile(join(import.meta.dir, "..", "..", "src", "adapters", "registry.ts"), "utf8");
+    expect(src).toContain("process.env.PARLEY_STATE_DIR");
+    const cli = readFile(join(import.meta.dir, "..", "..", "src", "cli", "main.ts"), "utf8");
+    expect(cli).not.toContain("PARLEY_STATE_DIR");
   });
 });

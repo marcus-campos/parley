@@ -1,0 +1,4 @@
+[test]
+# Every test file, no exceptions — see tests/preload.ts for why this is here
+# rather than in the files that happen to remember.
+preload = ["./tests/preload.ts"]

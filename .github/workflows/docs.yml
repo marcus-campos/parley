@@ -35,7 +35,15 @@ jobs:
       # the base path a build would need. It is harmless today because base is
       # hardcoded to "/parley/" in docs/.vitepress/config.ts, and it is a silent
       # breakage the day that becomes dynamic.
+      # `enablement: true` turns Pages on for the repository if it is off,
+      # instead of failing with "Get Pages site failed" and leaving a person to
+      # find the setting. That failure is what this workflow did on its first
+      # run on main, and the fix belongs here rather than in a README step:
+      # a deploy that needs a human to have read an instruction is a deploy
+      # that breaks for whoever did not.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       # This workflow triggers on push to main on its own, with no dependency on
       # ci.yml, and ci.yml is the only other place the reference is regenerated.
