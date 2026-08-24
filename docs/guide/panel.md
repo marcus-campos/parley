@@ -39,7 +39,7 @@ claude          # or codex, or whatever you drive sessions with
 
 Leave pane 1 alone. The panel is built to be glanced at, not typed into —
 the composer only appears when you press <kbd>i</kbd>
-(`src/cli/watch.ts:468-469`, or <kbd>s</kbd> on the web page,
+(`src/cli/watch.ts:478-479`, or <kbd>s</kbd> on the web page,
 `src/cli/web-page.ts:215-216`), and closes itself again. If you are watching
 a long-running task, the moment you actually need the panel is when a
 **pending permission** line shows up with a countdown: that is the signal
@@ -62,7 +62,7 @@ Start the panel on the remote box first and **read the port off the URL it
 prints** — do not guess it, and do not copy one out of a document. `7717` is
 the base of a range, not the port: the panel listens on `7717 + (hash of the
 repository id % 200)`, so any port from `7717` to `7916` is normal
-(`src/cli/web.ts:79-85`). The repository id is a hash of the canonical path to
+(`src/cli/web.ts:103-109`). The repository id is a hash of the canonical path to
 the repository's git directory (`src/repo/canonical.ts:64-66`), not of its
 name, so the same project cloned into two directories derives two different
 ports and no page can tell you yours. Forward the one you actually saw:
@@ -83,7 +83,7 @@ with the same port on both sides of the `-L`.
 The derived port is stable across restarts **as long as it is free**. If
 something else already holds it, parley does not fail and does not fight for
 it: it hands the choice to the operating system and takes whatever it is
-given (`chosen = 0`, `src/cli/web.ts:184-188`), which is a different,
+given (`chosen = 0`, `src/cli/web.ts:208-212`), which is a different,
 unpredictable port. So a forwarding rule set up once usually keeps working —
 but it is the printed URL, not the rule, that is authoritative. Check it
 whenever the panel does not answer.

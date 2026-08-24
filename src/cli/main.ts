@@ -133,7 +133,7 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
                              weigh it before anything downloads.
   parley brain disable
 
-  parley plan <path-to-plan.md>
+  parley plan <path-to-plan.md> [--replace]
                              read a superpowers plan and dispatch its first
                              wave onto the pool — parley shape plan first
   parley work "<title>" <path...> [--evidence <id,...>] [--kind review --review-of <id>]
@@ -1109,7 +1109,7 @@ async function main(): Promise<void> {
           // One plan runs at a time. `--replace` is what the README calls
           // re-sequencing: it withdraws what the running plan has not
           // finished — including items a front is holding — and starts over.
-          replace: p.flags.replace === true,
+          replace: flagBool(p.flags, "replace"),
         });
         if (!r.ok) fail(p, describeError(r));
         const d = r as unknown as { waves: number; opened: number; withdrawn: number };

@@ -75,6 +75,7 @@ const GROUP_TITLES: ReadonlyArray<readonly [anchor: string, title: string]> = [
   ["result", "Command results"],
   ["shape", "Modes and shapes"],
   ["work", "The work pool"],
+  ["brain", "Semantic recall"],
 ];
 
 export interface CommandVariant {

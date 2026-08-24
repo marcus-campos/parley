@@ -9,14 +9,14 @@ from**. The state machine's own comment puts it plainly —
 > Where work comes from. Orthogonal to `mode`, which is how strict territory
 > is. Repo-scoped for the same reason: a front in `bus` inside a `plan` would
 > ignore dispatch, and the plan would be theatre.
-> (`src/state/types.ts:204-208`)
+> (`src/state/types.ts:229-233`)
 
 They compose rather than substitute for each other: nothing about `mode`
 changes what shape a front runs, and nothing about `shape` changes how strict
 a claim is. Three values are recognised at the protocol level —
 `"bus" | "pool" | "plan"` (`src/protocol/types.ts:6-7`) — and a repository
 that never sets one runs `bus`, the default `emptyState` starts every new
-bus with (`src/state/types.ts:252`).
+bus with (`src/state/types.ts:279`).
 
 ## `bus` — conversation and territory, nothing more
 
@@ -30,11 +30,11 @@ it is unchanged by their existence. A repository that never runs
 In `pool`, a front that finds work it did not go looking for —
 `parley work "<title>" <path...>` — publishes one item per path, because the
 path is the unit parley already uses for territory
-(`src/state/work.ts:40-44`). Each item is routed the moment it is published,
+(`src/state/work.ts:53-57`). Each item is routed the moment it is published,
 by asking one question: does anyone already hold this path?
-(`ownerForPath`, `src/state/work.ts:22-38`). A path a live front already
+(`ownerForPath`, `src/state/work.ts:35-51`). A path a live front already
 claims becomes an **offer**, exclusive to that front; a path owned by nobody
-is **open** for anyone to take (`src/state/work.ts:64-87`). Publishing itself
+is **open** for anyone to take (`src/state/work.ts:76-99`). Publishing itself
 only works in `pool` (or `plan`) — attempting it in `bus` is refused outright
 rather than silently ignored:
 
@@ -42,7 +42,7 @@ rather than silently ignored:
 there is no pool in shape bus — parley shape pool
 ```
 
-(`src/state/work.ts:48-50`)
+(`src/state/work.ts:61-63`)
 
 The routing rule is deliberately possession, not a plan or an org chart:
 
@@ -51,7 +51,7 @@ The routing rule is deliberately possession, not a plan or an org chart:
 > drop it. Otherwise the front that discovered the work would have acquired
 > authority over the front that holds the file, which is the hierarchy this
 > whole system exists to do without.
-> (`src/state/work.ts:11-15`)
+> (`src/state/work.ts:14-18`)
 
 That distinction — first refusal, not obedience — is the whole shape of
 `pool`. See [the work pool](/concepts/work-pool) for how an item moves
@@ -67,12 +67,12 @@ and leaves to a human to execute by hand today.
 
 **None of that exists on this branch.** `"plan"` is accepted wherever a shape
 value is accepted — the type includes it (`src/protocol/types.ts:6-7`) and
-`parley shape plan` is a valid switch (`src/state/machine.ts:132`) — but
+`parley shape plan` is a valid switch (`src/state/machine.ts:112`) — but
 nothing in the code branches on it beyond the same "is this bus?" check
-`pool` already gets (`src/state/work.ts:48`, `src/state/work.ts:272`). There
+`pool` already gets (`src/state/work.ts:61`, `src/state/work.ts:784`). There
 is no `parley plan <path>`, nothing parses a `**Files:**` block, and nothing
 publishes an item with `origin: "planned"` — that value exists in the
-`WorkItem` type (`src/state/types.ts:170`), and `publishWork` will honour it
+`WorkItem` type (`src/state/types.ts:171`), and `publishWork` will honour it
 when a frame carries it, but no caller in this repository passes it, so a work
 item published through the CLI is always `"discovered"`
 (`src/state/work.ts:62`). So today, setting `shape plan` does not turn on
@@ -105,9 +105,9 @@ live parent watching every one of them. That is the intent. It is not what
 If the daemon cannot be reached at all, `parley shape` behaves like every
 other direct CLI command: it reports the problem on stderr —
 `parley: <reason> — continuing without coordination` — and exits clean
-rather than blocking (`src/cli/main.ts:166-172`). A shape change that does
+rather than blocking (`src/cli/main.ts:183-189`). A shape change that does
 land is announced loudly to everyone on the bus, at high priority, naming
-both the new value and the one it replaced (`src/state/machine.ts:139-146`),
+both the new value and the one it replaced (`src/state/machine.ts:119-126`),
 for the same reason a mode change is: this setting belongs to the repository,
 and a front picking one for itself would make it theatre for every front
 that did not agree.

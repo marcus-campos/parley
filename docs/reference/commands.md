@@ -382,7 +382,37 @@ parley shape [bus|pool|plan]
 
 where work comes from; read it back with no argument
 
+## Semantic recall
+
+### `parley brain`
+
+```
+parley brain
+```
+
+is semantic recall on, and with which model
+
+```
+parley brain enable [<model>]
+```
+
+human-only. With no model named, lists the registry — name, languages, size — so you can weigh it before anything downloads.
+
+```
+parley brain disable
+```
+
 ## The work pool
+
+### `parley plan`
+
+```
+parley plan <path-to-plan.md> [--replace]
+```
+
+read a superpowers plan and dispatch its first wave onto the pool — parley shape plan first
+
+Flags: `--replace`
 
 ### `parley work`
 
