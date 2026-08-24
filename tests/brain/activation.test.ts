@@ -1,6 +1,6 @@
 // tests/brain/activation.test.ts
 import { beforeEach, describe, expect, test } from "bun:test";
-import { BENCHMARK_SIZE, isStatic, MODELS } from "../../src/brain/registry";
+import { BENCHMARK_SIZE, isStatic, LEXICAL_FLOOR_SCORE, MODELS, RECOMMENDED } from "../../src/brain/registry";
 import { apply, initialState, makeCtx } from "../../src/state/machine";
 import type { Ctx, State } from "../../src/state/types";
 
@@ -34,6 +34,10 @@ describe("turning the brain on", () => {
       // actually run.
       expect(m.score).toBeGreaterThan(0);
       expect(m.score).toBeLessThanOrEqual(BENCHMARK_SIZE);
+      // Every entry also has to say what it costs to run, because the listing
+      // shows those columns and a zero would render as a free lunch.
+      expect(m.ramMB).toBeGreaterThan(0);
+      expect(m.msPerNote).toBeGreaterThan(0);
       if (isStatic(m)) {
         expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
       } else {
@@ -53,6 +57,32 @@ describe("turning the brain on", () => {
     // that would be nonsense that looks like a working brain.
     const fingerprints = MODELS.map((m) => `${m.dims}:${isStatic(m) ? m.name : m.spec.floor}`);
     expect(new Set(fingerprints).size).toBe(MODELS.length);
+  });
+
+  /**
+   * The listing's numbers are a promise about what the daemon returns, and one
+   * draft of this registry broke that promise by measuring the model instead of
+   * the product: `embeddinggemma-300m` clears its own floor on 16 of 20 when
+   * scored on cosine alone, and returns 14 through the bus, because the vector
+   * ranking is fused with the lexical one and fusion reorders. The offline
+   * number went into the table and was wrong by two.
+   *
+   * A unit test cannot re-run that measurement — it needs a real model, a real
+   * daemon and a download. What it can do is refuse the shape of the mistake:
+   * a score is only meaningful against the baseline it improves on, so it has
+   * to be at least as good as answering with no model at all, and the listing
+   * has to be able to say so.
+   */
+  test("no model claims to be worse than no model, and the baseline is real", () => {
+    expect(LEXICAL_FLOOR_SCORE).toBeGreaterThan(0);
+    expect(LEXICAL_FLOOR_SCORE).toBeLessThan(BENCHMARK_SIZE);
+    for (const m of MODELS) {
+      expect(m.score).toBeGreaterThanOrEqual(LEXICAL_FLOOR_SCORE);
+    }
+    // And the recommendation is the top of the ranking, not a separate opinion
+    // — a listing that recommends anything but its best row is lying twice.
+    const best = [...MODELS].sort((a, b) => b.score - a.score)[0]!;
+    expect(RECOMMENDED).toBe(best.name);
   });
 
   test("an agent asking for semantic recall gets the floor, and never a prompt", () => {

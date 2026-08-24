@@ -59,7 +59,7 @@ describe("nothing here can stop the work", () => {
 
     test("never activates the brain", async () => {
       const model: StaticBrainModel = {
-        name: "bad", kind: "static", dims: 4, score: 1, bytes: 4,
+        name: "bad", kind: "static", dims: 4, score: 1, ramMB: 1, msPerNote: 1, bytes: 4,
         url: "https://example.invalid/m.bin", sha256: "f".repeat(64), tokenizer: "wordlevel",
       };
       const body = new TextEncoder().encode("not the model");

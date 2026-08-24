@@ -11,7 +11,9 @@ import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { ensureModel } from "../brain/download";
 import { isLoadable } from "../brain/embed";
-import { BENCHMARK_SIZE, findModel, isEncoder, MODELS, RECOMMENDED } from "../brain/registry";
+import {
+  BENCHMARK_SIZE, findModel, isEncoder, LEXICAL_FLOOR_SCORE, MODELS, RECOMMENDED,
+} from "../brain/registry";
 import { bunAvailable, installEncoder } from "../brain/sidecar";
 import { parsePlan } from "../plan/parse";
 import { readFileSync } from "node:fs";
@@ -1051,32 +1053,56 @@ async function main(): Promise<void> {
             // skipped straight to downloading whenever there was one loadable
             // entry — so a person typed `enable` and received 54 MB of a thing
             // whose name told them nothing.
-            // Ranked, best first, and the rank is the only claim made about
-            // any of them. Everything else on the row is a cost the person is
-            // about to pay: disk, and whether this one needs a runtime.
+            // Ranked, best first. Every column is measured on this machine's
+            // kind of hardware and none of it is an adjective: a person
+            // choosing here is spending their own disk and their own memory,
+            // and the previous listing asked them to interpret prose instead.
             const ranked = [...MODELS].sort((a, b) => b.score - a.score);
-            const width = Math.max(...ranked.map((m) => m.name.length));
+            const w = Math.max(...ranked.map((m) => m.name.length));
+            const mb = (n: number) => (n >= 1024 ? `${(n / 1024).toFixed(1)} GB` : `${n} MB`);
+            const cols = (a: string, b: string, c: string, d: string, e: string, f: string): string =>
+              `  ${a.padEnd(w)}  ${b.padStart(5)}  ${c.padStart(7)}  ${d.padStart(7)}` +
+              `  ${e.padStart(6)}  ${f.padStart(10)}`;
+            const header =
+              cols("", "score", "gain", "RAM", "disk", "per note") +
+              `\n${cols("─".repeat(w), "─────", "───────", "───────", "──────", "──────────")}`;
+            // The floor's own score, first and unindented from the models: it
+            // is what every row below is measured against, and without it "14
+            // of 20" is a number nobody can place.
+            const baseline = cols("no model at all", `${LEXICAL_FLOOR_SCORE}/${BENCHMARK_SIZE}`, "—", "—", "—", "—");
             const rows = ranked.map((m) => {
-              const size = `${Math.round(m.bytes / (1024 * 1024))} MB`.padStart(7);
-              const needs = isEncoder(m) ? "needs bun" : "no runtime";
+              const gain = m.score - LEXICAL_FLOOR_SCORE;
               const mark = m.name === RECOMMENDED ? "  ← recommended" : "";
-              return `  ${m.name.padEnd(width)}  ${String(m.score).padStart(2)}/20  ${size}  ${needs}${mark}`;
+              // A static model embeds faster than this clock can honestly
+              // measure, so a number there would be false precision. What
+              // matters about it is the other thing: nothing to install.
+              const speed = isEncoder(m) ? `${m.msPerNote} ms` : "no runtime";
+              return (
+                cols(m.name, `${m.score}/${BENCHMARK_SIZE}`, gain > 0 ? `+${gain}` : "nothing",
+                     mb(m.ramMB), mb(Math.round(m.bytes / 1048576)), speed) + mark
+              );
             });
             return out(
               p,
               `parley: semantic recall runs a model on this machine — no network after the\n` +
                 `download, nothing leaves the repository.\n\n` +
-                `Scored on ${BENCHMARK_SIZE} questions, each with exactly one note that answers it: how\n` +
-                `many times that note came back as the answer.\n\n${rows.join("\n")}\n\n` +
+                `Score is ${BENCHMARK_SIZE} questions, each with exactly one note that answers it and\n` +
+                `almost no words in common: how many times that note came back as the answer.\n` +
+                `"gain" is what the model adds — parley already answers without one.\n\n` +
+                `${header}\n${baseline}\n${rows.join("\n")}\n\n` +
                 `  parley brain enable ${RECOMMENDED}\n\n` +
-                `"needs bun" is a one-time install of a local runtime, done for you by enable.\n` +
+                `Time per note is background work — nothing waits on it; it only sets how\n` +
+                `long a first activation takes. A model with one installs a local runtime\n` +
+                `once, which enable does for you.\n` +
                 `The lexical floor answers either way; the model is what finds a note that\n` +
                 `shares no words with the question.`,
               {
                 ok: true,
                 recommended: RECOMMENDED,
                 models: ranked.map((m) => ({
-                  name: m.name, score: m.score, of: BENCHMARK_SIZE, bytes: m.bytes, dims: m.dims,
+                  name: m.name, score: m.score, of: BENCHMARK_SIZE,
+                  gainOverFloor: m.score - LEXICAL_FLOOR_SCORE,
+                  bytes: m.bytes, dims: m.dims, ramMB: m.ramMB, msPerNote: m.msPerNote,
                   kind: m.kind, needsRuntime: isEncoder(m),
                   available: isEncoder(m) ? bunAvailable() : isLoadable(m),
                   recommended: m.name === RECOMMENDED,

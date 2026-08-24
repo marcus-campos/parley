@@ -138,7 +138,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
    */
   test("a tokenizer this build cannot load is refused, whatever the registry lists", () => {
     const unloadable = {
-      name: "x", kind: "static", dims: 8, score: 1, bytes: 1, url: "", sha256: "", tokenizer: "xlmr",
+      name: "x", kind: "static", dims: 8, score: 1, ramMB: 1, msPerNote: 1, bytes: 1, url: "", sha256: "", tokenizer: "xlmr",
     } as const;
     expect(isLoadable(unloadable)).toBe(false);
     // And the shipped registry offers nothing a person can pick and not use:

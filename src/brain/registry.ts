@@ -44,6 +44,24 @@ interface Common {
   score: number;
   /** Disk, in bytes, as the person will actually spend it. */
   bytes: number;
+  /**
+   * Resident memory the model itself costs, in MB, measured alone in a fresh
+   * process with the interpreter's own baseline subtracted.
+   *
+   * Worth reading before assuming a transformer is the expensive option: the
+   * largest static table here costs more memory than the recommended encoder,
+   * because a vocabulary of that size becomes a very large JavaScript object.
+   */
+  ramMB: number;
+  /**
+   * Milliseconds to embed one note, steady state.
+   *
+   * This is not on anybody's critical path — notes are embedded in the
+   * background and a query already has its lexical answer — so it is here to
+   * set expectations about how long a first activation takes on a large
+   * corpus, not as a reason to choose a worse model.
+   */
+  msPerNote: number;
 }
 
 /**
@@ -78,6 +96,16 @@ export type BrainModel = StaticBrainModel | EncoderBrainModel;
 export const BENCHMARK_SIZE = 20;
 
 /**
+ * What those same 20 questions score with no model at all.
+ *
+ * The baseline belongs in the listing next to the models, because "14 of 20"
+ * means nothing without it and every model here is *added* to this, never
+ * instead of it. It is also the number that exposes an entry earning its
+ * disk: one of the models below scores exactly this.
+ */
+export const LEXICAL_FLOOR_SCORE = 5;
+
+/**
  * The measured field, and what it is a measurement of.
  *
  * Twenty questions against twenty notes, half Portuguese and half English,
@@ -95,19 +123,46 @@ export const BENCHMARK_SIZE = 20;
  * those 18 survived. What a person would have received was silence, from a
  * model advertised at 18 of 20.
  *
- * The other half of the same measurement is what gets through when nothing is
- * relevant — every question against every note that does *not* answer it, 380
- * pairs. That column is why the statics rank where they do: they do not merely
- * find less, they answer wrongly more.
+ * And it is measured **through the daemon**, not against the model in
+ * isolation — enable it, write the notes, ask the questions over the socket,
+ * take what comes back. That distinction cost a wrong number once already: the
+ * recommended model clears its own floor on 16 of 20 when scored on cosine
+ * alone, and returns 14 through the bus, because the vector ranking is fused
+ * with the lexical one by reciprocal rank and fusion can reorder a winner. The
+ * offline figure describes the model; only this one describes what a person
+ * receives, which is what the listing promises.
  *
  * ```
- *                          score   wrong answers   unrelated pairs
- *                         (of 20)    past floor    passing (of 380)
- *   embeddinggemma-300m      14           1               7   (1.8%)
- *   potion-base-32M           8           9              59  (15.5%)
- *   potion-base-8M            6          10              58  (15.3%)
- *   potion-base-2M            2           9              34   (8.9%)
+ *                          score   over the     noise     RAM     disk   ms/note
+ *                         (of 20)   floor      (of 380)
+ *   the lexical floor         5        —          —        —       —       —
+ *   embeddinggemma-300m      14       +9         8.2%   540 MB  209 MB   10
+ *   multilingual-e5-small     9       +4         8.7%   800 MB  129 MB    4
+ *   potion-base-32M           6       +1        15.5%   820 MB  230 MB    0.02
+ *   potion-base-8M            6       +1        15.3%   250 MB   54 MB    0.01
+ *   potion-base-2M            5        0         8.9%    90 MB   14 MB    0.01
  * ```
+ *
+ * Three things in that table are worth not skipping. `potion-base-2M` scores
+ * exactly what no model at all scores: it costs disk and returns the floor's
+ * own answers. The largest static costs **more memory than the recommended
+ * encoder** for a third of the improvement — a vocabulary that size is a very
+ * large JavaScript object, and "no runtime" was never the same as "cheap". And
+ * `multilingual-e5-small` costs the most memory of anything here, which is the
+ * opposite of what its disk footprint suggests.
+ *
+ * The `noise` column is measured offline, and is the one number here that
+ * still is: it is a property of the model's own geometry — every question
+ * against every note that does not answer it, 380 pairs — and it is what sets
+ * each encoder's floor.
+ *
+ * HOW EACH ENCODER FLOOR WAS CHOSEN. Not by taste, and not by inheriting the
+ * statics' four sigma — that silences an encoder almost completely. The rule is
+ * a rule so that the next entry is not an argument: **take the highest recall
+ * whose noise is no worse than the quietest model already shipping**, which is
+ * `potion-base-2M` at 8.9%. Both encoders land on 1.5 sigma under it. Each
+ * entry carries its own sweep, so the choice can be checked rather than
+ * trusted.
  *
  * Twenty questions separates a good model from a weak one. It does not
  * separate two models a point apart, and this table should not be read as if
@@ -119,6 +174,8 @@ export const MODELS: BrainModel[] = [
     kind: "encoder",
     dims: 768,
     score: 14,
+    ramMB: 540,
+    msPerNote: 10,
     // The q4 weights and everything the tokenizer needs, measured on disk after
     // a real download — not the repository's total, which is far larger because
     // it carries every quantization at once.
@@ -165,7 +222,42 @@ export const MODELS: BrainModel[] = [
       // higher than 1.8%. The vector channel is additive — fused with the
       // lexical ranking, never replacing it — so what that costs is extra
       // candidates in a fusion, not a wrong answer standing on its own.
-      floor: 0.596,
+      floor: 0.571,
+    },
+  },
+  {
+    name: "multilingual-e5-small",
+    kind: "encoder",
+    dims: 384,
+    score: 9,
+    // More memory than embeddinggemma, for fewer answers — the one number here
+    // that surprises people, and the reason this entry is not the "light" one
+    // it looks like. What it actually costs less of is disk and time.
+    ramMB: 800,
+    msPerNote: 4,
+    bytes: 135_392_016,
+    spec: {
+      repo: "Xenova/multilingual-e5-small",
+      dtype: "q8",
+      pool: "mean",
+      queryPrefix: "query: ",
+      passagePrefix: "passage: ",
+      // Read the sweep before moving this. Unlike embeddinggemma, this model's
+      // right answers and its unrelated pairs overlap heavily — true matches
+      // score 0.79 to 0.87 against a null that averages 0.79 — so no floor
+      // separates them cleanly and every choice trades recall for noise
+      // directly:
+      //
+      //   sigma   correct kept   wrong kept   unrelated passing (of 380)
+      //     1.0        11             7            74
+      //     1.5        10             6            33
+      //     2.0         7             3            10
+      //     2.5         2             0             0
+      //
+      // 1.5 is what the shared rule picks (see below). It leaves six wrong
+      // answers above the floor, which is more than embeddinggemma's one and
+      // is the honest cost of this entry.
+      floor: 0.834,
     },
   },
   // Below here: no runtime, no install, and they work from the bare binary.
@@ -174,8 +266,10 @@ export const MODELS: BrainModel[] = [
   {
     name: "potion-base-32M",
     kind: "static",
+    ramMB: 820,
+    msPerNote: 0.02,
     dims: 512,
-    score: 8,
+    score: 6,
     bytes: 241_275_225,
     url: "https://github.com/marcus-campos/parley/releases/download/v0.7.3/potion-base-32M.json",
     sha256: "f13a7eb79e26ca4863046e1a9f177bb4a99ac79c1cb834bbdac40458ab5af289",
@@ -184,6 +278,8 @@ export const MODELS: BrainModel[] = [
   {
     name: "potion-base-8M",
     kind: "static",
+    ramMB: 250,
+    msPerNote: 0.01,
     dims: 256,
     score: 6,
     bytes: 56_905_102,
@@ -194,8 +290,10 @@ export const MODELS: BrainModel[] = [
   {
     name: "potion-base-2M",
     kind: "static",
+    ramMB: 90,
+    msPerNote: 0.01,
     dims: 64,
-    score: 2,
+    score: 5,
     bytes: 14_758_931,
     url: "https://github.com/marcus-campos/parley/releases/download/v0.7.3/potion-base-2M.json",
     sha256: "04669e9bd91b6bf1c0cebb6b6cd397cb2ea1fd9cdf7084cd805b193c5fdd0235",
