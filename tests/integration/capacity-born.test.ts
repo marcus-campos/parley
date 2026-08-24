@@ -1186,7 +1186,10 @@ describe("a front parley started that never reached the bus", () => {
   });
 });
 
-describe("the panel is the newborn's window", () => {
+// Every test here spawns a real child through a `#!/bin/sh` stub and prepends
+// it to PATH with ":" — a POSIX precondition twice over. What sits underneath is
+// the same spawn path this repository already records as not working on Windows.
+describe.skipIf(WINDOWS_SPAWN)("the panel is the newborn's window", () => {
   test("what the newborn prints reaches the panel, and never the bus", async () => {
     // §7 of the design: a newborn's output streams into the *panel*, which is
     // what makes headless spawning legible instead of a black box. Into the
@@ -1239,7 +1242,11 @@ describe("the panel is the newborn's window", () => {
     const many = DEFAULTS.PANEL_TAIL_LINES + 50;
     const { daemon, front } = await bearThroughDaemon(
       repo, clock,
-      `i=0; while [ $i -lt ${many} ]; do echo "line $i"; i=$((i+1)); done; printf 'x%.0s' $(seq 1 400); echo`,
+      // Sem `seq`: ele não está em toda máquina, e a linha longa é o ponto do
+      // teste — se ela não sai, o que falha é a asserção sobre truncamento, por
+      // um motivo que nada tem a ver com o anel que ela verifica.
+      `i=0; while [ $i -lt ${many} ]; do echo "line $i"; i=$((i+1)); done; ` +
+      `long=; i=0; while [ $i -lt 400 ]; do long="\${long}x"; i=$((i+1)); done; echo "\$long"`,
     );
 
     const lines = await untilLines(daemon, front, DEFAULTS.PANEL_TAIL_LINES);
