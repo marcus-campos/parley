@@ -361,8 +361,15 @@ Here, parallelism becomes a proof.
    its `**Files:**` block and publishes N items with `origin: "planned"`.
 3. The collision graph orders them: disjoint tasks dispatch together, colliding
    tasks serialise.
-4. Dispatch is authoritative: a `planned` item arrives with an owner and cannot
-   be dropped. The owner is an idle existing front, or a newborn one (§4).
+4. Dispatch is authoritative: a `planned` **task** cannot be dropped once
+   taken. **As shipped, it arrives with no owner:** it is published `open` and
+   any front takes it, rather than being addressed to an idle front the way
+   this line first read. Naming an owner would have meant the bus choosing who
+   works on what, which is the authority §5.5(d) refuses to put inside the
+   daemon; "dispatched" therefore means *published into its wave*, not
+   *assigned*. The one planned item that really is addressed to somebody is the
+   `review` §5.3(6) creates, and that one **can** be dropped — an offer buys
+   first refusal, not obedience.
 5. The executing front follows the plan's `- [ ]` steps, TDD as written.
 6. Each finished task produces a `kind: "review"` item — superpowers already
    mandates a review after every task. Peer review stops being a convention the
@@ -375,9 +382,16 @@ Markdown in, `{ tasks: [{ n, title, paths }] }` out. No clock, no I/O, so it
 lives beside the state machine and *"do two tasks in this plan collide?"* is a
 deterministic unit test.
 
-A task whose `**Files:**` block is missing or unparseable is **not** dispatched;
-it is published as `open` with the parse failure as its title. Silently dropping
-a task from a plan is the one failure mode that would make this untrustworthy.
+A task whose `**Files:**` block is missing or unparseable is dispatched like any
+other — published `open` into its wave, with the parse failure **appended to its
+title** — appended to `task N` when the heading carried no title, since
+`openWave` falls back to that label first and so the reason is never the whole
+of what the item is called. An earlier draft
+of this line said such a task is "not dispatched", using the word in the
+assigned-to-an-owner sense §5.3(4) has since dropped; nothing about the item
+differs from a task that parsed, and the README's Shape plan section says it
+the shipped way. Silently dropping a task from a plan is the one failure mode
+that would make this untrustworthy.
 
 ### 5.5 Four rulings
 

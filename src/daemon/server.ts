@@ -17,6 +17,9 @@ import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
 
+/** How many skipped journal entries are named before the rest become a count. */
+const MAX_NAMED_FAILURES = 3;
+
 interface Conn {
   socket: Socket;
   decoder: Decoder;
@@ -48,6 +51,30 @@ export class DaemonAlreadyRunning extends Error {
     super(`another parley daemon is already serving ${address}`);
     this.name = "DaemonAlreadyRunning";
   }
+}
+
+/**
+ * What a thrown value says about itself, without trusting it to be an Error.
+ *
+ * `restore` catches whatever a reducer threw, and `(e as Error).message` is a
+ * cast rather than a check — the same shape as the `frame.tasks as PlanTask[]`
+ * this branch removed. `throw null` would make the REPORTER throw inside its
+ * own catch and take the boot down anyway, which is exactly the failure that
+ * catch exists to end, and the same one the `?.` on `entry.frame.op` fixes one
+ * expression earlier.
+ *
+ * Nothing here calls `toString` on the value. A reporting line for a poisoned
+ * journal is not the place to run code the journal supplied.
+ *
+ * Not reachable today: every `throw` under `src/` raises an `Error` (or
+ * `NotARepository`, which extends one) and the engine's own throws are Errors
+ * too. So this pins the shape against deletion and can never go red for a live
+ * bug — the same trade the `livePlanItems` breadth test makes.
+ */
+export function thrownMessage(e: unknown): string {
+  if (e instanceof Error && typeof e.message === "string") return e.message;
+  if (typeof e === "string") return e;
+  return `a value that is not a readable Error (${e === null ? "null" : typeof e})`;
 }
 
 export class ParleyDaemon {
@@ -287,19 +314,108 @@ export class ParleyDaemon {
   /**
    * Rebuild from the journal. The whole point of writing before responding is
    * that this reconstruction is lossless up to the last completed line.
+   *
+   * An entry that THROWS is skipped and reported, not allowed to abort the
+   * boot. `Journal.replay` already decided this question one layer down for a
+   * line that will not parse — "a bus that will not boot because of one torn
+   * line is worse than a bus missing its final event" — and an entry that
+   * parses and then throws is the same damage one layer up. It is strictly
+   * worse, in fact: the journal is written BEFORE the frame is applied, so a
+   * frame that throws is on disk before anyone learns it is poison, and
+   * without this a single such frame makes the repository undispatchable
+   * forever. Restarting replays it. "A broken parley must never stop the work"
+   * is the rule that outranks everything here, and not booting at all is the
+   * most literal way there is to violate it.
+   *
+   * Three alternatives were weighed and rejected. Refusing to boot with a
+   * repair message is the current behaviour with better prose, and the repair
+   * is hand-editing the journal. Aborting the replay at the first failure
+   * silently drops every event after it, which costs territory and history
+   * that were never in question. Snapshotting the state before each entry so a
+   * failure could be rolled back is O(state) per entry on the one structure
+   * that grows without bound.
+   *
+   * So the cost is named instead of paid: `apply` mutates in place, so an
+   * entry that throws part-way leaves what it had already written. Every
+   * reducer that reads a frame is expected to validate at its boundary rather
+   * than rely on this — `dispatchPlan` and `readPathList` both do, and the
+   * plan hazard that motivated this refuses before it mutates anything.
    */
   private restore(mode: Mode): State {
     const state = initialState(mode);
     const { entries, discarded } = this.journal.replay();
-    for (const entry of entries) {
+    const failed: string[] = [];
+    let orphaned = 0;
+    entries.forEach((entry, index) => {
       const ms = Date.parse(entry.at);
-      apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
-    }
+      try {
+        const outcome = apply(state, entry.actorId, entry.frame, makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter));
+        // The blast radius of a skip, measured rather than assumed. A frame is
+        // journaled under the participant id its connection was bound to, and
+        // `handleFrame` only ever sets that binding from a join the reducer
+        // ACCEPTED — so an entry whose actor is unknown on replay is one whose
+        // join went with a skipped entry. That is the same loss one
+        // indirection away, and it applies nothing at all, which is how
+        // `skipped 1 journal entry` can mean a whole session.
+        //
+        // Counted only when something was actually lost — a discarded line or
+        // an already-skipped entry. A refused entry is otherwise ordinary:
+        // every frame is journaled, including the ones the reducer refused the
+        // first time, so refusals on replay are the normal shape of a healthy
+        // journal. `NOT_JOINED` under a real actor is reachable on a healthy
+        // one too — two connections may share a session and so share an id,
+        // and one of them leaving marks that participant gone — which is why
+        // this is not simply counted always.
+        //
+        // A DISCARDED line is loss for the same reason a skipped entry is, and
+        // that half is not defensive: a torn last line is exactly what
+        // `kill -9` writes, and if the torn one was a join, the whole session
+        // after it is orphaned with nothing skipped at all.
+        if ((discarded.length > 0 || failed.length > 0) && entry.actorId !== null
+          && !outcome.response.ok && outcome.response.error.code === "NOT_JOINED") orphaned += 1;
+      } catch (e) {
+        // Read through `?.`, because the reason an entry throws may be that
+        // its frame is not an object at all — a reporting line that reads it
+        // the direct way throws inside the handler and takes the boot down
+        // anyway, which is the whole defect this exists to end. `thrownMessage`
+        // is the same care one expression later, for the same reason.
+        const op = String((entry.frame as Record<string, unknown> | null)?.op ?? "?");
+        failed.push(`entry ${index + 1} (op ${op}, at ${entry.at}): ${thrownMessage(e)}`);
+      }
+    });
     // Nothing survives a restart connected; presence has to be re-proven.
     for (const p of Object.values(state.participants)) p.connected = false;
     if (discarded.length > 0) {
       process.stderr.write(
         `parley: discarded ${discarded.length} unreadable journal line(s); starting anyway\n`,
+      );
+    }
+    if (failed.length > 0) {
+      // Named, not counted: the operator repairing this needs to know which
+      // op poisoned the log, and the journal is never rewritten from here —
+      // that would destroy the evidence while it is still the only copy.
+      // The count is entries, not damage, and saying only the count tells an
+      // operator that one entry was lost when a whole session may have gone
+      // with it. Both lines below exist to stop that: the first because a
+      // dependent loss is not always a participant (a skipped `claim` makes a
+      // later `release` refuse too), the second because the participant case
+      // is the one that can actually be measured here.
+      process.stderr.write(
+        `parley: skipped ${failed.length} journal entry(ies) that could not be replayed; starting anyway\n` +
+          failed.slice(0, MAX_NAMED_FAILURES).map((f) => `  ${f}\n`).join("") +
+          (failed.length > MAX_NAMED_FAILURES ? `  ...and ${failed.length - MAX_NAMED_FAILURES} more\n` : "") +
+          "  whatever depended on a skipped entry is refused on replay and writes nothing," +
+          " so this counts entries, not the state they would have written\n",
+      );
+    }
+    // Reported on its own, because the loss it measures belongs to a discarded
+    // line just as much as to a skipped entry, and the operator reading either
+    // count needs the same correction: a lost `join` costs everything its
+    // session did, and none of it appears in the number above.
+    if (orphaned > 0) {
+      process.stderr.write(
+        `parley: ${orphaned} journal entry(ies) named a participant that no surviving entry joined` +
+          " — a lost join takes its whole session with it\n",
       );
     }
     return state;

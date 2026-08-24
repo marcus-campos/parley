@@ -2,6 +2,8 @@ import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { ParleyClient } from "../client/client";
+import { isSelfReview } from "../state/work";
+import type { WorkItem } from "../state/types";
 import type { RepoInfo } from "../repo/locate";
 import { PAGE } from "./web-page";
 import { readPanelConfig, sanitiseName, writePanelConfig } from "./panel-config";
@@ -25,6 +27,25 @@ import { dirname, join } from "node:path";
  * Localhost is not a security boundary on a shared machine: without the token,
  * any process — or any page you have open — could read the bus and speak on it.
  */
+
+/** A work item as the page reads it: the record, plus what it must not re-derive. */
+export type PanelWorkRow = WorkItem & { selfReview: boolean };
+
+/**
+ * The one thing the page is not allowed to work out for itself.
+ *
+ * `isSelfReview` is answered in exactly one place so that `parley take`, the
+ * take event, `parley works` and both panels can never disagree about it — and
+ * the web page is the surface that cannot import it, since it ships as one
+ * self-contained string with no bundler behind it. So the server answers it
+ * here and the page renders the answer. Recomputing it in the template is how
+ * the only surface capable of drifting drifts: a disclosure that says the
+ * exact opposite of every other surface, about the rule parley chose to state
+ * rather than enforce.
+ */
+export function panelWorkRows(work: WorkItem[]): PanelWorkRow[] {
+  return work.map((w) => ({ ...w, selfReview: isSelfReview(w, w.takenById) }));
+}
 
 export interface Snapshot {
   mode: string;
@@ -156,7 +177,7 @@ export async function runWebPanel(
       fronts: (who?.participants ?? []).filter((p) => p.name !== myName),
       requests: reqR.ok ? (reqR as unknown as { requests: unknown[] }).requests : [],
       notes: notesR.ok ? (notesR as unknown as { notes: unknown[] }).notes : [],
-      work: worksR.ok ? (worksR as unknown as { work: unknown[] }).work : [],
+      work: worksR.ok ? panelWorkRows((worksR as unknown as { work: WorkItem[] }).work) : [],
       feed: feed.slice(-200),
     };
   }

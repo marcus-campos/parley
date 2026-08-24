@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { workDetailLines, workSummaryLines } from "../../src/cli/watch";
+import { panelWorkRows } from "../../src/cli/web";
 import { PAGE } from "../../src/cli/web-page";
+import type { WorkItem } from "../../src/state/types";
 
 interface Row {
   id: string; paths: string[]; title: string; state: string;
   offeredToId: string | null; takenById: string | null;
+  kind: string; publishedById: string;
 }
 
 const front = (id: string, name: string) => ({ id, name });
@@ -12,7 +15,7 @@ const front = (id: string, name: string) => ({ id, name });
 function offeredTo(idPrefix: string, ownerId: string, n: number): Row[] {
   return Array.from({ length: n }, (_, i) => ({
     id: `${idPrefix}_${i}`, paths: [`${idPrefix}/${i}.ts`], title: `item ${idPrefix}${i}`,
-    state: "offered", offeredToId: ownerId, takenById: null,
+    state: "offered", offeredToId: ownerId, takenById: null, kind: "work", publishedById: "",
   }));
 }
 
@@ -21,7 +24,7 @@ describe("the WORK section of the panel", () => {
     const work: Row[] = [
       ...offeredTo("resp", "p_resp", 10),
       ...offeredTo("core", "p_core", 2),
-      { id: "w_open", paths: ["open/1.ts"], title: "orphan", state: "open", offeredToId: null, takenById: null },
+      { id: "w_open", paths: ["open/1.ts"], title: "orphan", state: "open", offeredToId: null, takenById: null, kind: "work", publishedById: "" },
     ];
     const fronts = [front("p_core", "CORE"), front("p_resp", "RESPONSIVO")];
 
@@ -45,8 +48,8 @@ describe("the WORK section of the panel", () => {
 
   test("done items count toward neither the total nor any group", () => {
     const work: Row[] = [
-      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null },
-      { id: "w_2", paths: ["b.ts"], title: "y", state: "done", offeredToId: null, takenById: "p_resp" },
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "y", state: "done", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
     ];
     const [header, summary] = workSummaryLines(work, [front("p_resp", "RESPONSIVO")]);
     expect(header).toContain("WORK (1)");
@@ -55,17 +58,40 @@ describe("the WORK section of the panel", () => {
 
   test("offered and taken are named as what they are, not merged into one count", () => {
     const work: Row[] = [
-      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null },
-      { id: "w_2", paths: ["b.ts"], title: "y", state: "taken", offeredToId: null, takenById: "p_resp" },
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "y", state: "taken", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
     ];
     const [, summary] = workSummaryLines(work, [front("p_resp", "RESPONSIVO")]);
     expect(summary).toContain("1 offered");
     expect(summary).toContain("1 taken");
   });
 
+  // The panel shows who holds an item and never whose work it is. A review
+  // held by the front that published it is the one case where those two
+  // differ in a way a person watching would want to know about, and it is the
+  // case parley refuses to block — so the row has to say it.
+  test("a review held by the front that published it is named as a self-review", () => {
+    const work: Row[] = [
+      {
+        id: "w_1", paths: ["a.ts"], title: "review: Task 1", state: "taken",
+        offeredToId: null, takenById: "p_only", kind: "review", publishedById: "p_only",
+      },
+      {
+        id: "w_2", paths: ["b.ts"], title: "review: Task 2", state: "taken",
+        offeredToId: null, takenById: "p_only", kind: "review", publishedById: "p_other",
+      },
+    ];
+    const lines = workDetailLines(work, [front("p_only", "ONLY"), front("p_other", "OTHER")]);
+    const [own, theirs] = lines as [string, string];
+    expect(own).toContain("self-review");
+    // Somebody else's work checked by ONLY is the ordinary case and says
+    // nothing extra — otherwise the marker would carry no information.
+    expect(theirs).not.toContain("self-review");
+  });
+
   test("a name unresolved against the current front list falls back to the id, not to silence", () => {
     const work: Row[] = [
-      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_gone", takenById: null },
+      { id: "w_1", paths: ["a.ts"], title: "x", state: "offered", offeredToId: "p_gone", takenById: null, kind: "work", publishedById: "" },
     ];
     const [, summary] = workSummaryLines(work, []);
     expect(summary).toContain("p_gone");
@@ -79,8 +105,8 @@ describe("the WORK section of the panel", () => {
 
   test("the expanded view names each item by path and owner — what the collapsed line deliberately omits", () => {
     const work: Row[] = [
-      { id: "w_1", paths: ["a.ts"], title: "fix the thing", state: "offered", offeredToId: "p_resp", takenById: null },
-      { id: "w_2", paths: ["b.ts"], title: "finished", state: "done", offeredToId: null, takenById: "p_resp" },
+      { id: "w_1", paths: ["a.ts"], title: "fix the thing", state: "offered", offeredToId: "p_resp", takenById: null, kind: "work", publishedById: "" },
+      { id: "w_2", paths: ["b.ts"], title: "finished", state: "done", offeredToId: null, takenById: "p_resp", kind: "work", publishedById: "" },
     ];
     const lines = workDetailLines(work, [front("p_resp", "RESPONSIVO")]);
     expect(lines.some((l) => l.includes("a.ts") && l.includes("RESPONSIVO"))).toBe(true);
@@ -104,6 +130,50 @@ describe("the WORK section of the web panel", () => {
 
   test("the page groups by owner client-side rather than shipping one row per item", () => {
     expect(PAGE).toContain("workGroupsFrom");
+  });
+
+  // The page renders the answer; it does not work it out. A copy of the
+  // predicate here is the only way this surface could ever disagree with
+  // `parley take`, the take event, `parley works` and the terminal panel —
+  // and inverting a copy is invisible to a substring test, which is how the
+  // old version of this test let `!==` through.
+  test("the item row reads the server's answer and re-derives nothing", () => {
+    const start = PAGE.indexOf('$("work-items").innerHTML');
+    const end = PAGE.indexOf('.join("")', start);
+    expect(start).toBeGreaterThan(-1);
+    const renderer = PAGE.slice(start, end);
+    expect(renderer).toContain("w.selfReview");
+    expect(renderer).toContain("self-review");
+    // The field the old inline copy keyed on, and its only use in this row was
+    // the predicate. `takenById` cannot be asserted the same way: the owner
+    // column two lines above legitimately reads it.
+    expect(renderer).not.toContain("publishedById");
+  });
+
+  /**
+   * And the behaviour behind it, which the substring test above cannot reach:
+   * the web panel used to compute this inline, and BOTH inversions of that
+   * copy — `!==`, and dropping the comparison entirely so every review is
+   * marked — left every test green. The answer now comes from the same
+   * `isSelfReview` every other surface calls, so this pins the value, not a
+   * spelling.
+   */
+  test("the row the server sends says self-review for the publisher's own review, and only for that", () => {
+    const base = {
+      paths: ["a.ts"], evidenceIds: [], publishedByName: "WORKER", origin: "discovered" as const,
+      state: "taken" as const, offeredToId: null, offeredAtMs: null, orphanedAtMs: null,
+      nudgedAtMs: null, at: "2026-08-20T12:00:00Z",
+    };
+    const work: WorkItem[] = [
+      { ...base, id: "w_1", title: "review: Task 1", kind: "review", publishedById: "p_a", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_2", title: "review: Task 2", kind: "review", publishedById: "p_b", takenById: "p_a", reviewOf: "w_0" },
+      { ...base, id: "w_3", title: "Task 3", kind: "work", publishedById: "p_a", takenById: "p_a", reviewOf: null },
+    ];
+
+    expect(panelWorkRows(work).map((w) => w.selfReview)).toEqual([true, false, false]);
+    // Nothing else about the item is dropped on the way through: the row is
+    // the record plus one field, and the page reads paths, title and state off it.
+    expect(panelWorkRows(work)[0]).toMatchObject({ id: "w_1", title: "review: Task 1", state: "taken" });
   });
 
   test("pressing w toggles WORK open, the same key the terminal panel answers to", () => {

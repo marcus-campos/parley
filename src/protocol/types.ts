@@ -19,6 +19,7 @@ export const OPS = [
   "mode", "shape", "status",
   "work", "works", "take", "drop", "done",
   "brain",
+  "plan",
 ] as const;
 export type Op = (typeof OPS)[number];
 
@@ -81,6 +82,11 @@ export const DEFAULTS = {
   ORPHAN_POOL_MS: 10 * 60_000,
   /** Zero connected participants for this long and the daemon exits. */
   IDLE_SHUTDOWN_MS: 30 * 60_000,
-  /** Hard budget for the hook query path. Overrun means let go, never block. */
+  /**
+   * The unit the hook's hard deadline is expressed in, NOT the deadline.
+   * `runHook` arms its timer at `HOOK_BUDGET_MS * 40` — 1.2s — and that
+   * multiplier is the number to read when you want to know how long a tool
+   * call can wait on parley. Overrun means let go, never block.
+   */
   HOOK_BUDGET_MS: 30,
 } as const;
