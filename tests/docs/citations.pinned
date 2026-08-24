@@ -382,11 +382,6 @@
 |         // degrade is the same unranked list a plain notes/results call gets.
 |         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
 |       }
-@ docs/concepts/recall.md src/state/machine.ts 0375a6f707bc
-|  * front is stuck on the floor. Turning the brain on or off is a different
-|  * matter: a download this size and a model choice spend somebody's disk and
-|  * somebody's money, on somebody's machine, and an agent cannot answer the
-|  * interactive prompt that decision deserves on that person's behalf.
 @ docs/concepts/recall.md src/daemon/server.ts 64b9ded06744
 |       } catch (e) {
 |         // A broken index must never take the query down with it — the honest

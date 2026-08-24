@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isLoadable } from "../../src/brain/embed";
-import { MODELS, RECOMMENDED } from "../../src/brain/registry";
+import { BENCHMARK_SIZE, isStatic, MODELS, RECOMMENDED } from "../../src/brain/registry";
 
 const BIN = join(import.meta.dir, "..", "..", "dist", "parley");
 
@@ -80,7 +80,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
     });
   }, 15_000);
 
-  test("and a person's shell gets the menu, with what each model is", async () => {
+  test("and a person's shell gets the menu, ranked by what each model scored", async () => {
     await withTempRepo(async (repo, env) => {
       // Not a formality. An earlier version skipped the listing whenever there
       // was one loadable entry, so a person typed `enable` and received 54 MB
@@ -97,19 +97,31 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
       expect(code).toBe(0);
       const payload = JSON.parse(stdout) as {
         recommended: string;
-        models: { name: string; languages: string; bytes: number; dims: number; recommended: boolean }[];
+        models: {
+          name: string; score: number; of: number; bytes: number; dims: number;
+          needsRuntime: boolean; recommended: boolean;
+        }[];
       };
       expect(payload.models.length).toBeGreaterThan(1);
-      // Every row says what it is and what it costs — a size and a language,
-      // not just a name.
+      // Every row carries a measured score and what it costs. The listing used
+      // to describe models in prose ("English and Portuguese — the one to take
+      // unless the disk hurts"), which asked a person to interpret adjectives
+      // written by whoever added the entry. A number they can rank on is the
+      // thing that lets them choose.
       for (const m of payload.models) {
-        expect(m.languages.length).toBeGreaterThan(10);
+        expect(m.score).toBeGreaterThan(0);
+        expect(m.score).toBeLessThanOrEqual(m.of);
         expect(m.bytes).toBeGreaterThan(0);
         expect(m.dims).toBeGreaterThan(0);
       }
+      // Ranked, best first — a menu is only a ranking if it is ordered.
+      const scores = payload.models.map((m) => m.score);
+      expect([...scores].sort((a, b) => b - a)).toEqual(scores);
       // Exactly one is recommended, and it is a model that exists.
       expect(payload.models.filter((m) => m.recommended)).toHaveLength(1);
       expect(payload.models.map((m) => m.name)).toContain(payload.recommended);
+      // The recommendation is the top of the ranking, not a separate opinion.
+      expect(payload.models[0]!.name).toBe(payload.recommended);
       // And nothing was downloaded to show a menu.
       expect(existsSync(expectedModelsDir(clean.HOME as string))).toBe(false);
     });
@@ -125,11 +137,13 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
    * `isLoadable` rather than in a list that happens to contain an example.
    */
   test("a tokenizer this build cannot load is refused, whatever the registry lists", () => {
-    const unloadable = { name: "x", dims: 8, languages: "", bytes: 1, url: "", sha256: "", tokenizer: "xlmr" } as const;
+    const unloadable = {
+      name: "x", kind: "static", dims: 8, score: 1, bytes: 1, url: "", sha256: "", tokenizer: "xlmr",
+    } as const;
     expect(isLoadable(unloadable)).toBe(false);
     // And the shipped registry offers nothing a person can pick and not use:
     // that is the property whose absence produced a dead end.
-    expect(MODELS.filter((m) => !isLoadable(m))).toEqual([]);
+    expect(MODELS.filter(isStatic).filter((m) => !isLoadable(m))).toEqual([]);
     expect(MODELS.length).toBeGreaterThan(0);
   });
 
@@ -141,7 +155,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
     // it names something real and loadable — the measurement lives in the
     // registry's comment, where the next person changing it will read it.
     expect(MODELS.map((m) => m.name)).toContain(RECOMMENDED);
-    expect(MODELS.filter((m) => !isLoadable(m))).toEqual([]);
+    expect(MODELS.filter(isStatic).filter((m) => !isLoadable(m))).toEqual([]);
     expect(MODELS.length).toBeGreaterThan(1);
   });
 });

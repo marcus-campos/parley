@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { detectAddrEnv } from "../transport/address";
-import type { BrainModel } from "./registry";
+import type { StaticBrainModel } from "./registry";
 
 /**
  * Models live outside any repository, keyed by model name rather than repo:
@@ -11,7 +11,7 @@ import type { BrainModel } from "./registry";
  * with a `models` folder standing in for the repo id — a fact about the
  * machine, not about any one project.
  */
-function defaultModelsDir(): string {
+export function defaultModelsDir(): string {
   const env = detectAddrEnv(process.cwd());
   if (env.platform === "win32") {
     return join(env.localAppData ?? join(env.home, "AppData", "Local"), "parley", "models");
@@ -29,7 +29,7 @@ function defaultModelsDir(): string {
  * the same trap a prior review filed against a suite mutating the real
  * adapter registry.
  */
-export function modelPath(model: BrainModel, baseDir?: string): string {
+export function modelPath(model: StaticBrainModel, baseDir?: string): string {
   return join(baseDir ?? defaultModelsDir(), model.name, "model.bin");
 }
 
@@ -45,7 +45,7 @@ export function modelPath(model: BrainModel, baseDir?: string): string {
  * corrupted, and the brain stays off.
  */
 export async function ensureModel(
-  model: BrainModel,
+  model: StaticBrainModel,
   fetchFn: typeof fetch = fetch,
   baseDir?: string,
 ): Promise<string | null> {

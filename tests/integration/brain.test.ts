@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { modelPath } from "../../src/brain/download";
-import { MODELS } from "../../src/brain/registry";
+import { isStatic, MODELS } from "../../src/brain/registry";
 import { calibrate } from "../../src/brain/calibrate";
 import { loadVectors } from "../../src/brain/vectors";
 import { DIMS, FIXTURE_MODEL } from "../brain/fixtures/model";
@@ -13,7 +13,11 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-const REGISTERED = MODELS[0]!;
+// A static entry specifically: this suite plants a fixture model *file* on
+// disk and measures what the daemon does with it, which is a thing only static
+// models have. Taking MODELS[0] would follow the listing's ranking straight
+// into an encoder the moment one outranks them.
+const REGISTERED = MODELS.find(isStatic)!;
 
 /**
  * The generated model fixture (`tests/brain/fixtures/model.ts`) dropped at the

@@ -8,7 +8,7 @@ import { calibrate, SEED } from "../../src/brain/calibrate";
 import { loadStaticModel } from "../../src/brain/embed";
 import { LexicalIndex } from "../../src/brain/lexical";
 import { FIXTURE_MODEL } from "./fixtures/model";
-import type { BrainModel } from "../../src/brain/registry";
+import type { StaticBrainModel } from "../../src/brain/registry";
 import { apply, initialState, makeCtx } from "../../src/state/machine";
 import type { Ctx, Note, State } from "../../src/state/types";
 
@@ -58,8 +58,8 @@ describe("nothing here can stop the work", () => {
     });
 
     test("never activates the brain", async () => {
-      const model: BrainModel = {
-        name: "bad", dims: 4, languages: "x", bytes: 4,
+      const model: StaticBrainModel = {
+        name: "bad", kind: "static", dims: 4, score: 1, bytes: 4,
         url: "https://example.invalid/m.bin", sha256: "f".repeat(64), tokenizer: "wordlevel",
       };
       const body = new TextEncoder().encode("not the model");

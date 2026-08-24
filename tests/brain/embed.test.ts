@@ -504,14 +504,14 @@ describe("aboveRelevanceFloor is absolute — a candidate is judged alone", () =
 describe("which registry entries this build can actually load", () => {
   test("a wordlevel entry is loadable", () => {
     expect(isLoadable({
-      name: "tiny", dims: 2, languages: "test", bytes: 1,
+      name: "tiny", kind: "static", dims: 2, score: 1, bytes: 1,
       url: "https://example.invalid/m.json", sha256: "0".repeat(64), tokenizer: "wordlevel",
     })).toBe(true);
   });
 
   test("an xlmr entry is not — this build has no XLM-RoBERTa tokenizer", () => {
     expect(isLoadable({
-      name: "big", dims: 256, languages: "many", bytes: 1,
+      name: "big", kind: "static", dims: 256, score: 1, bytes: 1,
       url: "https://example.invalid/m.safetensors", sha256: "0".repeat(64), tokenizer: "xlmr",
     })).toBe(false);
   });

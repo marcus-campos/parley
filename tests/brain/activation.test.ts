@@ -1,6 +1,6 @@
 // tests/brain/activation.test.ts
 import { beforeEach, describe, expect, test } from "bun:test";
-import { MODELS } from "../../src/brain/registry";
+import { BENCHMARK_SIZE, isStatic, MODELS } from "../../src/brain/registry";
 import { apply, initialState, makeCtx } from "../../src/state/machine";
 import type { Ctx, State } from "../../src/state/types";
 
@@ -24,14 +24,35 @@ beforeEach(() => {
 });
 
 describe("turning the brain on", () => {
-  test("it starts off, and every registry entry declares its size and languages", () => {
+  test("it starts off, and every registry entry declares its cost and its score", () => {
     expect(state.brain.active).toBe(false);
     expect(MODELS.length).toBeGreaterThan(0);
     for (const m of MODELS) {
       expect(m.bytes).toBeGreaterThan(0);
-      expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
-      expect(m.languages).toBeTruthy();
+      // The score is the only claim the listing makes, so an unmeasured entry
+      // is worse than an absent one: it would rank against models that were
+      // actually run.
+      expect(m.score).toBeGreaterThan(0);
+      expect(m.score).toBeLessThanOrEqual(BENCHMARK_SIZE);
+      if (isStatic(m)) {
+        expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
+      } else {
+        // An encoder has no file to checksum — it is fetched by its runtime —
+        // so what has to be pinned instead is the floor, which doubles as the
+        // fingerprint the persisted vectors are validated against.
+        expect(m.spec.floor).toBeGreaterThan(0);
+        expect(m.spec.repo).toBeTruthy();
+      }
     }
+  });
+
+  test("no two models share a floor, because the vector cache tells them apart by it", () => {
+    // `vectors.ts` stores dims+floor as the fingerprint proving a persisted
+    // index belongs to the model now loaded. Two models sharing both would let
+    // one model's vectors be loaded as the other's, and every ranking after
+    // that would be nonsense that looks like a working brain.
+    const fingerprints = MODELS.map((m) => `${m.dims}:${isStatic(m) ? m.name : m.spec.floor}`);
+    expect(new Set(fingerprints).size).toBe(MODELS.length);
   });
 
   test("an agent asking for semantic recall gets the floor, and never a prompt", () => {

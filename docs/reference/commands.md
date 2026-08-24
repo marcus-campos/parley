@@ -396,7 +396,7 @@ is semantic recall on, and with which model
 parley brain enable [<model>]
 ```
 
-human-only. With no model named, lists the registry — name, languages, size — so you can weigh it before anything downloads.
+human-only. With no model named, lists the registry ranked by measured score, with the disk each costs, so you can weigh it before anything downloads.
 
 ```
 parley brain disable

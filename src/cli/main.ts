@@ -11,7 +11,8 @@ import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { ensureModel } from "../brain/download";
 import { isLoadable } from "../brain/embed";
-import { findModel, MODELS, RECOMMENDED } from "../brain/registry";
+import { BENCHMARK_SIZE, findModel, isEncoder, MODELS, RECOMMENDED } from "../brain/registry";
+import { bunAvailable, installEncoder } from "../brain/sidecar";
 import { parsePlan } from "../plan/parse";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -129,8 +130,9 @@ const USAGE = `parley — coordination bus for concurrent agent sessions in one 
   parley brain               is semantic recall on, and with which model
   parley brain enable [<model>]
                              human-only. With no model named, lists the
-                             registry — name, languages, size — so you can
-                             weigh it before anything downloads.
+                             registry ranked by measured score, with the disk
+                             each costs, so you can weigh it before anything
+                             downloads.
   parley brain disable
 
   parley plan <path-to-plan.md> [--replace]
@@ -1049,24 +1051,35 @@ async function main(): Promise<void> {
             // skipped straight to downloading whenever there was one loadable
             // entry — so a person typed `enable` and received 54 MB of a thing
             // whose name told them nothing.
-            const rows = MODELS.map((m) => {
-              const size = `${Math.round(m.bytes / (1024 * 1024))} MB`;
+            // Ranked, best first, and the rank is the only claim made about
+            // any of them. Everything else on the row is a cost the person is
+            // about to pay: disk, and whether this one needs a runtime.
+            const ranked = [...MODELS].sort((a, b) => b.score - a.score);
+            const width = Math.max(...ranked.map((m) => m.name.length));
+            const rows = ranked.map((m) => {
+              const size = `${Math.round(m.bytes / (1024 * 1024))} MB`.padStart(7);
+              const needs = isEncoder(m) ? "needs bun" : "no runtime";
               const mark = m.name === RECOMMENDED ? "  ← recommended" : "";
-              return `  ${m.name}${mark}\n      ${m.languages}\n      ${size} on disk, ${m.dims} dimensions`;
+              return `  ${m.name.padEnd(width)}  ${String(m.score).padStart(2)}/20  ${size}  ${needs}${mark}`;
             });
             return out(
               p,
-              `parley: semantic recall runs a small model on this machine — no network after\n` +
-                `the download, nothing leaves the repository.\n\n${rows.join("\n\n")}\n\n` +
+              `parley: semantic recall runs a model on this machine — no network after the\n` +
+                `download, nothing leaves the repository.\n\n` +
+                `Scored on ${BENCHMARK_SIZE} questions, each with exactly one note that answers it: how\n` +
+                `many times that note came back as the answer.\n\n${rows.join("\n")}\n\n` +
                 `  parley brain enable ${RECOMMENDED}\n\n` +
+                `"needs bun" is a one-time install of a local runtime, done for you by enable.\n` +
                 `The lexical floor answers either way; the model is what finds a note that\n` +
                 `shares no words with the question.`,
               {
                 ok: true,
                 recommended: RECOMMENDED,
-                models: MODELS.map((m) => ({
-                  name: m.name, languages: m.languages, bytes: m.bytes,
-                  dims: m.dims, loadable: isLoadable(m), recommended: m.name === RECOMMENDED,
+                models: ranked.map((m) => ({
+                  name: m.name, score: m.score, of: BENCHMARK_SIZE, bytes: m.bytes, dims: m.dims,
+                  kind: m.kind, needsRuntime: isEncoder(m),
+                  available: isEncoder(m) ? bunAvailable() : isLoadable(m),
+                  recommended: m.name === RECOMMENDED,
                 })),
               },
             );
@@ -1075,33 +1088,48 @@ async function main(): Promise<void> {
           const model = findModel(name);
           if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
 
-          // Refuse before a single byte moves — the same suspicion Task 6
-          // already applies to the download itself, aimed here at whether
-          // this build could ever load the result. The registry knows about
-          // `xlmr` models; this build's loader (`src/brain/embed.ts`) only
-          // understands `wordlevel`. Downloading first and finding that out
-          // after would spend somebody's disk and time on an outcome that
-          // was already certain.
-          if (!isLoadable(model)) {
-            fail(
-              p,
-              `${model.name} needs the ${model.tokenizer} tokenizer, which this build does not carry — only ` +
-                `wordlevel loads today. That is a limitation of this build, not a bad download or a broken ` +
-                `model; it stays listed because the model is real. Run "parley brain enable" to see which ` +
-                `entries are loadable.`,
-            );
-          }
-
-          // The size is shown before anything is downloaded, unconditionally
-          // — even under --json, since this goes to stderr and never
-          // touches the JSON on stdout. A person agreeing to spend that much of
-          // their own disk should see the number first, since that is the
-          // entire reason this is theirs to decide.
+          // The size is shown before anything is downloaded, unconditionally —
+          // even under --json, since this goes to stderr and never touches the
+          // JSON on stdout. A person agreeing to spend that much of their own
+          // disk should see the number first, since that is the entire reason
+          // this is theirs to decide.
           process.stderr.write(
             `parley: downloading ${model.name} (~${Math.round(model.bytes / (1024 * 1024))} MB)...\n`,
           );
-          const path = await ensureModel(model);
-          if (!path) fail(p, "download or checksum verification failed — the brain stays off");
+
+          if (isEncoder(model)) {
+            // Refuse before a single byte moves, for the same reason the
+            // tokenizer check below refuses: this one cannot end well and the
+            // person should not pay a download to find that out.
+            if (!bunAvailable()) {
+              fail(
+                p,
+                `${model.name} runs as a local process and needs bun to run it, which is not on PATH. ` +
+                  `Install it with "curl -fsSL https://bun.sh/install | bash", or pick a model listed as ` +
+                  `"no runtime" — run "parley brain enable" to see them.`,
+              );
+            }
+            const installed = installEncoder(undefined, model);
+            if (!installed.ok) {
+              fail(p, `${model.name} could not be installed: ${installed.error ?? "unknown"} — the brain stays off`);
+            }
+          } else {
+            // The registry knows about `xlmr` models; this build's static
+            // loader (`src/brain/embed.ts`) only understands `wordlevel`.
+            // Downloading first and finding that out after would spend
+            // somebody's disk and time on an outcome that was already certain.
+            if (!isLoadable(model)) {
+              fail(
+                p,
+                `${model.name} needs the ${model.tokenizer} tokenizer, which this build does not carry — only ` +
+                  `wordlevel loads today. That is a limitation of this build, not a bad download or a broken ` +
+                  `model; it stays listed because the model is real. Run "parley brain enable" to see which ` +
+                  `entries are loadable.`,
+              );
+            }
+            const path = await ensureModel(model);
+            if (!path) fail(p, "download or checksum verification failed — the brain stays off");
+          }
 
           const r = await send({ op: "brain", enable: model.name });
           if (!r.ok) fail(p, describeError(r));

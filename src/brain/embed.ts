@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import type { Hit } from "./lexical";
-import type { BrainModel } from "./registry";
+import type { StaticBrainModel } from "./registry";
 import { tokenize } from "./tokenize";
 
 /**
@@ -26,7 +26,7 @@ export interface StaticModel { dims: number; vocab: Record<string, number[]> }
  * exists so that refusal happens *before* a person spends disk and time on
  * a download that was always going to end there.
  */
-export function isLoadable(model: BrainModel): boolean {
+export function isLoadable(model: StaticBrainModel): boolean {
   return model.tokenizer === "wordlevel";
 }
 
@@ -228,6 +228,17 @@ export class VectorIndex {
 
   remove(id: string): void {
     this.entries.delete(id);
+  }
+
+  /**
+   * Whether this id already has a vector.
+   *
+   * The encoder backfill asks before queueing: an embedding that costs tens of
+   * milliseconds of somebody's CPU should not be recomputed for a note whose
+   * vector was already persisted and reloaded.
+   */
+  has(id: string): boolean {
+    return this.entries.has(id);
   }
 
   search(vec: Float32Array, k: number): Hit[] {

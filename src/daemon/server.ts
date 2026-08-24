@@ -7,12 +7,13 @@ import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick, type BirthIntent } from "../state/machine";
 import { pushEvent, type ConvEvent, type Ctx, type Outcome, type Participant, type State } from "../state/types";
-import { indexFromState, type LexicalIndex } from "../brain/lexical";
+import { indexFromState, type Hit, type LexicalIndex } from "../brain/lexical";
 import { debias, embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
 import { calibrate, type Calibration } from "../brain/calibrate";
 import { loadVectors, saveVectors } from "../brain/vectors";
-import { findModel } from "../brain/registry";
+import { findModel, isEncoder, type EncoderBrainModel } from "../brain/registry";
 import { modelPath } from "../brain/download";
+import { startEncoder, type EncoderHandle } from "../brain/encoder";
 import { exportNotes } from "../notes/export";
 import { newEndpoint, readEndpoint, removeEndpoint, writeEndpoint, type Endpoint } from "./endpoint";
 import type { Address } from "../transport/address";
@@ -23,12 +24,46 @@ import { isNewbornWorktree, nextFrontIndexIn, removeWorktreeIfClean, type Worktr
 /** How many skipped journal entries are named before the rest become a count. */
 const MAX_NAMED_FAILURES = 3;
 
+/**
+ * How many texts the encoder backfill hands over per round trip.
+ *
+ * Small on purpose. The sidecar embeds one text at a time whatever it is given,
+ * so a large chunk buys no throughput — it only delays the moment those
+ * vectors reach the index and get persisted. Sixteen keeps a first activation
+ * making visible progress while a person watches it.
+ */
+const ENCODER_DRAIN_CHUNK = 16;
+
 interface Conn {
   socket: Socket;
   decoder: Decoder;
   participantId: string | null;
   authed: boolean;
+  /**
+   * Frames from one connection apply in the order they arrived, even when one
+   * of them has to wait for an encoder. Without this, a query that pauses for a
+   * forward pass could be overtaken by the write that came after it, and a
+   * caller would see its own two commands land backwards.
+   */
+  chain: Promise<void>;
 }
+
+/**
+ * The two ways a brain can exist, and the reason they cannot share one shape.
+ *
+ * A static model is a table this process owns: embedding is a synchronous
+ * function call, so a note is searchable the instant it is written and a query
+ * is ranked inside the same tick that received it.
+ *
+ * An encoder is a separate process holding a transformer. Every embedding is a
+ * message and an await. Both end at the same `VectorIndex` and the same fusion
+ * with the lexical floor — the difference is entirely in when the vector shows
+ * up, which is why the union is here rather than behind one `embed()` that
+ * pretends the two are alike.
+ */
+type BrainRuntime =
+  | { kind: "static"; model: StaticModel; calibration: Calibration; vectors: VectorIndex }
+  | { kind: "encoder"; model: EncoderBrainModel; encoder: EncoderHandle; vectors: VectorIndex };
 
 export interface DaemonOptions {
   gitCommonDir: string;
@@ -178,7 +213,23 @@ export class ParleyDaemon {
    * one of those degrades silently to the floor rather than erroring, so
    * this field being `null` is never itself a failure state.
    */
-  private brain: { model: StaticModel; calibration: Calibration; vectors: VectorIndex } | null = null;
+  private brain: BrainRuntime | null = null;
+  /**
+   * Texts waiting for the encoder, and the pump draining them.
+   *
+   * A static model embeds in microseconds, so a note becomes searchable inside
+   * the same tick that wrote it. An encoder takes tens of milliseconds and a
+   * forward pass cannot be made to happen inside a synchronous reducer, so the
+   * work is queued here and applied when it lands.
+   *
+   * That delay is deliberate and it is the deal this feature makes: for a short
+   * window a brand new note is findable lexically but not semantically. The
+   * alternative — holding the write until the vector exists — would put a
+   * model's latency on the path of somebody saving a note, which is the one
+   * place parley has never been willing to spend time.
+   */
+  private encoderQueue: { id: string; kind: Hit["kind"]; text: string }[] = [];
+  private encoderPump: Promise<void> | null = null;
   /**
    * Whether the bus has already been told, for the *current* activation
    * attempt, that this daemon cannot actually load what `state.brain`
@@ -239,12 +290,21 @@ export class ParleyDaemon {
    * extra signal it was offering.
    */
   private loadBrain(): void {
+    // Whatever was running belongs to the model that was active a moment ago.
+    // Enabling a different one, or disabling, has to take that process with it
+    // — otherwise switching models leaks a resident transformer per switch.
+    if (this.brain?.kind === "encoder") this.brain.encoder.close();
+    this.encoderQueue = [];
     this.brain = null;
     this.brainLoadNudged = false;
     if (!this.state.brain.active || !this.state.brain.model) return;
     try {
       const model = findModel(this.state.brain.model);
       if (!model) return;
+      if (isEncoder(model)) {
+        this.loadEncoderBrain(model);
+        return;
+      }
       const staticModel = loadStaticModel(modelPath(model, this.opts.modelsDir));
       if (!staticModel) return;
 
@@ -284,10 +344,117 @@ export class ParleyDaemon {
         }
         saveVectors(dir, vectors);
       }
-      this.brain = { model: staticModel, calibration, vectors };
+      this.brain = { kind: "static", model: staticModel, calibration, vectors };
     } catch (e) {
       process.stderr.write(`parley: brain load failed, falling back to the lexical floor: ${(e as Error).message}\n`);
     }
+  }
+
+  /**
+   * The encoder half of `loadBrain`.
+   *
+   * Nothing here blocks. `startEncoder` returns as soon as the process is
+   * spawned — the model is still loading, and will be for several seconds —
+   * and the backfill that follows runs in the background. Until both finish,
+   * `this.brain.vectors` is simply smaller than the corpus and the lexical
+   * floor answers everything the vectors cannot, which is what it does when
+   * the brain is off entirely.
+   *
+   * A sidecar that never becomes ready is not an error state to recover from:
+   * `EncoderHandle` answers `null` forever after, every caller here treats
+   * `null` as "no semantic signal", and the daemon keeps working.
+   */
+  private loadEncoderBrain(model: EncoderBrainModel): void {
+    const encoder = startEncoder(this.opts.modelsDir, model);
+    if (!encoder) {
+      process.stderr.write(
+        `parley: ${model.name} is enabled but its runtime is not installed — run "parley brain enable ` +
+          `${model.name}" in a shell to install it; the lexical floor is answering meanwhile\n`,
+      );
+      return;
+    }
+
+    const dir = dirname(this.opts.journalPath);
+    const vectors = loadVectors(dir, model.dims, model.spec.floor) ?? new VectorIndex(model.dims, model.spec.floor);
+    this.brain = { kind: "encoder", model, encoder, vectors };
+
+    // Anything already in state that the persisted index does not have. On a
+    // first activation that is the whole corpus; on a restart it is usually
+    // nothing, because the vectors outlive the process.
+    for (const note of this.state.notes) {
+      if (note.reversedBy !== null || vectors.has(note.id)) continue;
+      this.encoderQueue.push({
+        id: note.id,
+        kind: note.kind,
+        text: [note.title, note.body, note.tags.join(" "), note.paths.join(" ")].join(" "),
+      });
+    }
+    for (const result of Object.values(this.state.results)) {
+      if (vectors.has(result.key)) continue;
+      this.encoderQueue.push({
+        id: result.key,
+        kind: "result",
+        text: [result.key, result.summary, result.paths.join(" ")].join(" "),
+      });
+    }
+    this.drainEncoderQueue();
+  }
+
+  /**
+   * Embeds queued texts one at a time, forever, while there is anything queued.
+   *
+   * Single-flight by construction: `encoderPump` is the one in-flight drain and
+   * every caller either joins it or starts it. Sequential rather than batched
+   * because the sidecar serialises anyway (one onnxruntime session), and
+   * because a batch would pad short texts and quietly cost accuracy — the same
+   * pooling trap that showed up while choosing these models.
+   */
+  private drainEncoderQueue(): void {
+    if (this.encoderPump) return;
+    this.encoderPump = (async () => {
+      try {
+        while (this.encoderQueue.length > 0) {
+          const brain = this.brain;
+          // Disabled, or switched models, while this was running. The queue is
+          // already cleared by `loadBrain`; stopping here is what makes sure
+          // nothing lands in an index that belongs to a different model.
+          if (brain?.kind !== "encoder") return;
+
+          const batch = this.encoderQueue.splice(0, ENCODER_DRAIN_CHUNK);
+          const vectors = await brain.encoder.encode("passage", batch.map((e) => e.text));
+          if (!vectors) return; // The sidecar is gone. The floor has the query.
+          if (this.brain !== brain) return; // Swapped underneath the await.
+
+          for (let i = 0; i < batch.length; i++) {
+            const entry = batch[i]!;
+            brain.vectors.add(entry.id, Float32Array.from(vectors[i]!), entry.kind);
+          }
+          this.saveBrainVectors();
+        }
+      } catch (e) {
+        process.stderr.write(`parley: encoder backfill stopped: ${(e as Error).message}\n`);
+      } finally {
+        this.encoderPump = null;
+        // Something arrived while the last chunk was in flight.
+        if (this.encoderQueue.length > 0 && this.brain?.kind === "encoder") this.drainEncoderQueue();
+      }
+    })();
+  }
+
+  /**
+   * The query side of the same seam.
+   *
+   * `null` means "no semantic signal for this query" and is a normal answer,
+   * not a failure: brain off, sidecar not ready yet, sidecar dead. Every one of
+   * those leaves the lexical ranking exactly as it would have been.
+   */
+  private async queryVector(text: string): Promise<Float32Array | null> {
+    const brain = this.brain;
+    if (!brain) return null;
+    if (brain.kind === "static") return this.vectorFor(brain.model, brain.calibration, text);
+    const vectors = await brain.encoder.encode("query", [text]);
+    if (!vectors?.[0] || this.brain !== brain) return null;
+    return Float32Array.from(vectors[0]);
   }
 
   /**
@@ -298,6 +465,27 @@ export class ParleyDaemon {
    */
   private vectorFor(model: StaticModel, calibration: Calibration, text: string): Float32Array {
     return debias(embed(model, text), calibration.mean);
+  }
+
+  /**
+   * One document, into the vector half of the index.
+   *
+   * Static: done here and now, and persisted, because it costs microseconds.
+   * Encoder: queued, because it costs a forward pass and this is called from
+   * inside the write path — the note is already journaled and already answers
+   * lexically, and making somebody wait on a transformer to finish saving it
+   * would be the wrong trade.
+   */
+  private embedIntoIndex(id: string, kind: Hit["kind"], text: string): void {
+    const brain = this.brain;
+    if (!brain) return;
+    if (brain.kind === "static") {
+      brain.vectors.add(id, this.vectorFor(brain.model, brain.calibration, text), kind);
+      this.saveBrainVectors();
+      return;
+    }
+    this.encoderQueue.push({ id, kind, text });
+    this.drainEncoderQueue();
   }
 
   /** Persists the vector index beside the journal; a failure here never surfaces as a write failure. */
@@ -590,6 +778,7 @@ export class ParleyDaemon {
       // Nothing listens on the network except loopback mode, and loopback
       // without a token would be an open bus for every process on the machine.
       authed: this.token === null,
+      chain: Promise.resolve(),
     };
     this.conns.add(conn);
     this.lastActivityMs = this.now();
@@ -611,17 +800,35 @@ export class ParleyDaemon {
     this.lastActivityMs = this.now();
   }
 
+  /**
+   * Every frame is appended to this connection's chain rather than run on the
+   * spot.
+   *
+   * With a static brain — or none — each link settles in a microtask and this
+   * is the same behaviour as calling `handle` directly. With an encoder, one
+   * frame can genuinely wait on another process, and the chain is what keeps a
+   * caller's own frames in the order it sent them.
+   *
+   * A rejected link must not poison the chain: one frame failing is a failure
+   * of that frame, and the connection has to stay usable for the next one.
+   */
   private onData(conn: Conn, chunk: string): void {
     for (const line of conn.decoder.push(chunk)) {
       if (!line.ok) {
         this.send(conn, err("UNKNOWN_OP", line.error));
         continue;
       }
-      this.handle(conn, line.frame);
+      const frame = line.frame;
+      conn.chain = conn.chain.then(
+        () => this.handle(conn, frame),
+        () => this.handle(conn, frame),
+      ).catch((e: unknown) => {
+        process.stderr.write(`parley: frame handling failed: ${(e as Error).message}\n`);
+      });
     }
   }
 
-  private handle(conn: Conn, frame: Record<string, unknown>): void {
+  private async handle(conn: Conn, frame: Record<string, unknown>): Promise<void> {
     this.lastActivityMs = this.now();
 
     if (!conn.authed) {
@@ -691,12 +898,9 @@ export class ParleyDaemon {
         // Strictly additive: when the brain is off, missing, or corrupt,
         // `vectorHits` is empty and `fuse` degrades to exactly the lexical
         // ranking — the same floor this daemon has always answered from.
-        const vectorHits = this.brain
-          ? this.brain.vectors.search(
-              this.vectorFor(this.brain.model, this.brain.calibration, frame.q),
-              this.brain.vectors.size,
-            )
-          : [];
+        const queryVector = await this.queryVector(frame.q);
+        const vectorHits =
+          this.brain && queryVector ? this.brain.vectors.search(queryVector, this.brain.vectors.size) : [];
         const hits = fuse(lexicalHits, vectorHits, this.index.size + vectorHits.length)
           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
@@ -787,10 +991,7 @@ export class ParleyDaemon {
         if (entry) {
           const text = [entry.title, entry.body, entry.tags.join(" "), entry.paths.join(" ")].join(" ");
           this.index.add(entry.id, entry.kind, text);
-          if (this.brain) {
-            this.brain.vectors.add(entry.id, this.vectorFor(this.brain.model, this.brain.calibration, text), entry.kind);
-            this.saveBrainVectors();
-          }
+          this.embedIntoIndex(entry.id, entry.kind, text);
         }
       } else if (op === "reverse") {
         const id = typeof response.id === "string" ? response.id : null;
@@ -798,6 +999,10 @@ export class ParleyDaemon {
           this.index.remove(id);
           if (this.brain) {
             this.brain.vectors.remove(id);
+            // A note reversed while its vector was still queued must not be
+            // embedded afterwards — the drain would put back exactly what this
+            // line just removed, and the note would answer queries again.
+            this.encoderQueue = this.encoderQueue.filter((e) => e.id !== id);
             this.saveBrainVectors();
           }
         }
@@ -807,10 +1012,7 @@ export class ParleyDaemon {
         if (entry) {
           const text = [entry.key, entry.summary, entry.paths.join(" ")].join(" ");
           this.index.add(entry.key, "result", text);
-          if (this.brain) {
-            this.brain.vectors.add(entry.key, this.vectorFor(this.brain.model, this.brain.calibration, text), "result");
-            this.saveBrainVectors();
-          }
+          this.embedIntoIndex(entry.key, "result", text);
         }
       }
     } catch (e) {
@@ -1256,6 +1458,11 @@ export class ParleyDaemon {
     this.timer = null;
     this.spawnConfigWatcher?.close();
     this.spawnConfigWatcher = null;
+    // The sidecar is a child process holding a model in memory. Nothing else
+    // will reap it: it reads this daemon's pipe, and a daemon that exits
+    // without saying so leaves a resident transformer behind.
+    if (this.brain?.kind === "encoder") this.brain.encoder.close();
+    this.encoderQueue = [];
     // A pipe still being read keeps the event loop open. The newborn itself is
     // detached and unref'd and outlives this.
     for (const stop of this.outputReaders.splice(0)) {

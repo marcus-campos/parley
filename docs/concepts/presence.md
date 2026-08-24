@@ -61,7 +61,7 @@ one actually running most sessions — permanently look dead.
 A front that stops renewing is not declared dead the instant its socket
 closes: dropping a connection only clears `connected` and falls back to the
 lease, because a dropped connection is not proof of death for a front that
-also renews through the CLI (`src/daemon/server.ts:602-612`). Once the lease
+also renews through the CLI (`src/daemon/server.ts:791-801`). Once the lease
 genuinely lapses, the participant is marked `gone`, its claims are stamped
 `orphaned` immediately, and the bus announces it by name — *"FINANCEIRO
 dropped holding 3 claim(s)"* — before releasing them after the grace period
@@ -70,7 +70,7 @@ dropped holding 3 claim(s)"* — before releasing them after the grace period
 A daemon restart clears presence entirely rather than trusting what the
 journal remembers: replay rebuilds every participant, and then every one of
 them is explicitly set to not connected — "nothing survives a restart
-connected; presence has to be re-proven" (`src/daemon/server.ts:411-426`,
+connected; presence has to be re-proven" (`src/daemon/server.ts:599-614`,
 specifically line 111). A front that held an open connection before the
 restart looks exactly like a hook-only front until it calls in again, which
 is the safe direction to be wrong in.

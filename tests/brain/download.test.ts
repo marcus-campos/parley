@@ -4,13 +4,13 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureModel, modelPath } from "../../src/brain/download";
-import type { BrainModel } from "../../src/brain/registry";
+import type { StaticBrainModel } from "../../src/brain/registry";
 
 const body = new TextEncoder().encode("pretend this is a model");
 const digest = new Bun.CryptoHasher("sha256").update(body).digest("hex");
 
-const model = (sha: string): BrainModel => ({
-  name: "test-model", dims: 4, languages: "test", bytes: body.length,
+const model = (sha: string): StaticBrainModel => ({
+  name: "test-model", kind: "static", dims: 4, score: 1, bytes: body.length,
   url: "https://example.invalid/model.bin", sha256: sha, tokenizer: "wordlevel",
 });
 

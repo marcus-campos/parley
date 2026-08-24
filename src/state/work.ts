@@ -871,8 +871,15 @@ export function summonCapacity(
   // deleted the one that refused `grant`/`deny`, on the argument that
   // ownership decides who may answer, not kind. Spending somebody's money is
   // the one decision that runs the other way — it blocks an agent and lets
-  // only a person through, which is the shape `brain` uses on that branch for
-  // exactly the same reason.
+  // only a person through.
+  //
+  // `brain` used to be the other op shaped like this, and is not any more. Its
+  // gate cost the person their identity: refusing by participant kind meant a
+  // person had to join the bus to spend their own disk, which put them in the
+  // fronts' namespace. It moved to the CLI, which can read the harness out of
+  // the environment without anybody joining anything. This one stays here
+  // because `summon --allow` is a change to shared state that necessarily
+  // arrives over the wire, so the reducer is the only place that sees it.
   if (frame.allow !== undefined) {
     if (me.kind !== "human") {
       return {

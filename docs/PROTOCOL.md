@@ -145,7 +145,7 @@ A closed list. Anything outside it is a protocol violation.
 | `UNKNOWN_OP` | Unrecognised `op`, or a malformed frame. |
 | `PROTOCOL_MISMATCH` | Version skew. Carries `server` and `client`. |
 | `AUTH_REQUIRED` | Loopback mode, and `auth` has not succeeded on this connection. |
-| `OBSERVER_ONLY` | An agent tried `brain enable`/`brain disable`. Spending somebody's disk and somebody's money is the person's call, not a front's. |
+| `OBSERVER_ONLY` | An agent tried `summon` with `allow`. Whether parley may start more fronts is somebody's money, so it is the person's call, not a front's. This is the only op that returns it — `brain` used to and no longer does: that decision is now refused in the CLI, from the environment, before anything downloads. |
 | `NOT_TAKEN` | A work item you cannot act on: `done` on someone else's, `drop` on one neither offered to you nor taken by you, or either on one already `done` — including a `done` you sent twice. |
 | `NO_CAPACITY` | Reserved for the front-birth ceiling. **No operation returns it yet**; it is in the closed list so a client written against this version already knows it. |
 

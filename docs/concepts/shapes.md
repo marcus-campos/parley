@@ -126,7 +126,7 @@ live parent watching every one of them. That is the intent. It is not what
 If the daemon cannot be reached at all, `parley shape` behaves like every
 other direct CLI command: it reports the problem on stderr —
 `parley: <reason> — continuing without coordination` — and exits clean
-rather than blocking (`src/cli/main.ts:183-189`). A shape change that does
+rather than blocking (`src/cli/main.ts:185-191`). A shape change that does
 land is announced loudly to everyone on the bus, at high priority, naming
 both the new value and the one it replaced (`src/state/machine.ts:125-132`),
 for the same reason a mode change is: this setting belongs to the repository,
