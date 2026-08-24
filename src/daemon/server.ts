@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, unlinkSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { connect, createServer, type Server, type Socket } from "node:net";
 import { basename, dirname, join, relative, sep } from "node:path";
-import { Journal, type JournalEntry } from "../journal/journal";
+import { BIRTH_STAMP_OP, Journal, type JournalEntry } from "../journal/journal";
 import { createDecoder, encodeFrame, type Decoder } from "../protocol/codec";
 import { DEFAULTS, PROTOCOL_VERSION, err, type Mode } from "../protocol/types";
 import { apply, initialState, makeCtx, tick, type BirthIntent } from "../state/machine";
@@ -160,9 +160,18 @@ export class ParleyDaemon {
     const { entries, discarded } = this.journal.replay();
     for (const entry of entries) {
       const ms = Date.parse(entry.at);
+      const at = Number.isNaN(ms) ? 0 : ms;
+      // Not a frame anybody sent — see `BIRTH_STAMP_OP`. `tick` is what stamps
+      // the cooldown and `tick` is never journalled, so this is the only way a
+      // window parley already spent is still spent after a restart. `apply`
+      // does not know this op and must never be handed it.
+      if (entry.frame.op === BIRTH_STAMP_OP) {
+        state.lastBirthMs = at;
+        continue;
+      }
       apply(
         state, entry.actorId, entry.frame,
-        makeCtx(Number.isNaN(ms) ? 0 : ms, this.counter),
+        makeCtx(at, this.counter),
         this.spawnConfig.maxFronts,
       );
     }
@@ -405,6 +414,17 @@ export class ParleyDaemon {
    */
   private bearFrontFor(birth: BirthIntent | null, ctx: Ctx): void {
     if (!birth) return;
+    // Written before anything is attempted, because `tick` stamps
+    // `state.lastBirthMs` when it emits the intent and not when a spawn
+    // succeeds — a bare repository that cannot host a worktree has still spent
+    // the window, exactly as it does in memory. Without this the cooldown was
+    // the one capacity decision a restart silently undid, while the veto one
+    // field above it survived by being journalled.
+    try {
+      this.journal.append({ at: ctx.now, actorId: null, frame: { op: BIRTH_STAMP_OP } });
+    } catch (e) {
+      process.stderr.write(`parley: journal append failed: ${(e as Error).message}\n`);
+    }
     const root = this.repoRootForExport();
     if (!root) return;
 

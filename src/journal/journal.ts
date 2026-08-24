@@ -7,6 +7,24 @@ export interface JournalEntry {
   frame: Record<string, unknown>;
 }
 
+/**
+ * The one thing in this log that no client ever sent.
+ *
+ * Everything else here is a frame that arrived on the wire. This is the
+ * daemon's own record that it spent a birth window — `tick` stamps
+ * `state.lastBirthMs` and `tick` is never journalled, so the cooldown came
+ * back `null` after every restart while `state.birthsAllowed`, one field
+ * above it and journalled on purpose, came back intact. A restart ten seconds
+ * into a five-minute cooldown bore again immediately, and a restart loop spent
+ * real agent sessions in seconds — a birth that never joins costs no ceiling,
+ * so the ceiling does not bound that loop either.
+ *
+ * Deliberately not an entry in `OPS` and not in `PROTOCOL.md`'s op table: it
+ * is not part of the wire contract, nothing may send it, and `apply` does not
+ * know it. `restore()` is its only reader.
+ */
+export const BIRTH_STAMP_OP = "parley:birth";
+
 export interface ReplayResult {
   entries: JournalEntry[];
   /** Lines that could not be parsed. A truncated tail is expected after kill -9. */

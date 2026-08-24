@@ -296,4 +296,72 @@ describe("only one daemon may serve a repository", () => {
     expect(replayed.events.length).toBe(live.events.length);
     expect(replayed.seq).toBe(live.seq);
   });
+
+  test("a birth window already spent is still spent after a restart", async () => {
+    // `state.birthsAllowed` is journalled on purpose and documented as such:
+    // it is a person's decision about their money, and a restart must not
+    // revert it. `state.lastBirthMs` sits one field above it and was not,
+    // because it is written inside `tick` and `tick` is never journalled — so
+    // it came back `null` after every restart and a reboot ten seconds into a
+    // five-minute cooldown bore again immediately. A restart loop therefore
+    // spends real agent sessions in seconds, and the ceiling does not bound
+    // it: a birth that never joins never becomes a live participant.
+    const dir = tempRepo();
+    const journalPath = join(dir, "journal.ndjson");
+    let clock = Date.UTC(2026, 7, 20, 12, 0, 0);
+    // A bare temp directory is not a worktree root, so `bearFrontFor` stops
+    // before it spawns anything — the birth *decision* is exercised end to
+    // end and no real agent session is ever started.
+    const boot = async (sock: string) => {
+      const daemon = new ParleyDaemon({
+        gitCommonDir: dir,
+        address: { kind: "unix", address: join(dir, sock) },
+        journalPath,
+        tickIntervalMs: 100_000, // ticks are driven by the frames the test sends
+        now: () => clock,
+      });
+      daemons.push(daemon);
+      return { daemon, endpoint: await daemon.listen() };
+    };
+    const providing = (daemon: ParleyDaemon) =>
+      daemon.snapshot().events.filter((e) => e.text.includes("providing a front")).length;
+
+    const first = await boot("p1.sock");
+    const core = await RawClient.connect(first.endpoint.address);
+    await core.send({ op: "join", name: "CORE", cwd: "/wt/a" });
+    await core.send({ op: "shape", shape: "pool" });
+    const mine = await core.send({ op: "work", title: "what CORE is on", paths: ["a.ts"] });
+    await core.send({ op: "work", title: "what nobody took", paths: ["b.ts"] });
+    const mineId = (mine as unknown as { items: { id: string }[] }).items[0]!.id;
+    expect(await core.send({ op: "take", id: mineId })).toMatchObject({ ok: true });
+
+    // The pool goes stale with the only front busy — nobody to ring, so parley
+    // asks for capacity and spends the window.
+    clock += DEFAULTS.ORPHAN_POOL_MS + 1;
+    await core.send({ op: "who" });
+    expect(first.daemon.snapshot().lastBirthMs).toBe(clock);
+    expect(providing(first.daemon)).toBe(1);
+
+    const bornAt = clock;
+    core.close();
+    await first.daemon.close();
+
+    // Ten seconds into a five-minute window, the machine reboots.
+    clock += 10_000;
+    const second = await boot("p2.sock");
+    expect(second.daemon.snapshot().lastBirthMs).toBe(bornAt);
+
+    // A person joins — never idle capacity, so nothing here rings a doorbell
+    // instead — and their first frame drives a tick.
+    const person = await RawClient.connect(second.endpoint.address);
+    await person.send({ op: "join", name: "MARCUS", kind: "human", cwd: "/wt/a" });
+    expect(providing(second.daemon)).toBe(0);
+
+    // The control, so this cannot pass by nothing ever being born again.
+    clock = bornAt + DEFAULTS.BIRTH_COOLDOWN_MS + 1;
+    await person.send({ op: "who" });
+    expect(providing(second.daemon)).toBe(1);
+
+    person.close();
+  });
 });
