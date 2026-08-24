@@ -278,9 +278,8 @@ export function emptyState(mode: Mode = "advisory"): State {
   return {
     mode, shape: "bus", seq: 0, participants: {}, claims: [], requests: {},
     events: [], cursors: {}, notes: [], touches: {}, results: {}, questions: {},
-    work: [],
-    brain: { active: false, model: null, askedAtMs: null },
     work: [], plan: null,
+    brain: { active: false, model: null, askedAtMs: null },
   };
 }
 

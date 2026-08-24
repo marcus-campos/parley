@@ -1020,6 +1020,7 @@ async function main(): Promise<void> {
         if (!r.ok) fail(p, describeError(r));
         const d = r as unknown as { active: boolean; model: string | null };
         return out(p, d.active ? `parley: brain is on — ${d.model}` : "parley: brain is off", r);
+      }
       case "plan": {
         const file = p.positional[0];
         if (!file) fail(p, "plan needs a path, e.g. parley plan docs/superpowers/plans/2026-08-20-shape-plan.md");
