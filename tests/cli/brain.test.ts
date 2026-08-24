@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isLoadable } from "../../src/brain/embed";
-import { MODELS } from "../../src/brain/registry";
+import { MODELS, RECOMMENDED } from "../../src/brain/registry";
 
 const BIN = join(import.meta.dir, "..", "..", "dist", "parley");
 
@@ -80,25 +80,38 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
     });
   }, 15_000);
 
-  test("and a person's shell is not — no flag, nothing to join", async () => {
+  test("and a person's shell gets the menu, with what each model is", async () => {
     await withTempRepo(async (repo, env) => {
-      // Not run to completion: this would download 54 MB. What is asserted is
-      // that it gets past the refusal and reaches the download, which is the
-      // whole of what the previous version could not do for a person standing
-      // in a repository where an agent was already working.
+      // Not a formality. An earlier version skipped the listing whenever there
+      // was one loadable entry, so a person typed `enable` and received 54 MB
+      // of something whose name told them nothing. The listing is where they
+      // find out what they are agreeing to.
       const clean = { ...env } as Record<string, string>;
       delete clean.CLAUDE_CODE_SESSION_ID;
       delete clean.CODEX_SESSION_ID;
       delete clean.CURSOR_TRACE_ID;
-      const p = Bun.spawn([BIN, "brain", "enable"], {
+      const p = Bun.spawn([BIN, "brain", "enable", "--json"], {
         cwd: repo, env: clean, stdout: "pipe", stderr: "pipe",
       });
-      // Give it long enough to print the size and start, then stop it.
-      await new Promise((r) => setTimeout(r, 1500));
-      p.kill();
-      const text = (await new Response(p.stdout).text()) + (await new Response(p.stderr).text());
-      expect(text).not.toContain("agent session");
-      expect(text).toContain("downloading");
+      const [stdout, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+      expect(code).toBe(0);
+      const payload = JSON.parse(stdout) as {
+        recommended: string;
+        models: { name: string; languages: string; bytes: number; dims: number; recommended: boolean }[];
+      };
+      expect(payload.models.length).toBeGreaterThan(1);
+      // Every row says what it is and what it costs — a size and a language,
+      // not just a name.
+      for (const m of payload.models) {
+        expect(m.languages.length).toBeGreaterThan(10);
+        expect(m.bytes).toBeGreaterThan(0);
+        expect(m.dims).toBeGreaterThan(0);
+      }
+      // Exactly one is recommended, and it is a model that exists.
+      expect(payload.models.filter((m) => m.recommended)).toHaveLength(1);
+      expect(payload.models.map((m) => m.name)).toContain(payload.recommended);
+      // And nothing was downloaded to show a menu.
+      expect(existsSync(expectedModelsDir(clean.HOME as string))).toBe(false);
     });
   }, 20_000);
 
@@ -121,17 +134,14 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
   });
 
 
-  test("with one loadable entry there is nothing to choose, so enable acts", () => {
-    // The listing used to be what `enable` with no name produced, and this
-    // asserted its shape. It now appears only when there is a choice: asking
-    // somebody to name a thing when there is one thing is a menu for the menu's
-    // sake, and it is what made a person read a name, type it, and be refused.
-    //
-    // Asserted on the registry rather than by running the binary, because the
-    // action `enable` now takes is a download — the one thing a test must not
-    // do for real.
-    const loadable = MODELS.filter(isLoadable);
-    expect(loadable.length).toBe(1);
-    expect(loadable[0]!.name).toBe(MODELS[0]!.name);
+  test("the recommendation is measured, and every listed model can be loaded", () => {
+    // `RECOMMENDED` is not a preference. It is the model that returned 19 of 20
+    // correct answers past the floor on a bilingual benchmark of the task
+    // parley performs, against 15 for the next one down. What this pins is that
+    // it names something real and loadable — the measurement lives in the
+    // registry's comment, where the next person changing it will read it.
+    expect(MODELS.map((m) => m.name)).toContain(RECOMMENDED);
+    expect(MODELS.filter((m) => !isLoadable(m))).toEqual([]);
+    expect(MODELS.length).toBeGreaterThan(1);
   });
 });

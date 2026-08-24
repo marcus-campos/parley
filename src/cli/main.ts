@@ -11,7 +11,7 @@ import { detectAddrEnv, resolveAddress, stateDir } from "../transport/address";
 import { adapterStatus } from "../adapters/claude-code";
 import { ensureModel } from "../brain/download";
 import { isLoadable } from "../brain/embed";
-import { findModel, MODELS } from "../brain/registry";
+import { findModel, MODELS, RECOMMENDED } from "../brain/registry";
 import { parsePlan } from "../plan/parse";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -1042,28 +1042,31 @@ async function main(): Promise<void> {
             );
           }
 
-          // With one loadable entry there is no choice to present: asking
-          // somebody to name a thing when there is one thing is a menu for the
-          // menu's sake.
-          const loadable = MODELS.filter(isLoadable);
-          const name = p.positional[1] ?? (loadable.length === 1 ? loadable[0]!.name : undefined);
+          const name = p.positional[1];
           if (!name) {
-            // A menu offering a choice that cannot work is worse than a
-            // shorter menu — so every row says plainly whether this build
-            // can even load it, not just its size and languages.
+            // The listing is not a formality. Somebody agreeing to spend disk
+            // should know what they are agreeing to, and the previous version
+            // skipped straight to downloading whenever there was one loadable
+            // entry — so a person typed `enable` and received 54 MB of a thing
+            // whose name told them nothing.
             const rows = MODELS.map((m) => {
-              const size = `~${Math.round(m.bytes / (1024 * 1024))} MB`;
-              const notice = isLoadable(m) ? "" : `  — not loadable in this build (needs the ${m.tokenizer} tokenizer)`;
-              return `  ${m.name}${notice}\n        ${m.languages} — ${size}`;
+              const size = `${Math.round(m.bytes / (1024 * 1024))} MB`;
+              const mark = m.name === RECOMMENDED ? "  ← recommended" : "";
+              return `  ${m.name}${mark}\n      ${m.languages}\n      ${size} on disk, ${m.dims} dimensions`;
             });
             return out(
               p,
-              `parley: no model named. Available:\n${rows.join("\n")}\n\n` +
-                `Choose one: parley brain enable <name>`,
+              `parley: semantic recall runs a small model on this machine — no network after\n` +
+                `the download, nothing leaves the repository.\n\n${rows.join("\n\n")}\n\n` +
+                `  parley brain enable ${RECOMMENDED}\n\n` +
+                `The lexical floor answers either way; the model is what finds a note that\n` +
+                `shares no words with the question.`,
               {
                 ok: true,
+                recommended: RECOMMENDED,
                 models: MODELS.map((m) => ({
-                  name: m.name, languages: m.languages, bytes: m.bytes, loadable: isLoadable(m),
+                  name: m.name, languages: m.languages, bytes: m.bytes,
+                  dims: m.dims, loadable: isLoadable(m), recommended: m.name === RECOMMENDED,
                 })),
               },
             );
