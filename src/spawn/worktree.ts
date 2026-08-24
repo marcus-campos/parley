@@ -234,8 +234,9 @@ export type WorktreeRemoval =
  * the question has to be asked.
  *
  * Asynchronous on purpose. This is two subprocesses, and it is called from the
- * daemon on the same path every hook frame takes — a path with a 30ms budget
- * per hook. Run synchronously it turned one retiring front into tens of
+ * daemon on the same path every hook frame takes — a path with a hard deadline
+ * per hook (`DEFAULTS.HOOK_BUDGET_MS`), after which the hook lets go and
+ * contributes nothing. Run synchronously it turned one retiring front into tens of
  * milliseconds of dead air for every other front on the bus, and the cost was
  * cruelly asymmetric: when removal succeeded it went away, and when it failed
  * — a front with uncommitted work, the case most worth being gentle about —

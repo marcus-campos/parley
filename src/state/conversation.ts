@@ -78,7 +78,8 @@ export function drain(state: State, actorId: string | null, ctx: Ctx): Outcome {
   me.lastSeenMs = ctx.nowMs;
 
   // The pool rides here rather than behind a second request: `drain` already
-  // sits on the hottest path in the system (the hook's 30ms budget, every MCP
+  // sits on the hottest path in the system (the hook's DEFAULTS.HOOK_BUDGET_MS,
+  // every MCP
   // tool response), so this is the one call that reaches both without doubling
   // the round trips either channel pays for.
   return { state, response: ok({ events, pool: poolFooterFor(state, me.id) }), broadcast: [] };

@@ -61,7 +61,15 @@ export class Journal {
       if (!trimmed) return;
       try {
         const parsed = JSON.parse(trimmed) as JournalEntry;
-        if (parsed && typeof parsed === "object" && typeof parsed.frame === "object") entries.push(parsed);
+        // `parsed.frame !== null` and not just `typeof === "object"`, because
+        // `typeof null` is `"object"` — so a line whose frame is literally
+        // `null` used to be admitted as an entry, and every reader below
+        // dereferences it. The codec refuses `null` before anything reaches
+        // this file, which is exactly why the guard on the replay side is the
+        // one that has to hold: it is what stands if the codec ever changes.
+        if (parsed && typeof parsed === "object" && parsed.frame !== null && typeof parsed.frame === "object") {
+          entries.push(parsed);
+        }
         else discarded.push({ line: index + 1, raw: trimmed });
       } catch {
         discarded.push({ line: index + 1, raw: trimmed });

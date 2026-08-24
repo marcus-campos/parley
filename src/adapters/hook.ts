@@ -249,7 +249,11 @@ export async function runHook(event: string): Promise<void> {
     const events = drained.ok ? (drained as unknown as { events: never[] }).events : [];
     const inbox = formatEvents(events);
     // Rides on the same drain the inbox came from — a second request for the
-    // pool would double the round trips this hook pays against its 30ms budget.
+    // pool would double the round trips this hook pays against
+    // `DEFAULTS.HOOK_BUDGET_MS`, which is the deadline the timer above is
+    // actually armed with. It said "30ms budget" — one of three surviving
+    // copies of a number this code has not enforced since the constant was
+    // corrected, in three different files.
     const pool = drained.ok ? (drained as unknown as { pool?: string }).pool ?? "" : "";
 
     if (name !== "PreToolUse") {

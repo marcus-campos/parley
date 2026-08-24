@@ -297,6 +297,33 @@ describe("only one daemon may serve a repository", () => {
     expect(replayed.seq).toBe(live.seq);
   });
 
+  test("a journal line whose frame is literally null is discarded, not replayed", async () => {
+    // `typeof null === "object"`, so the replay guard — `typeof parsed.frame
+    // === "object"` — admitted it, and every reader of an entry dereferences
+    // `frame`. The codec refuses `null` long before anything reaches the
+    // journal, which is exactly why the guard on the *replay* side is the one
+    // that has to hold: it is what stands if the codec ever changes, and it is
+    // read at boot, in a constructor, where a throw is a daemon that will not
+    // start on a repository whose journal is already on disk.
+    const dir = tempRepo();
+    const journalPath = join(dir, "journal.ndjson");
+    writeFileSync(journalPath, [
+      JSON.stringify({ at: "2026-08-20T12:00:00.000Z", actorId: null, frame: { v: 1, op: "join", name: "CORE", cwd: "/wt/a" } }),
+      JSON.stringify({ at: "2026-08-20T12:00:01.000Z", actorId: null, frame: null }),
+      "",
+    ].join("\n"));
+
+    const { daemon, endpoint } = await startDaemon(dir, journalPath);
+    const client = await RawClient.connect(endpoint.address);
+    // It booted, it answers, and the good line either side of the bad one
+    // replayed. Before the guard, `frame: null` was handed to `apply`, which
+    // reads `frame.v` on its first line — a throw inside the constructor, so a
+    // daemon that would not start at all.
+    expect(await client.send({ op: "status" })).toMatchObject({ ok: true });
+    expect(Object.values(daemon.snapshot().participants).map((p) => p.name)).toEqual(["CORE"]);
+    client.close();
+  });
+
   test("a birth window already spent is still spent after a restart", async () => {
     // `state.birthsAllowed` is journalled on purpose and documented as such:
     // it is a person's decision about their money, and a restart must not

@@ -205,11 +205,17 @@ function harnessOffThePath(): void {
  * writing to a real pipe — so this waits for it, with a ceiling, instead of
  * assuming it has landed by the next line of the test. Nothing here can pass
  * by waiting long enough: the lines either arrive or they do not.
+ *
+ * The ceiling is generous because it is only ever reached when something is
+ * genuinely broken. At 5s it went red on a loaded machine while the code was
+ * innocent — a false red, and a false red in a suite this size is worse than a
+ * slow test: it teaches whoever sees it that a red here means nothing. The
+ * failing direction is unchanged; only the patience is.
  */
 async function untilLines(
   daemon: ParleyDaemon, front: RawClient, wanted: number,
 ): Promise<{ n: number; name: string; text: string; at: string }[]> {
-  const ceiling = Date.now() + 5_000;
+  const ceiling = Date.now() + 20_000;
   let lines: { n: number; name: string; text: string; at: string }[] = [];
   while (Date.now() < ceiling) {
     const r = await front.send({ op: "output" });
@@ -1231,7 +1237,9 @@ describe("the panel is the newborn's window", () => {
     // And no single line can fill a panel by itself.
     for (const l of lines) expect(l.text.length).toBeLessThanOrEqual(DEFAULTS.PANEL_TAIL_LINE_CHARS + 1);
     await daemon.close();
-  });
+    // Past bun's 5s default, because `untilLines` is allowed to wait longer
+    // than that before calling a real pipe dead.
+  }, 30_000);
 });
 
 describe("production wiring: the daemon is handed the discovery directory", () => {
