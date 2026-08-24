@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { tmpdir } from "node:os";
-import { joinFrame, resolveIdentity, type Identity } from "../../src/cli/identity";
+import { joinFrame, personIdentity, personSession, resolveIdentity, type Identity } from "../../src/cli/identity";
 
 /**
  * `joinFrame` exists because `born` was produced by `bearFront`, consumed by
@@ -37,5 +37,33 @@ describe("the one place a join frame is built", () => {
     // can, by accident or otherwise.
     expect(joinFrame(identity, { born: "person" }).born).toBe("parley");
     expect(joinFrame(identity, {}).born).toBe("parley");
+  });
+});
+
+describe("a person is not a front", () => {
+  // The bug this pins: a person's name came from the branch, and their session
+  // key fell back to one recalled from the working directory — so opening a
+  // shell where an agent was working reattached them to that agent. `--human`
+  // was read and discarded, because reattaching does not change what somebody
+  // already is, and `brain enable --human` then refused the only person allowed
+  // to run it.
+  test("their name comes from the machine's user, never from the branch", () => {
+    const person = personIdentity();
+    const front = resolveIdentity("/tmp/repo-on-develop", "/tmp/repo-on-develop");
+    expect(person.name).not.toBe(front.name);
+    expect(person.born).toBe("person");
+    expect(person.provisional).toBe(false);
+  });
+
+  test("--as still wins, for somebody who wants another name", () => {
+    expect(personIdentity("Chefe").name).toBe("CHEFE");
+  });
+
+  test("their session key is scoped to the person, not to a directory", () => {
+    // Two different repositories, one person: the same participant. The front
+    // path cannot promise this — it recalls a session from the directory, which
+    // is the whole reason a person landed inside an agent.
+    expect(personSession()).toBe(personSession());
+    expect(personSession().startsWith("person:")).toBe(true);
   });
 });

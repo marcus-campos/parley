@@ -19,7 +19,7 @@ import { isSelfReview } from "../state/work";
 import type { WorkItem } from "../state/types";
 import { flagBool, flagString, parseArgs, type Parsed } from "./args";
 import { sessionFor } from "./session";
-import { joinFrame, resolveIdentity, wakeAddress } from "./identity";
+import { joinFrame, personIdentity, personSession, resolveIdentity, wakeAddress } from "./identity";
 
 const COMPILED_CLI = import.meta.url.includes("$bunfs");
 
@@ -190,7 +190,25 @@ async function withSession(
     throw e;
   }
 
-  const identity = resolveIdentity(repo.cwd, repo.cwd, flagString(parsed.flags, "as"));
+  // A person is not a front, and should never have been in the fronts'
+  // namespace. Identity for an agent is derived from the branch or worktree —
+  // which is right for a front, and wrong for the human watching several of
+  // them: every session on a branch derives the same name, and the session key
+  // falls back to one recalled from the working directory. So a person opening
+  // a shell where an agent is working does not merely collide with it, they
+  // *are* it: the same participant, reattached, and `--human` is then read and
+  // discarded because reattaching does not change what somebody already is.
+  //
+  // That is how `parley brain enable --human` refused the only person allowed
+  // to run it, with a message telling them to ask a human.
+  //
+  // A person gets their own name and their own session key instead, scoped to
+  // the machine's user rather than to the repository's shape. They cannot
+  // collide with a front, because they are not in that space at all.
+  const asPerson = flagBool(parsed.flags, "human");
+  const identity = asPerson
+    ? personIdentity(flagString(parsed.flags, "as"))
+    : resolveIdentity(repo.cwd, repo.cwd, flagString(parsed.flags, "as"));
   const join = (name?: string) => joinFrame(identity, {
     mission: flagString(parsed.flags, "mission", identity.mission),
     cwd: repo.cwd,
@@ -202,7 +220,7 @@ async function withSession(
     // a human. The retry is about the name; it was never about who is asking.
     kind: flagBool(parsed.flags, "human") ? "human" : "agent",
     wake: wakeAddress(),
-    session: sessionFor(repo.discoveryDir, repo.cwd),
+    session: asPerson ? personSession() : sessionFor(repo.discoveryDir, repo.cwd),
     ...(name ? { name } : {}),
   });
   let response = await client.request(join());

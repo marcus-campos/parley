@@ -83,20 +83,20 @@
 |   if (request.state !== "pending") {
 |     return { state, response: err("NOT_OWNER", `request already ${request.state}`), broadcast: [] };
 |   }
-@ docs/concepts/permission.md src/cli/main.ts 26fee74a0b8f
-|         const list = (r as unknown as { requests: { id: string; requester: string; path: string; owner: string; reason: string; seconds_left: number }[] }).requests;
-|         if (list.length === 0) return out(p, "parley: nothing pending", r);
-|         const rows = list.map((q) => `  ${q.id}  ${q.requester} wants ${q.path} from ${q.owner}  (${q.seconds_left}s left)\n        ${q.reason || "no reason given"}`);
-|         return out(p, rows.join("\n"), r);
-|       }
-|
-|       case "grant": {
-|         const id = p.positional[0];
-|         if (!id) fail(p, "grant needs a request id");
-|         const r = await send({ op: "grant", request: id, scope: flagString(p.flags, "scope", "once") });
+@ docs/concepts/permission.md src/cli/main.ts 7ed5b7f003bc
+|         const path = p.positional[0];
+|         if (!path) fail(p, "ask needs a path");
+|         const ttl = Number(flagString(p.flags, "ttl", String(DEFAULTS.PERMISSION_TTL_MS / 1000)));
+|         const r = await send({ op: "ask", path, reason: flagString(p.flags, "reason"), ttl_s: ttl });
 |         if (!r.ok) fail(p, describeError(r));
-|         return out(p, "parley: granted", r);
-|       }
+|         const data = r as unknown as { state: string; request?: string; owner?: string };
+|         return out(
+|           p,
+|           data.state === "pending"
+|             ? `parley: asked ${data.owner} for ${path} (request ${data.request}); unanswered in ${ttl}s means granted`
+|             : `parley: ${path} is yours (${data.state})`,
+|           r,
+|         );
 @ docs/concepts/permission.md src/state/permissions.ts ead73426b347
 |   const held = state.claims.find((c) => c.pattern === request.path || ownerOfPath(state, request.path)?.pattern === c.pattern);
 |   if (scope === "transfer" && held) {
@@ -159,17 +159,17 @@
 |   if (state.mode === "off") {
 |     return { state, response: ok({ mode: "off", state: "granted", reason: "territory disabled" }), broadcast: [] };
 |   }
-@ docs/concepts/presence.md src/state/participants.ts 37b8596d275a
-| export function who(state: State, ctx: Ctx, maxFronts = 6): Outcome {
-|   const live = liveParticipants(state);
-|   return {
-|     state,
-|     response: ok({
-|       mode: state.mode,
-|       participants: live.map((p) => publicParticipant(p, state, ctx)),
-|       // Carried here rather than in `status` because this is the op a panel
-|       // already asks on every refresh, and a switch a person can throw has to
-|       // show what it is switching: whether parley may start fronts at all, the
+@ docs/concepts/presence.md src/state/participants.ts 02ff39bbe823
+|     text: `${me.name} left${released.length ? `, releasing ${released.length} claim(s)` : ""}`,
+|     about: me.id,
+|   });
+|
+|   // Leaving is releasing, so anyone waiting on those paths is served too.
+|   const settled = released.length ? resolvePendingOnRelease(state, me.id, released, ctx) : [];
+|
+|   return { state, response: ok({ released }), broadcast: [event, ...settled] };
+| }
+|
 @ docs/concepts/presence.md src/state/machine.ts 6f30267a179c
 |   // 1. A front that stopped renewing its lease is gone. A live connection is
 |   //    proof on its own, so only lease-only participants can expire this way.

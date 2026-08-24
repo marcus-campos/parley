@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { userInfo } from "node:os";
 import { basename } from "node:path";
 
 export interface Identity {
@@ -108,4 +109,46 @@ function detectHarness(): string {
   if (process.env.CURSOR_TRACE_ID) return "cursor";
   if (process.env.TERM_PROGRAM === "vscode") return "vscode";
   return "shell";
+}
+
+/**
+ * Who the person is, as distinct from what a front is.
+ *
+ * A front's name comes from its branch or worktree, because that is what
+ * distinguishes one front from another. A person is not distinguished that
+ * way — they are the same person in every repository and on every branch, and
+ * they are watching several fronts at once. Deriving their name the same way
+ * puts them in the fronts' namespace, where the branch name is already taken by
+ * the front working on it.
+ *
+ * `--as` still wins, for somebody who wants to be called something else.
+ */
+export function personIdentity(preferred?: string): Identity {
+  const name = (preferred?.trim() || userInfo().username || "person")
+    .replace(/[^A-Za-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toUpperCase()
+    .slice(0, 32);
+  return {
+    name: name || "PERSON",
+    mission: "",
+    harness: "cli",
+    branch: "",
+    born: "person",
+    // Never provisional: the name is the person's, not one derived from a
+    // branch that a front is expected to rename itself away from.
+    provisional: false,
+  };
+}
+
+/**
+ * A session key scoped to the person, not to a directory.
+ *
+ * The front path falls back to a session recalled from the working directory,
+ * which is exactly what made a person's shell reattach to the agent working
+ * there. This one is stable across repositories and branches, so a person's
+ * commands are one participant wherever they run them, and never a front's.
+ */
+export function personSession(): string {
+  return `person:${userInfo().username || "unknown"}`;
 }

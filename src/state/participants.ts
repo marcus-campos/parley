@@ -142,6 +142,16 @@ export function join(state: State, frame: Record<string, unknown>, ctx: Ctx): Ou
         if (c.ownerId === taken.id) c.orphanedAtMs = null;
       }
       if (typeof frame.mission === "string" && frame.mission) taken.mission = frame.mission;
+      // The frame is the only place "I am a person" exists, and a reattach that
+      // ignores it is how somebody typing `--human` stays an agent. Every
+      // session on a branch derives the same name from that branch, so a person
+      // in a repository where an agent is already working reattaches to that
+      // agent's participant — and is then refused by `brain enable` with a
+      // message telling them to ask a human.
+      //
+      // Safe here specifically: this branch is only reachable by callers with
+      // no session id, which is a shell. The hook always carries one.
+      if (frame.kind === "human" || frame.kind === "agent") taken.kind = frame.kind;
       return {
         state,
         response: ok({
