@@ -3,6 +3,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { MODELS } from "../../src/brain/registry";
+
+// O nome vem do registry, não de uma cópia dele: renomear uma entrada não pode
+// quebrar um teste que verifica outra coisa.
+const XLMR = MODELS.find((m) => m.tokenizer === "xlmr")!.name;
 
 const BIN = join(import.meta.dir, "..", "..", "dist", "parley");
 
@@ -60,7 +65,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
       // No --human: this is an agent. The registry name is real, so a bug
       // that downloads before checking `may_enable` would actually reach
       // the network — this proves it never gets that far.
-      const p = Bun.spawn([BIN, "brain", "enable", "potion-multilingual-128M-int8"], {
+      const p = Bun.spawn([BIN, "brain", "enable", XLMR], {
         cwd: repo, env, stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([
@@ -90,7 +95,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
    */
   test("a human is refused before a single byte is downloaded — this build cannot load the xlmr tokenizer", async () => {
     await withTempRepo(async (repo, env) => {
-      const p = Bun.spawn([BIN, "brain", "enable", "potion-multilingual-128M-int8", "--human"], {
+      const p = Bun.spawn([BIN, "brain", "enable", XLMR, "--human"], {
         cwd: repo, env, stdout: "pipe", stderr: "pipe",
       });
       const [stdout, stderr, code] = await Promise.all([
@@ -118,7 +123,7 @@ describe.if(existsSync(BIN))("parley brain enable, from the compiled binary", ()
       expect(code).toBe(0);
 
       const payload = JSON.parse(stdout) as { models: { name: string; tokenizer?: string; loadable: boolean }[] };
-      const entry = payload.models.find((m) => m.name === "potion-multilingual-128M-int8");
+      const entry = payload.models.find((m) => m.name === XLMR);
       expect(entry).toBeDefined();
       expect(entry!.loadable).toBe(false);
     });

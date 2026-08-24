@@ -55,7 +55,7 @@ export function note(state: State, actorId: string | null, frame: Record<string,
 
 /**
  * A front asking for `semantic` recall cannot be blocked on a prompt it has no
- * way to answer — a model choice and a ~100MB download are the person's call
+ * way to answer — a model choice and a download this size are the person's call
  * (see `brain` in machine.ts) — so the request is answered from the lexical
  * floor unconditionally. What it earns instead is one notice, and only one:
  * `askedAtMs` is the same once-only bookkeeping the permission and question

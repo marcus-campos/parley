@@ -562,7 +562,7 @@ about *"hidden sidebar,"* paraphrase rather than shared tokens. It is opt-in,
 deliberately:
 
 - **Human-only.** An agent asking `parley brain enable` is refused — it is
-  somebody's disk and somebody's ~100MB download, so it is the person's call.
+  somebody's disk and a download of several hundred megabytes, so it is the person's call.
   An agent's query still answers from the lexical floor either way, and never
   waits on a person. What the asking costs is one notice — *"a front asked for
   semantic recall and the brain is off — `parley brain enable` to pick a
@@ -604,7 +604,7 @@ deliberately:
   can tell which direction it is wrong in.
 
 **Honestly, about this build:** the registry lists one model today,
-`potion-multilingual-128M-int8`, and it declares the `xlmr` tokenizer —
+`potion-multilingual-128M`, and it declares the `xlmr` tokenizer —
 XLM-RoBERTa's SentencePiece tokenizer, which has no TypeScript implementation
 yet (only Python or WASM). **This build cannot load it.** `parley brain
 enable` says so, and refuses, before a single byte downloads — not after.

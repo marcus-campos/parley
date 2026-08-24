@@ -136,7 +136,7 @@ function setShape(state: State, frame: Record<string, unknown>, ctx: Ctx): Outco
  * Status is a fact anyone on the bus can already infer is missing from a
  * `notes` response — refusing to just say it would only hide the reason a
  * front is stuck on the floor. Turning the brain on or off is a different
- * matter: a ~100MB download and a model choice spend somebody's disk and
+ * matter: a download this size and a model choice spend somebody's disk and
  * somebody's money, on somebody's machine, and an agent cannot answer the
  * interactive prompt that decision deserves on that person's behalf.
  *

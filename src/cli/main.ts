@@ -1002,7 +1002,7 @@ async function main(): Promise<void> {
         if (sub === "enable") {
           // Probe before spending a single byte: the daemon already knows
           // whether this participant may enable it (`me.kind`), so ask
-          // first rather than downloading ~100MB and only then finding out
+          // first rather than downloading hundreds of megabytes and only then finding out
           // the answer was always going to be no. This probe is a courtesy,
           // not the gate — `enable` below still refuses an agent on its own
           // even if some other client skipped straight to it.
@@ -1062,7 +1062,7 @@ async function main(): Promise<void> {
 
           // The size is shown before anything is downloaded, unconditionally
           // — even under --json, since this goes to stderr and never
-          // touches the JSON on stdout. A person agreeing to spend ~100MB of
+          // touches the JSON on stdout. A person agreeing to spend that much of
           // their own disk should see the number first, since that is the
           // entire reason this is theirs to decide.
           process.stderr.write(

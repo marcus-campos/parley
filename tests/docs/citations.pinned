@@ -429,12 +429,12 @@
 |     // A fresh "off" period earns its own one-time panel nudge, same as the
 |     // period that started at first boot.
 |     state.brain.askedAtMs = null;
-@ docs/concepts/recall.md src/state/machine.ts a793951a7c83
+@ docs/concepts/recall.md src/state/machine.ts 0375a6f707bc
 |  * front is stuck on the floor. Turning the brain on or off is a different
-|  * matter: a ~100MB download and a model choice spend somebody's disk and
+|  * matter: a download this size and a model choice spend somebody's disk and
 |  * somebody's money, on somebody's machine, and an agent cannot answer the
 |  * interactive prompt that decision deserves on that person's behalf.
-@ docs/concepts/recall.md src/brain/registry.ts bae3b9501ffb
+@ docs/concepts/recall.md src/brain/registry.ts ee630e39b493
 | export interface BrainModel {
 |   name: string;
 |   dims: number;
@@ -454,26 +454,26 @@
 |  * per-platform native runtime — which is what keeps the Windows, WSL and arm64
 |  * work intact. Transformer models are excluded on all three counts.
 |  *
-|  * Fill in the real sha256 for each entry when the asset is published; the tests
-|  * assert the shape, and the downloader refuses anything that does not match.
+|  * `sha256` and `bytes` are the published asset's, read from the host's own
+|  * metadata rather than guessed: the hash is what the downloader refuses on, and
+|  * the size is what a person is shown before they agree to spend their disk. A
+|  * placeholder in either is worse than no entry — one refuses every download
+|  * that would have worked, and the other asks for consent against a number that
+|  * is not the number.
 |  */
 | export const MODELS: BrainModel[] = [
 |   {
-|     name: "potion-multilingual-128M-int8",
+|     // Not "-int8": there is no int8 asset in that repository, and the URL
+|     // below serves the full-precision weights. The name promised a file that
+|     // does not exist.
+|     name: "potion-multilingual-128M",
 |     dims: 256,
-|     languages: "101 languages, including Portuguese",
-|     bytes: 100 * 1024 * 1024,
-|     url: "https://huggingface.co/minishlab/potion-multilingual-128M/resolve/main/model.safetensors",
-|     sha256: "0".repeat(64),
-|     tokenizer: "xlmr",
-|   },
-| ];
-@ docs/concepts/recall.md src/brain/registry.ts ec07b2909527
-|  * Fill in the real sha256 for each entry when the asset is published; the tests
-|  * assert the shape, and the downloader refuses anything that does not match.
-@ docs/concepts/recall.md src/state/notes.ts b1d78a61af91
+@ docs/concepts/recall.md src/brain/registry.ts a73cb5e1c0d6
+|  * `sha256` and `bytes` are the published asset's, read from the host's own
+|  * metadata rather than guessed: the hash is what the downloader refuses on, and
+@ docs/concepts/recall.md src/state/notes.ts a3e0fe85b248
 |  * A front asking for `semantic` recall cannot be blocked on a prompt it has no
-|  * way to answer — a model choice and a ~100MB download are the person's call
+|  * way to answer — a model choice and a download this size are the person's call
 |  * (see `brain` in machine.ts) — so the request is answered from the lexical
 |  * floor unconditionally. What it earns instead is one notice, and only one:
 |  * `askedAtMs` is the same once-only bookkeeping the permission and question

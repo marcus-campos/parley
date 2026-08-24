@@ -92,13 +92,13 @@ enable <model>` / `disable` exists in the state machine
 (`src/state/machine.ts:151-188`). Turning it on is deliberately gated to a
 human, not a front:
 
-> A ~100MB download and a model choice spend somebody's disk and somebody's
+> A download this size and a model choice spend somebody's disk and somebody's
 > money, on somebody's machine, and an agent cannot answer the interactive
 > prompt that decision deserves on that person's behalf.
 > (`src/state/machine.ts:138-141`)
 
 The model registry backs that up with a size up front rather than after the
-fact — one static model listed today, `potion-multilingual-128M-int8`, with
+fact — one static model listed today, `potion-multilingual-128M`, with
 its size, checksum, and source declared before anything is fetched
 (`src/brain/registry.ts:1-33`).
 

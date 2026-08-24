@@ -19,7 +19,7 @@ const REGISTERED = MODELS[0]!;
  * The generated model fixture (`tests/brain/fixtures/model.ts`) dropped at the
  * path the real registry entry resolves to, so the daemon's registry ->
  * modelPath -> loadStaticModel -> calibrate chain is exercised end to end
- * without a real ~100MB download.
+ * without a real download of the published asset.
  *
  * It is a generated table rather than a handful of hand-written rows because
  * a hand-written one cannot fail honestly: the fixture this replaced had
