@@ -302,6 +302,12 @@ export function who(state: State, ctx: Ctx, maxFronts = 6): Outcome {
         max: maxFronts,
         live: live.filter((p) => p.kind === "agent").length,
       },
+      // Same reasoning as `births`, and the same op for the same reason: a
+      // panel refresh already asks this, and the brain is the one capability a
+      // person has to know exists before they can want it. Off by default is
+      // right — it is their disk and their money — but off *and* unmentioned
+      // is how a feature nobody asked for becomes a feature nobody has.
+      brain: { active: state.brain.active, model: state.brain.model },
     }),
     broadcast: [],
   };

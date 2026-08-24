@@ -890,9 +890,9 @@
 |       // file. Only a dispatched plan makes a planned item, and `openWave` is
 |       // the only place that says so.
 |       origin: "discovered",
-@ docs/guide/panel.md src/cli/watch.ts 7fd22d3f8c3c
-|     if (composer === "none") {
-|       if (ch === "i" || ch === "I") { composer = "say"; input = ""; status = ""; return true; }
+@ docs/guide/panel.md src/cli/watch.ts 550bb11a3574
+|
+|   function onKey(ch: string, code: number, seq: string): boolean {
 @ docs/guide/panel.md src/cli/web-page.ts e416913d6805
 |   if (!speaking && (e.key === "s" || e.key === "S") && !e.metaKey && !e.ctrlKey) {
 |     e.preventDefault(); setSpeaking(true);

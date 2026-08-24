@@ -152,7 +152,15 @@ export function workDetailLines(work: WorkRow[], fronts: { id: string; name: str
     });
 }
 
-/** Wrap on word boundaries, preserving the blank lines that shape a note. */
+/**
+ * Wrap on word boundaries, preserving the blank lines that shape a note.
+ *
+ * Also what the conversation feed uses. Truncating is right for a mission, a
+ * path, a claim — labels, recognisable from their first half. It is wrong for
+ * what a front actually said: reading that is the reason somebody is watching,
+ * and a message cut at the terminal width is one they have to leave the panel
+ * to see.
+ */
 function wrap(text: string, w: number): string[] {
   const out: string[] = [];
   for (const paragraph of text.split("\n")) {
@@ -214,6 +222,7 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
    * spending, which is the one decision that is never a front's.
    */
   let births = { allowed: true, max: 6, live: 0 };
+  let brain: { active: boolean; model: string | null } = { active: false, model: null };
 
   const pushFeed = (events: FeedEvent[]) => {
     for (const e of events) {
@@ -242,10 +251,12 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       const d = whoR as unknown as {
         mode: string; participants: Front[];
         births?: { allowed: boolean; max: number; live: number };
+        brain?: { active: boolean; model: string | null };
       };
       mode = d.mode;
       fronts = d.participants.filter((p) => p.name !== myName);
       if (d.births) births = d.births;
+      if (d.brain) brain = d.brain as typeof brain;
     }
     if (reqR.ok) pending = (reqR as unknown as { requests: PendingRequest[] }).requests;
     if (notesR.ok) {
@@ -344,7 +355,13 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
       const who = e.from.kind === "human" ? cyan(e.from.name) : bold(e.from.name);
       const mark = e.priority === "high" ? red(`${G.bang} `) : "  ";
       const dest = e.to ? dim(`${G.arrow}${e.to} `) : "";
-      lines.push(`${time} ${mark}${who} ${dest}${truncate(e.text, w - visLen(who) - 14)}`);
+      // The prefix is `HH:MM:SS` + mark + name + destination; continuation lines
+      // are indented to sit under the text rather than under the clock, so a
+      // wrapped message reads as one message and not as two speakers.
+      const indent = visLen(`${clock(e.at)} ${mark}${who} ${dest}`);
+      const body = wrap(e.text, Math.max(8, w - indent - 1));
+      lines.push(`${time} ${mark}${who} ${dest}${body[0]}`);
+      for (const rest of body.slice(1)) lines.push(`${" ".repeat(indent)}${rest}`);
     }
     for (let i = recent.length; i < room; i++) lines.push("");
 
@@ -354,6 +371,14 @@ export async function runWatch(repo: RepoInfo, name: string): Promise<void> {
         ? ` ${G.dot} ${bold("w")}${dim(workExpanded ? " collapse work" : " expand work")}`
         : "";
       lines.push(
+        // Only while it is off, and only in the hint row: a person who has not
+        // turned the brain on cannot want it if nothing ever says it is there,
+        // and a person who has does not need to be told again. It sits beside
+        // the other keys rather than above the feed, because a banner that
+        // repeats on every refresh is the kind of notice people learn to skip.
+        brain.active
+          ? ""
+          : dim(`  ${G.dot} semantic recall is off ${G.dot} ${bold("parley brain enable --human")}${dim(" turns it on")}`),
         dim(`  watching ${G.dot} ${bold("i")}${dim(" say")} ${G.dot} ${bold("n")}${dim(" notes")}${workHint} ${G.dot} ${bold("b")}${dim(births.allowed ? " stop new fronts" : " allow new fronts")} ${G.dot} ${bold("m")}${dim(" your name")} ${G.dot} ${bold("q")}${dim(" leave")}${status ? `  ${status}` : ""}`),
       );
     } else {
