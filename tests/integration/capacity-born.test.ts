@@ -184,6 +184,8 @@ function harnessOffThePath(): void {
     .map((d) => join(d, "git"))
     .find((candidate) => existsSync(candidate));
   if (!gitBin) throw new Error("no `git` on PATH to hand the test");
+  // Reached only on a POSIX box with no git, which CI does not have. Windows
+  // never gets here: the tests that call this skip, see WINDOWS_SPAWN below.
   symlinkSync(gitBin, join(binDir, "git"));
 
   savedEnv ??= { ...process.env };
@@ -316,6 +318,17 @@ describe("a front parley bore, from its environment to the bus", () => {
   });
 });
 
+// This helper builds a POSIX precondition three ways at once: it splits PATH on
+// ":", looks for `git` rather than `git.exe`, and symlinks — which on Windows
+// needs a privilege CI does not grant. Underneath it, the thing being tested is
+// a spawn path this repository already knows does not work on Windows: the
+// terminal command was `export K=V && ...` handed to `cmd.exe`, where `export`
+// is not a builtin, so the chain died on its first token and `claude` never
+// ran. Rewriting that blind is not an improvement over saying so, which is the
+// call the branch that found it made. So these skip, loudly, rather than fail
+// for a reason that has nothing to do with what they check.
+const WINDOWS_SPAWN = process.platform === "win32";
+
 describe("the newborn's worktree", () => {
   test("survives being named for retirement — it is an invitation, not an eviction", async () => {
     const repo = gitRepo();
@@ -374,7 +387,7 @@ describe("the newborn's worktree", () => {
     expect(existsSync(worktree)).toBe(false);
   });
 
-  test("a harness that is not there does not take the bus down with it", async () => {
+  test.skipIf(WINDOWS_SPAWN)("a harness that is not there does not take the bus down with it", async () => {
     // `spawn` reports a binary it could not resolve *asynchronously*, as an
     // `error` event on the child, after it has already returned — and an
     // `error` event with no listener is an uncaught exception. Nothing in
@@ -411,7 +424,7 @@ describe("the newborn's worktree", () => {
     await daemon.close();
   });
 
-  test("a birth that never joins leaves no checkout and no branch behind", async () => {
+  test.skipIf(WINDOWS_SPAWN)("a birth that never joins leaves no checkout and no branch behind", async () => {
     // `bearFront` creates the worktree *before* it spawns, so a birth that
     // fails has already produced `.parley/worktrees/pool-1` and a
     // `parley/pool-1` branch. That front never joins and never leaves, so
@@ -460,7 +473,7 @@ describe("the newborn's worktree", () => {
     expect(branches).not.toContain("parley/pool-1");
   });
 
-  test("a name somebody carried in an earlier session is not proof this birth arrived", async () => {
+  test.skipIf(WINDOWS_SPAWN)("a name somebody carried in an earlier session is not proof this birth arrived", async () => {
     // `sweepBirths` matched any participant that has ever carried the name,
     // live or `gone`, from this session or replayed out of the journal. Names
     // are reused: an index is handed out again the moment the branch behind it

@@ -93,9 +93,19 @@ export function workspaceFilesIn(dir: string): string[] {
  */
 export function realPath(path: string): string {
   try {
-    return realpathSync(resolve(path));
+    // `.native` first, because on Windows the plain form follows symlinks and
+    // still hands back the 8.3 short name — so `C:\\Users\\RUNNER~1\\...` and
+    // `C:\\Users\\runneradmin\\...` are the same directory spelled two ways and
+    // compare unequal. That is the same silent-mismatch class this function
+    // exists to close, one layer further down. It throws where the plain form
+    // would too, so the fallback below covers both.
+    return realpathSync.native(resolve(path));
   } catch {
-    return resolve(path);
+    try {
+      return realpathSync(resolve(path));
+    } catch {
+      return resolve(path);
+    }
   }
 }
 
