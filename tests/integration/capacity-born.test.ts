@@ -1024,7 +1024,7 @@ async function bearThroughDaemon(repo: string, clockRef: { ms: number }, stub = 
 }
 
 describe("which index the daemon's next newborn gets", () => {
-  test("a branch a previous daemon left behind is not asked for twice", async () => {
+  test.skipIf(WINDOWS_SPAWN)("a branch a previous daemon left behind is not asked for twice", async () => {
     // The whole birth path through the daemon, which nothing exercised before:
     // a stale pool, no idle front, `tick` raising an intent, `bearFrontFor`
     // turning it into a worktree and a process.
@@ -1053,7 +1053,7 @@ describe("which index the daemon's next newborn gets", () => {
 });
 
 describe("the human's voice on spending", () => {
-  test("a person's veto stops a birth that would otherwise have happened", async () => {
+  test.skipIf(WINDOWS_SPAWN)("a person's veto stops a birth that would otherwise have happened", async () => {
     // Over a real socket, on the whole path: the pool goes stale, nobody is
     // idle, `tick` would raise an intent and `bearFrontFor` would turn it into
     // a worktree and a process. A person said no, so none of it happens — and
@@ -1135,7 +1135,7 @@ describe("the human's voice on spending", () => {
 });
 
 describe("a front parley started that never reached the bus", () => {
-  test("is said out loud, instead of being counted as a success forever", async () => {
+  test.skipIf(WINDOWS_SPAWN)("is said out loud, instead of being counted as a success forever", async () => {
     // `bearFront` returns as soon as it has a pid, and in terminal mode that
     // pid belongs to `osascript`, not to the agent. The window runs the
     // person's shell, so the harness resolves from *their* PATH and auth —

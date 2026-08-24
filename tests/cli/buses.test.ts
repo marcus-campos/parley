@@ -6,6 +6,23 @@ import { summariseBuses } from "../../src/cli/buses";
 import { forgetRepo, readRegistry, registerRepo } from "../../src/adapters/registry";
 import { comparable, markAsWorkspace } from "../../src/repo/workspace";
 import { locateRepo } from "../../src/repo/locate";
+
+/**
+ * The fixture's own root, spelled the way the code under test will spell it.
+ *
+ * On Windows `tmpdir()` hands back the 8.3 short name (`…\\RUNNER~1\\…`) and
+ * plain `realpathSync` keeps it, while what comes back out of `locateRepo` is
+ * the long form — so the two are the same directory written two ways and every
+ * comparison here failed on that alone. `.native` is the one that expands it;
+ * this is a property of the fixture, not of the code, so it is fixed here.
+ */
+function canonical(path: string): string {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    return realpathSync(path);
+  }
+}
 import { execFileSync } from "node:child_process";
 
 function gitRepo(dir: string): void {
@@ -20,7 +37,7 @@ function gitRepo(dir: string): void {
 describe("finding where the conversation is", () => {
   test("members of a workspace collapse onto one bus, not one row each", () => {
     // Otherwise you get four rows for one bus and open the wrong panel.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-buses-")));
+    const root = canonical(mkdtempSync(join(tmpdir(), "parley-buses-")));
     const registered: string[] = [];
     try {
       for (const name of ["alpha", "beta"]) gitRepo(join(root, name));
@@ -50,7 +67,7 @@ describe("finding where the conversation is", () => {
     // about "how many buses exist" tells you nothing about the property that
     // matters — which is that a folder under a marked directory, but not named
     // by it, is not part of that workspace.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "parley-buses-")));
+    const root = canonical(mkdtempSync(join(tmpdir(), "parley-buses-")));
     try {
       for (const name of ["member", "outsider"]) gitRepo(join(root, name));
       markAsWorkspace(root, { file: null, members: [join(root, "member")], at: "" });
