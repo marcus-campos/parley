@@ -74,7 +74,7 @@ the corpus" is one or two notes, not a real signal. Reversed decisions never
 enter the index at all: `indexFromState` skips any note with a
 `reversedBy`, and a live daemon removes one the moment it is reversed, so a
 reversed decision cannot surface as a recall hit even between rebuilds
-(`src/brain/lexical.ts:107-118`; `src/daemon/server.ts:996-998`).
+(`src/brain/lexical.ts:107-118`; `src/daemon/server.ts:1053-1055`).
 
 ## Reaching it: `parley notes --query`
 
@@ -93,9 +93,9 @@ The daemon does the ranking, on its own in-memory copy of the index, before
 the frame ever reaches `apply` — and only that copy is touched; the journal
 keeps exactly the frame that came in over the wire, so a replay never has to
 agree with what the index looked like at write time
-(`src/daemon/server.ts:880-883`). It searches across the *whole* corpus —
+(`src/daemon/server.ts:918-921`). It searches across the *whole* corpus —
 notes, decisions, and results together — then filters by which op asked, and
-only then slices to `k` (`src/daemon/server.ts:324-327`). The order is the
+only then slices to `k` (`src/daemon/server.ts:350-353`). The order is the
 whole point:
 
 > `search` ranks across every kind in one corpus-wide score, and its
@@ -103,18 +103,18 @@ whole point:
 > cannot be handed to `search` directly: the top-k across all kinds can be
 > entirely the other op's kind, which would starve this op of a real match
 > it actually has.
-> (`src/daemon/server.ts:887-895`)
+> (`src/daemon/server.ts:925-933`)
 
 `k` itself is bounded regardless of what is asked for — between 1 and 20,
-defaulting to 5 (`src/daemon/server.ts:886`). That is the same discipline
+defaulting to 5 (`src/daemon/server.ts:924`). That is the same discipline
 the work pool's footer uses for offers: never hand back the corpus, only the
 top of it, because that gap is exactly where the token saving comes from —
 ranking and a small `k`, not a vector (`src/state/work.ts:811-818`;
-`src/daemon/server.ts:313,267`).
+`src/daemon/server.ts:339,267`).
 
 If the index itself throws, the query does not fail — it falls back to the
 same unranked list a plain `notes` call without `--query` gets
-(`src/daemon/server.ts:907-911`), which is the same "never let a broken part
+(`src/daemon/server.ts:950-954`), which is the same "never let a broken part
 stop the work" shape territory and permission already follow.
 
 ## The brain: opt-in, local, and the person's call
@@ -245,7 +245,7 @@ noise. You still get an answer; it comes from the floor.
 
 The floor cannot really go down: it holds no clock and no I/O of its own,
 and a broken index degrades a ranked query to the same unranked list a plain
-`notes` call returns rather than failing it (`src/daemon/server.ts:907-911`).
+`notes` call returns rather than failing it (`src/daemon/server.ts:950-954`).
 If the daemon itself cannot be reached, `parley notes` behaves like every
 other direct CLI command — it reports the problem on stderr and exits clean
 rather than blocking, `parley: <reason> — continuing without coordination`

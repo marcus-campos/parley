@@ -12,7 +12,7 @@ import { adapterStatus } from "../adapters/claude-code";
 import { ensureModel } from "../brain/download";
 import { isLoadable } from "../brain/embed";
 import {
-  BENCHMARK_SIZE, findModel, isEncoder, LEXICAL_FLOOR_SCORE, MODELS, RECOMMENDED,
+  BENCHMARK_SIZE, findModel, isEncoder, LEXICAL_FLOOR_SCORE, MODELS, RECOMMENDED, retiredReason,
 } from "../brain/registry";
 import { bunAvailable, installEncoder } from "../brain/sidecar";
 import { parsePlan } from "../plan/parse";
@@ -1112,7 +1112,18 @@ async function main(): Promise<void> {
           }
 
           const model = findModel(name);
-          if (!model) fail(p, `no such model in the registry: ${name} (run "parley brain enable" to list them)`);
+          if (!model) {
+            // A model that was listed once deserves an explanation rather than
+            // "no such model", which reads as parley losing track of its own
+            // registry when what actually happened is that it was measured.
+            const why = retiredReason(name);
+            fail(
+              p,
+              why
+                ? `${name} is no longer offered: ${why}. Run "parley brain enable" to see what is.`
+                : `no such model in the registry: ${name} (run "parley brain enable" to list them)`,
+            );
+          }
 
           // The size is shown before anything is downloaded, unconditionally —
           // even under --json, since this goes to stderr and never touches the

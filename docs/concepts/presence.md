@@ -11,7 +11,7 @@ minute; presence for it cannot depend on staying connected, because staying
 is the one thing it never does. So it gets a **lease with a TTL, renewed by
 every call**: a participant counts as alive if it holds an open connection
 or has been seen within the lease window
-(`docs/ARCHITECTURE.md:161-177`, `src/state/machine.ts:288-303`,
+(`docs/ARCHITECTURE.md:161-177`, `src/state/machine.ts:297-312`,
 `DEFAULTS.LEASE_TTL_MS` at `src/protocol/types.ts:69`). Each participant also
 reports a `delivery` mode — `live`, `hooks`, or `manual` — and a
 plain-language `reach` describing when a message to them will actually be
@@ -47,7 +47,7 @@ accepts a different, plainly-stated cost instead:
 
 > A front that stopped renewing its lease is gone. A live connection is
 > proof on its own, so only lease-only participants can expire this way.
-> (`src/state/machine.ts:288-289`)
+> (`src/state/machine.ts:297-298`)
 
 A false "gone" would cost a working front its territory and its inbox on
 every idle moment between tool calls — the case that happens constantly. A
@@ -61,16 +61,16 @@ one actually running most sessions — permanently look dead.
 A front that stops renewing is not declared dead the instant its socket
 closes: dropping a connection only clears `connected` and falls back to the
 lease, because a dropped connection is not proof of death for a front that
-also renews through the CLI (`src/daemon/server.ts:791-801`). Once the lease
+also renews through the CLI (`src/daemon/server.ts:829-839`). Once the lease
 genuinely lapses, the participant is marked `gone`, its claims are stamped
 `orphaned` immediately, and the bus announces it by name — *"FINANCEIRO
 dropped holding 3 claim(s)"* — before releasing them after the grace period
-(`src/state/machine.ts:251-266`).
+(`src/state/machine.ts:260-275`).
 
 A daemon restart clears presence entirely rather than trusting what the
 journal remembers: replay rebuilds every participant, and then every one of
 them is explicitly set to not connected — "nothing survives a restart
-connected; presence has to be re-proven" (`src/daemon/server.ts:599-614`,
+connected; presence has to be re-proven" (`src/daemon/server.ts:637-652`,
 specifically line 111). A front that held an open connection before the
 restart looks exactly like a hook-only front until it calls in again, which
 is the safe direction to be wrong in.

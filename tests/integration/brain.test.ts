@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { modelPath } from "../../src/brain/download";
-import { isStatic, MODELS } from "../../src/brain/registry";
+import { RETIRED, type StaticBrainModel } from "../../src/brain/registry";
 import { calibrate } from "../../src/brain/calibrate";
 import { loadVectors } from "../../src/brain/vectors";
 import { DIMS, FIXTURE_MODEL } from "../brain/fixtures/model";
@@ -13,11 +13,25 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-// A static entry specifically: this suite plants a fixture model *file* on
-// disk and measures what the daemon does with it, which is a thing only static
-// models have. Taking MODELS[0] would follow the listing's ranking straight
-// into an encoder the moment one outranks them.
-const REGISTERED = MODELS.find(isStatic)!;
+/**
+ * A static entry this suite owns, rather than one the product happens to list.
+ *
+ * Everything here plants a model *file* on disk and measures what the daemon
+ * does with it — a table that loads, one too small to calibrate, one that
+ * vanishes between restarts. That is the static path, and the daemon takes the
+ * registry it resolves against from its options, so these tests do not care
+ * what the listing offers. They used to: the listing stopped carrying any
+ * static entry and a dozen tests about calibration and persistence went red for
+ * a reason that had nothing to do with either.
+ */
+const REGISTERED: StaticBrainModel = {
+  name: "test-static", kind: "static", vectorWeight: 1, dims: DIMS, score: 1,
+  ramMB: 1, msPerNote: 1, bytes: 1,
+  url: "https://example.invalid/model.json", sha256: "0".repeat(64), tokenizer: "wordlevel",
+};
+
+/** Handed to every daemon here, so `state.brain.model` resolves to the fixture. */
+const REGISTRY = [REGISTERED];
 
 /**
  * The generated model fixture (`tests/brain/fixtures/model.ts`) dropped at the
@@ -47,9 +61,41 @@ const NOTE_PT = "o menu lateral oculto do painel";
 const QUERY_EN = "hidden sidebar";
 
 describe("the brain, wired into a real daemon", () => {
+  test("a name the daemon's registry does not carry is refused, and nothing is recorded", async () => {
+    // This check used to live in the reducer and moved here, so it needs a test
+    // here — a guard that relocates without its test is a guard that quietly
+    // stops existing.
+    const dir = tempRepo();
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { models: REGISTRY });
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+
+    const out = await human.send({ op: "brain", enable: "something-off-the-internet" });
+    expect(out.ok).toBe(false);
+
+    const status = await human.send({ op: "brain" });
+    expect(status).toMatchObject({ active: false, model: null });
+    human.close();
+  });
+
+  test("a model that was listed once is refused with the reason it was withdrawn", async () => {
+    // "Unknown model" reads as parley losing track of its own registry. The
+    // truth is that it was measured against the lexical floor it sits on top of
+    // and lost, and the person deserves that sentence rather than a shrug.
+    const dir = tempRepo();
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { models: REGISTRY });
+    const human = await RawClient.connect(endpoint.address);
+    await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
+
+    const out = await human.send({ op: "brain", enable: RETIRED[0]!.name });
+    expect(out.ok).toBe(false);
+    expect(JSON.stringify(out)).toContain("no longer offered");
+    human.close();
+  });
+
   test("off: a query sharing no token with any note finds nothing", async () => {
     const dir = tempRepo();
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"));
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { models: REGISTRY });
     const a = await RawClient.connect(endpoint.address);
     await a.send({ op: "join", name: "CORE", mission: "m" });
     await a.send({ op: "note", title: NOTE_PT });
@@ -63,7 +109,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -97,7 +143,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -131,7 +177,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -162,7 +208,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -192,7 +238,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -225,7 +271,7 @@ describe("the brain, wired into a real daemon", () => {
     const path = modelPath(REGISTERED, modelsDir);
     mkdirSync(join(path, ".."), { recursive: true });
     writeFileSync(path, JSON.stringify({ dims: 2, vocab: { menu: [1, 0], lateral: [0, 1] } }), "utf8");
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -251,7 +297,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -271,7 +317,7 @@ describe("the brain, wired into a real daemon", () => {
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
     const journal = join(dir, "journal.ndjson");
-    const { endpoint } = await startDaemon(dir, journal, { modelsDir });
+    const { endpoint } = await startDaemon(dir, journal, { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -291,7 +337,7 @@ describe("the brain, wired into a real daemon", () => {
     const dir = tempRepo();
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -314,7 +360,7 @@ describe("the brain, wired into a real daemon", () => {
   test("a missing model file degrades to the lexical floor instead of erroring", async () => {
     const dir = tempRepo();
     const modelsDir = tempRepo(); // nothing planted at all
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -339,7 +385,7 @@ describe("the brain, wired into a real daemon", () => {
   test("enabling reports honestly when the daemon cannot actually load what it just recorded", async () => {
     const dir = tempRepo();
     const modelsDir = tempRepo(); // nothing planted — loadStaticModel finds no file
-    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir });
+    const { endpoint } = await startDaemon(dir, join(dir, "journal.ndjson"), { modelsDir, models: REGISTRY });
 
     const human = await RawClient.connect(endpoint.address);
     await human.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -373,7 +419,7 @@ describe("the brain, wired into a real daemon", () => {
     const modelsDir = tempRepo();
     plantFixtureModel(modelsDir);
     const journal = join(dir, "journal.ndjson");
-    const first = await startDaemon(dir, journal, { modelsDir });
+    const first = await startDaemon(dir, journal, { modelsDir, models: REGISTRY });
 
     const setup = await RawClient.connect(first.endpoint.address);
     await setup.send({ op: "join", name: "Marcus", mission: "m", kind: "human" });
@@ -386,7 +432,7 @@ describe("the brain, wired into a real daemon", () => {
     // decision to have it on.
     rmSync(modelPath(REGISTERED, modelsDir));
 
-    const second = await startDaemon(dir, journal, { modelsDir });
+    const second = await startDaemon(dir, journal, { modelsDir, models: REGISTRY });
     const a = await RawClient.connect(second.endpoint.address);
     await a.send({ op: "join", name: "A", mission: "m" });
     const b = await RawClient.connect(second.endpoint.address);

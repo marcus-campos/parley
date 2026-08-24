@@ -7,7 +7,7 @@ import { bunAvailable, installEncoder, TRANSFORMERS_VERSION } from "../../src/br
 import type { EncoderBrainModel } from "../../src/brain/registry";
 
 const MODEL: EncoderBrainModel = {
-  name: "fake", kind: "encoder", dims: 3, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
+  name: "fake", kind: "encoder", vectorWeight: 20, dims: 3, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
   spec: { repo: "fake/fake", pool: "mean", queryPrefix: "q:", passagePrefix: "p:", floor: 0.5 },
 };
 

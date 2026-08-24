@@ -1,0 +1,1174 @@
+{
+ "notes": [
+  {
+   "lang": "en",
+   "q": "why does the same build produce different output on my colleague's machine?",
+   "title": "The bundler inlines an absolute path into the manifest",
+   "body": "The chunk map records where each file lived at build time, so two checkouts under different home directories emit different bytes for identical source.",
+   "paths": "build/manifest.ts",
+   "term": "chunk map"
+  },
+  {
+   "lang": "en",
+   "q": "our alerts fire long after the incident is over",
+   "title": "The metrics pipeline batches on a five minute window",
+   "body": "Nothing is evaluated until a window closes, so a spike that starts and ends inside one is reported once the window flushes and not before.",
+   "paths": "observability/aggregate.go",
+   "term": "five minute window"
+  },
+  {
+   "lang": "en",
+   "q": "is it safe to run two copies of the importer?",
+   "title": "The importer holds no lease on its input directory",
+   "body": "Two processes will both claim the same files, and whichever finishes second overwrites the rows the first one wrote.",
+   "paths": "jobs/import.py",
+   "term": "lease"
+  },
+  {
+   "lang": "en",
+   "q": "the login page is blank for some people and fine for others",
+   "title": "The bundle assumes a browser feature without a fallback",
+   "body": "An older engine throws on the optional chaining in the entry file, and the error happens before any error boundary is mounted, so the page renders nothing at all.",
+   "paths": "web/entry.tsx",
+   "term": "optional chaining"
+  },
+  {
+   "lang": "en",
+   "q": "how do I keep the queue from filling up during a spike?",
+   "title": "Consumers scale on queue depth, which lags the spike",
+   "body": "Depth only grows once producers outpace consumers, so the signal arrives after the backlog exists. Scaling on arrival rate reacts before there is a backlog to drain.",
+   "paths": "infra/autoscale.tf",
+   "term": "arrival rate"
+  },
+  {
+   "lang": "en",
+   "q": "someone deleted a row and now the report is wrong for last year",
+   "title": "Reports read the live table rather than a snapshot",
+   "body": "Historical figures are recomputed on every request, so any correction to current data silently rewrites the past as well.",
+   "paths": "reports/history.py",
+   "term": "snapshot"
+  },
+  {
+   "lang": "en",
+   "q": "the retry made things worse instead of better",
+   "title": "Retries have no jitter, so failures synchronise",
+   "body": "Every client waits the same interval and returns together, which turns one overload into a series of them at a fixed period.",
+   "paths": "lib/retry.ts",
+   "term": "jitter"
+  },
+  {
+   "lang": "en",
+   "q": "why did the disk fill up overnight with nobody deploying?",
+   "title": "Debug logging was left on for one service",
+   "body": "It writes the full request body per call. At production volume that is tens of gigabytes a night, and rotation is configured by file count rather than by size.",
+   "paths": "services/gateway/logging.yaml",
+   "term": "rotation"
+  },
+  {
+   "lang": "en",
+   "q": "our search results changed but nobody touched the ranking",
+   "title": "Analysis settings are read at index creation, not at query time",
+   "body": "Editing the analyser affects only documents indexed afterwards, so the corpus ends up half in one scheme and half in another.",
+   "paths": "search/schema.json",
+   "term": "analyser"
+  },
+  {
+   "lang": "en",
+   "q": "can we move this service to a different region?",
+   "title": "Latency to the primary database dominates every request",
+   "body": "Each call makes several round trips, so the same code moved across an ocean multiplies its response time even with identical hardware.",
+   "paths": "docs/architecture.md",
+   "term": "round trips"
+  },
+  {
+   "lang": "en",
+   "q": "the export is missing rows that I can see in the UI",
+   "title": "The export applies the tenant filter twice",
+   "body": "It is added once by the base query and again by the serializer, and the second application uses the requesting user rather than the requested account.",
+   "paths": "api/export.py",
+   "term": "tenant filter"
+  },
+  {
+   "lang": "en",
+   "q": "how long can we keep the old API around?",
+   "title": "Two mobile releases still call the v1 endpoints",
+   "body": "Their users cannot be forced to update, and telemetry shows steady traffic from both. Removing v1 breaks them silently rather than with an error they can report.",
+   "paths": "api/versions.md",
+   "term": "v1 endpoints"
+  },
+  {
+   "lang": "en",
+   "q": "the test suite got slow after we added fixtures",
+   "title": "Each test rebuilds the database schema from scratch",
+   "body": "Migrations run per test rather than once per session, which is fast with ten migrations and unusable with three hundred.",
+   "paths": "tests/fixtures.py",
+   "term": "migrations"
+  },
+  {
+   "lang": "en",
+   "q": "users report being logged out at random",
+   "title": "Sessions are pinned to the instance that created them",
+   "body": "There is no shared store, so any request routed to a different instance finds no session and redirects to the login page.",
+   "paths": "auth/session.ts",
+   "term": "shared store"
+  },
+  {
+   "lang": "en",
+   "q": "why are we paying for so much egress?",
+   "title": "Thumbnails are generated on every request",
+   "body": "They are never cached, so each page view pulls the original from object storage, resizes it, and throws the result away.",
+   "paths": "media/thumbnail.ts",
+   "term": "egress"
+  },
+  {
+   "lang": "en",
+   "q": "the feature flag is on but nothing changed",
+   "title": "Flags are read once at process start",
+   "body": "There is no subscription and no polling, so flipping one takes effect at the next restart rather than immediately.",
+   "paths": "config/flags.ts",
+   "term": "feature flag"
+  },
+  {
+   "lang": "en",
+   "q": "two records got merged that should not have been",
+   "title": "Deduplication matches on normalised email only",
+   "body": "Shared family addresses and role accounts collapse into one record, and the merge is not reversible once the source rows are deleted.",
+   "paths": "crm/dedupe.py",
+   "term": "deduplication"
+  },
+  {
+   "lang": "en",
+   "q": "can I safely delete this branch's worktree?",
+   "title": "Removing a worktree does not delete its branch",
+   "body": "The branch survives and the next process that derives a name from a counter collides with it, which reads as a failure to start rather than as a naming conflict.",
+   "paths": "src/spawn/worktree.ts",
+   "term": "worktree"
+  },
+  {
+   "lang": "en",
+   "q": "the webhook retries forever on a payload we will never accept",
+   "title": "Permanent failures are retried like transient ones",
+   "body": "A malformed body returns the same status as a timeout, so the backoff never gives up and the queue never drains.",
+   "paths": "api/webhooks/retry.ts",
+   "term": "backoff"
+  },
+  {
+   "lang": "en",
+   "q": "why is the first request after a deploy so slow?",
+   "title": "Nothing warms the connection pool at startup",
+   "body": "The first caller pays for TLS handshakes to every downstream, and health checks pass before any of that has happened.",
+   "paths": "infra/startup.ts",
+   "term": "connection pool"
+  },
+  {
+   "lang": "en",
+   "q": "our costs doubled but traffic is flat",
+   "title": "A cron job overlaps with itself",
+   "body": "It takes longer to run than its interval, so instances accumulate and each one holds its own set of database connections until it finishes.",
+   "paths": "jobs/schedule.yaml",
+   "term": "cron job"
+  },
+  {
+   "lang": "en",
+   "q": "the CSV opens with strange characters in one program and fine in another",
+   "title": "The export omits a byte order mark",
+   "body": "One spreadsheet application assumes the platform's legacy encoding without it, so accented characters arrive mangled for exactly the users who need them.",
+   "paths": "reports/csv.py",
+   "term": "byte order mark"
+  },
+  {
+   "lang": "en",
+   "q": "how do we stop one customer from slowing everyone down?",
+   "title": "There is no per-account concurrency limit",
+   "body": "A single client can occupy every worker with long requests, and the queue is fair by arrival rather than by account.",
+   "paths": "api/throttle.ts",
+   "term": "concurrency limit"
+  },
+  {
+   "lang": "en",
+   "q": "the numbers in the email digest never match the dashboard",
+   "title": "The digest is generated in the sender's timezone",
+   "body": "The dashboard uses the viewer's, so any activity near midnight lands on a different day depending on which surface you look at.",
+   "paths": "notifications/digest.py",
+   "term": "timezone"
+  },
+  {
+   "lang": "en",
+   "q": "why can't the job find the file that is clearly there?",
+   "title": "The worker runs with a different working directory than the scheduler",
+   "body": "Relative paths in the job definition resolve against the scheduler's directory when tested by hand and against the container root in production.",
+   "paths": "jobs/runner.sh",
+   "term": "working directory"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a fatura do mês passado veio diferente da que eu vi na tela?",
+   "title": "O valor exibido não inclui o imposto retido",
+   "body": "A tela mostra o bruto e o documento fiscal mostra o líquido. Quem confere um contra o outro encontra uma diferença que não é erro de cálculo, é de apresentação.",
+   "paths": "faturamento/exibicao.py",
+   "term": "imposto retido"
+  },
+  {
+   "lang": "pt",
+   "q": "o time de suporte diz que o cliente não recebeu o aviso",
+   "title": "A fila de notificações descarta mensagens sem destinatário válido",
+   "body": "Quando o cadastro está incompleto a mensagem é removida silenciosamente, sem registro, então o envio aparece como bem-sucedido nas métricas.",
+   "paths": "notificacoes/fila.ts",
+   "term": "destinatário válido"
+  },
+  {
+   "lang": "pt",
+   "q": "posso rodar a migração no meio do expediente?",
+   "title": "A alteração de tipo reescreve a tabela inteira",
+   "body": "Durante a reescrita a tabela fica bloqueada para escrita, e o tempo cresce com o número de linhas, não com o tamanho da mudança.",
+   "paths": "db/migracoes/0042.sql",
+   "term": "reescreve a tabela"
+  },
+  {
+   "lang": "pt",
+   "q": "a tela de listagem trava com clientes grandes",
+   "title": "A paginação carrega todos os relacionamentos de uma vez",
+   "body": "Cada linha dispara consultas próprias e o total cresce multiplicando páginas por relacionamentos. Com poucos registros ninguém percebe.",
+   "paths": "app/listagem.py",
+   "term": "paginação"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o desconto não apareceu no carrinho?",
+   "title": "As promoções são avaliadas antes do frete entrar",
+   "body": "A regra usa o subtotal, então uma promoção condicionada ao valor total nunca dispara para pedidos que só alcançam o mínimo com o frete somado.",
+   "paths": "checkout/promocoes.ts",
+   "term": "subtotal"
+  },
+  {
+   "lang": "pt",
+   "q": "o relatório some quando peço mais de um ano",
+   "title": "A consulta estoura o tempo limite do proxy antes de terminar",
+   "body": "O erro chega como resposta vazia e não como falha, então a tela mostra um relatório sem linhas em vez de dizer que a consulta não completou.",
+   "paths": "relatorios/consulta.py",
+   "term": "tempo limite"
+  },
+  {
+   "lang": "pt",
+   "q": "dá para confiar no horário que aparece no histórico?",
+   "title": "O carimbo de tempo vem do cliente, não do servidor",
+   "body": "Um relógio errado na máquina de quem enviou coloca eventos fora de ordem, e a ordenação do histórico é por esse campo.",
+   "paths": "auditoria/eventos.py",
+   "term": "carimbo de tempo"
+  },
+  {
+   "lang": "pt",
+   "q": "por que dois usuários veem saldos diferentes ao mesmo tempo?",
+   "title": "A leitura vai para a réplica e a escrita vai para o primário",
+   "body": "O atraso de replicação é de alguns segundos, então quem acabou de gravar pode ler o valor anterior se cair em outra conexão.",
+   "paths": "infra/replicas.md",
+   "term": "atraso de replicação"
+  },
+  {
+   "lang": "pt",
+   "q": "quanto tempo guardamos os dados de quem cancelou?",
+   "title": "O cancelamento marca o registro mas não apaga nada",
+   "body": "Os dados continuam íntegros para conciliação financeira, o que é intencional, mas conflita com o pedido de remoção que a lei permite ao titular.",
+   "paths": "contas/cancelamento.py",
+   "term": "cancelamento"
+  },
+  {
+   "lang": "pt",
+   "q": "o app mobile mostra uma versão antiga da tela",
+   "title": "O cache de configuração não expira sozinho",
+   "body": "Ele é invalidado apenas quando o aplicativo é reinstalado, então mudanças de layout só chegam a quem fez isso por acaso.",
+   "paths": "mobile/cache.kt",
+   "term": "cache de configuração"
+  },
+  {
+   "lang": "pt",
+   "q": "a busca por nome não encontra quem eu sei que existe",
+   "title": "O índice só é atualizado pelo processo noturno",
+   "body": "Cadastros do dia não aparecem até o dia seguinte, e a tela não distingue ausência de resultado de índice desatualizado.",
+   "paths": "busca/indexador.py",
+   "term": "processo noturno"
+  },
+  {
+   "lang": "pt",
+   "q": "posso aumentar o tamanho do lote para acelerar?",
+   "title": "O lote inteiro cabe na memória antes de ser gravado",
+   "body": "Dobrar o tamanho dobra o pico de memória do processo, e o limite do contêiner é o que decide quando isso vira uma falha em vez de lentidão.",
+   "paths": "etl/lote.py",
+   "term": "lote"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o pedido duplicou quando o cliente clicou duas vezes?",
+   "title": "Não existe chave de idempotência na criação",
+   "body": "Dois envios idênticos criam dois pedidos, e a conferência só percebe no fechamento do dia porque nada compara requisições recentes.",
+   "paths": "pedidos/criar.ts",
+   "term": "chave de idempotência"
+  },
+  {
+   "lang": "pt",
+   "q": "o gráfico tem um buraco em uma faixa de horário",
+   "title": "A coleta reinicia junto com o processo",
+   "body": "O contador acumulado zera no restart e a diferença fica negativa, então o painel descarta o ponto em vez de mostrar um salto.",
+   "paths": "metricas/coletor.go",
+   "term": "contador acumulado"
+  },
+  {
+   "lang": "pt",
+   "q": "como faço para o time saber que uma decisão mudou?",
+   "title": "Decisões revertidas continuam no histórico",
+   "body": "Elas deixam de valer mas não somem, porque apagar o registro esconde que a escolha foi feita e depois desfeita, que é justamente o que a próxima pessoa precisa saber.",
+   "paths": "src/state/notes.ts",
+   "term": "revertidas"
+  },
+  {
+   "lang": "pt",
+   "q": "o deploy passou mas o serviço não respondeu",
+   "title": "A verificação de saúde responde antes das dependências subirem",
+   "body": "Ela checa apenas se o processo está de pé. O balanceador manda tráfego para um serviço que ainda não conectou no banco.",
+   "paths": "infra/health.ts",
+   "term": "verificação de saúde"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o arquivo enviado pelo usuário sumiu?",
+   "title": "O upload grava em disco local do contêiner",
+   "body": "Qualquer reinício ou realocação perde o arquivo, e como o registro no banco continua, a interface aponta para algo que não existe mais.",
+   "paths": "upload/armazenamento.ts",
+   "term": "disco local"
+  },
+  {
+   "lang": "pt",
+   "q": "a soma das partes não bate com o total",
+   "title": "Os percentuais são arredondados individualmente",
+   "body": "Cada fatia é arredondada para uma casa e a soma passa ou falta em relação a cem. Ajustar a maior fatia no fim resolve sem distorcer a leitura.",
+   "paths": "dashboard/percentuais.ts",
+   "term": "arredondados"
+  },
+  {
+   "lang": "pt",
+   "q": "o cliente diz que respondeu mas não vejo a resposta",
+   "title": "Respostas por e-mail entram como novo chamado",
+   "body": "O identificador do chamado vai no assunto e alguns programas o removem ao responder, então a mensagem chega desassociada da conversa original.",
+   "paths": "suporte/email.py",
+   "term": "identificador do chamado"
+  },
+  {
+   "lang": "pt",
+   "q": "como saber se vale a pena adicionar um índice aqui?",
+   "title": "A tabela recebe muito mais escrita do que leitura",
+   "body": "Cada índice novo custa em toda gravação. Numa tabela de eventos isso é pago milhares de vezes por consulta economizada.",
+   "paths": "db/eventos.sql",
+   "term": "índice"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a fila para de consumir sem erro nenhum?",
+   "title": "Uma mensagem envenenada bloqueia a ordem de processamento",
+   "body": "O consumidor tenta a mesma mensagem indefinidamente e nunca avança, e como cada tentativa falha do mesmo jeito, não há alarme de mudança de comportamento.",
+   "paths": "workers/consumidor.ts",
+   "term": "mensagem envenenada"
+  },
+  {
+   "lang": "pt",
+   "q": "mudar o nome desse campo quebra alguma integração?",
+   "title": "Três parceiros consomem o mesmo contrato de saída",
+   "body": "Nenhum deles versiona o próprio consumo, então uma renomeação chega como campo ausente e é tratada como valor vazio em vez de erro.",
+   "paths": "integracoes/contrato.json",
+   "term": "contrato de saída"
+  },
+  {
+   "lang": "pt",
+   "q": "o teste passa sozinho mas falha junto com os outros",
+   "title": "Os testes compartilham o mesmo diretório temporário",
+   "body": "Um deixa arquivos que o outro encontra, e a ordem de execução decide qual falha. Isolar por teste elimina a dependência de ordem.",
+   "paths": "tests/preload.ts",
+   "term": "diretório temporário"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o pagamento aprovou e o pedido ficou pendente?",
+   "title": "O retorno do gateway chega antes da transação local fechar",
+   "body": "A confirmação encontra um pedido que ainda não existe e é descartada. A reconciliação encontra esses casos, mas só na rodada seguinte.",
+   "paths": "pagamentos/retorno.ts",
+   "term": "reconciliação"
+  },
+  {
+   "lang": "pt",
+   "q": "quem autorizou essa mudança de limite?",
+   "title": "Alterações feitas por script não registram autor",
+   "body": "O registro de auditoria grava apenas o usuário da aplicação, e toda automação usa a mesma credencial compartilhada.",
+   "paths": "auditoria/registro.py",
+   "term": "credencial compartilhada"
+  },
+  {
+   "lang": "en",
+   "q": "the graph shows a gap every night at the same hour",
+   "title": "Log shipping pauses during the compaction window",
+   "body": "Nothing is lost, but arrival is delayed by however long compaction takes, so dashboards read as an outage that resolves itself.",
+   "paths": "observability/shipping.yaml",
+   "term": "compaction window"
+  },
+  {
+   "lang": "en",
+   "q": "why does the same query return a different count each time?",
+   "title": "Rows are counted without an explicit ordering",
+   "body": "Pagination over an unordered result set can show a row twice or skip it entirely when the underlying data changes between pages.",
+   "paths": "api/pagination.ts",
+   "term": "explicit ordering"
+  },
+  {
+   "lang": "en",
+   "q": "a customer says our invoice total is off by a cent",
+   "title": "Currency is stored as a floating point number",
+   "body": "Values that cannot be represented exactly accumulate error across line items, and the error is visible precisely on the totals customers check.",
+   "paths": "billing/amounts.ts",
+   "term": "floating point"
+  },
+  {
+   "lang": "en",
+   "q": "how do I test the thing that only breaks in production?",
+   "title": "Staging uses a single node where production uses three",
+   "body": "Anything that depends on cross-node coordination — locks, caches, sticky sessions — is exercised only after release.",
+   "paths": "infra/environments.md",
+   "term": "cross-node"
+  },
+  {
+   "lang": "en",
+   "q": "the password reset link says it expired immediately",
+   "title": "Token lifetime is compared against the wrong clock",
+   "body": "Issuance uses UTC and validation uses local time, so the link is dead on arrival wherever the offset is positive.",
+   "paths": "auth/reset.ts",
+   "term": "token lifetime"
+  },
+  {
+   "lang": "en",
+   "q": "our error tracker is full of noise from one endpoint",
+   "title": "Client disconnects are logged as server errors",
+   "body": "A user navigating away mid-request produces the same trace as a genuine failure, and they outnumber real errors by two orders of magnitude.",
+   "paths": "api/errors.ts",
+   "term": "client disconnects"
+  },
+  {
+   "lang": "en",
+   "q": "can we cache this endpoint?",
+   "title": "The response varies by a header nobody declares",
+   "body": "Content changes with the account's locale but the cache key does not include it, so caching it now would serve one tenant's data to another.",
+   "paths": "api/cache.ts",
+   "term": "cache key"
+  },
+  {
+   "lang": "en",
+   "q": "the migration ran twice on one environment",
+   "title": "The version table is written after the migration, not before",
+   "body": "A migration that succeeds and then fails to record itself is applied again on the next run, and only the non-idempotent ones show damage.",
+   "paths": "db/migrate.ts",
+   "term": "version table"
+  },
+  {
+   "lang": "en",
+   "q": "why did the model start returning nothing at all?",
+   "title": "The relevance floor is calibrated from the model's own vocabulary",
+   "body": "A model whose table is too small produces a null distribution too narrow to measure, and rather than guess a boundary the daemon leaves the brain off.",
+   "paths": "src/brain/calibrate.ts",
+   "term": "relevance floor"
+  },
+  {
+   "lang": "en",
+   "q": "how do several sessions avoid editing the same file?",
+   "title": "Claiming a path is a statement, not a lock",
+   "body": "It makes other sessions' attempts visible instead of silent. In advisory mode they can still edit; what changes is that nobody does it unknowingly.",
+   "paths": "src/state/territory.ts",
+   "term": "claiming"
+  },
+  {
+   "lang": "en",
+   "q": "the container restarts every few minutes with no error in the logs",
+   "title": "The memory limit kills the process before it can log",
+   "body": "There is no stack trace because the kernel terminates it outright, and the only evidence is the exit code and a gap in the metrics.",
+   "paths": "infra/limits.yaml",
+   "term": "memory limit"
+  },
+  {
+   "lang": "en",
+   "q": "why are uploads failing only for large files?",
+   "title": "The proxy caps request bodies below the application's limit",
+   "body": "The application would accept the file, but the rejection happens one layer earlier and returns a status the client shows as a generic failure.",
+   "paths": "infra/proxy.conf",
+   "term": "request bodies"
+  },
+  {
+   "lang": "en",
+   "q": "the dropdown is empty for new accounts",
+   "title": "Reference data is seeded per environment, not per account",
+   "body": "An account created after the last seed has no rows to select from, and the form treats an empty list as a valid state rather than an error.",
+   "paths": "db/seed.py",
+   "term": "reference data"
+  },
+  {
+   "lang": "en",
+   "q": "is this endpoint safe to call from the browser?",
+   "title": "The token is validated but its audience is not checked",
+   "body": "A token minted for a different service is accepted here, so anything that can obtain one anywhere in the estate can call this.",
+   "paths": "auth/verify.ts",
+   "term": "audience"
+  },
+  {
+   "lang": "en",
+   "q": "our background jobs stopped without anyone noticing",
+   "title": "The worker has no liveness signal of its own",
+   "body": "Monitoring watches the queue, which looks healthy while empty. A worker that died with nothing pending is indistinguishable from an idle one.",
+   "paths": "workers/health.ts",
+   "term": "liveness"
+  },
+  {
+   "lang": "en",
+   "q": "why does the first page load download so much?",
+   "title": "The route map imports every page eagerly",
+   "body": "Code splitting is configured but the central route file references each component directly, which defeats it for the entire application.",
+   "paths": "web/routes.ts",
+   "term": "code splitting"
+  },
+  {
+   "lang": "en",
+   "q": "the same user appears twice in the audit trail for one action",
+   "title": "The action is recorded by both the API and the model layer",
+   "body": "Neither knows about the other, so anything that goes through the normal path is written twice and anything scripted is written once.",
+   "paths": "audit/record.py",
+   "term": "audit trail"
+  },
+  {
+   "lang": "en",
+   "q": "how do we know a cached result is still true?",
+   "title": "Results carry the paths they depend on",
+   "body": "An edit to any of those paths marks the result stale, which is what lets a later reader tell a fresh answer from one that merely exists.",
+   "paths": "src/state/results.ts",
+   "term": "stale"
+  },
+  {
+   "lang": "en",
+   "q": "the deploy pipeline is green but the change is not live",
+   "title": "The build artefact is cached by content hash of the source",
+   "body": "A change confined to an untracked file produces the same hash, so the pipeline reuses the previous artefact and reports success.",
+   "paths": ".github/workflows/deploy.yml",
+   "term": "content hash"
+  },
+  {
+   "lang": "en",
+   "q": "can two people edit the same document at once?",
+   "title": "Last write wins, and there is no merge",
+   "body": "The second save overwrites the first with no warning and no record of what was lost, because the update carries the whole document rather than a diff.",
+   "paths": "docs/collab.md",
+   "term": "last write wins"
+  },
+  {
+   "lang": "en",
+   "q": "why is one shard so much hotter than the others?",
+   "title": "The partition key is the account id",
+   "body": "Accounts are not the same size, so the largest tenant concentrates on one node however many nodes are added.",
+   "paths": "db/sharding.md",
+   "term": "partition key"
+  },
+  {
+   "lang": "en",
+   "q": "the scheduled report arrived empty on the first of the month",
+   "title": "The date range is computed as the previous thirty days",
+   "body": "On month boundaries that window starts inside a period the data warehouse has already archived, and archived partitions are not queried by default.",
+   "paths": "reports/schedule.py",
+   "term": "date range"
+  },
+  {
+   "lang": "en",
+   "q": "how do I find out what another session is working on?",
+   "title": "Every front declares a mission when it joins",
+   "body": "It is the one line that tells everyone else what this session is for, and a name derived from the branch tells them nothing because every session on that branch derives the same one.",
+   "paths": "src/cli/identity.ts",
+   "term": "mission"
+  },
+  {
+   "lang": "en",
+   "q": "our API returns 200 for requests that clearly failed",
+   "title": "Errors are wrapped in a successful envelope",
+   "body": "The status is part of the body, so every client has to remember to look, and generic HTTP monitoring reports the service as healthy throughout an outage.",
+   "paths": "api/envelope.ts",
+   "term": "envelope"
+  },
+  {
+   "lang": "en",
+   "q": "why did the index rebuild take down the site?",
+   "title": "Rebuilding acquires an exclusive lock on the table",
+   "body": "Reads block for the duration, and the operation has no progress output, so it is impossible to tell a slow rebuild from a stuck one while it happens.",
+   "paths": "db/reindex.sql",
+   "term": "exclusive lock"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a mesma consulta demora muito mais em produção?",
+   "title": "O planejador escolhe outro caminho com estatísticas desatualizadas",
+   "body": "Com poucas linhas ele varre a tabela e é rápido. Com o volume real ele deveria usar o índice, mas as estatísticas antigas dizem que a tabela é pequena.",
+   "paths": "db/estatisticas.sql",
+   "term": "planejador"
+  },
+  {
+   "lang": "pt",
+   "q": "o botão fica girando para sempre quando a rede oscila",
+   "title": "A requisição não tem prazo máximo definido",
+   "body": "Sem prazo ela espera indefinidamente, e a interface não tem caminho para desistir e permitir nova tentativa. Fechar o aplicativo é a única saída.",
+   "paths": "mobile/rede.kt",
+   "term": "prazo máximo"
+  },
+  {
+   "lang": "pt",
+   "q": "como impedir que um script apague dados sem querer?",
+   "title": "A credencial de leitura e a de escrita são a mesma",
+   "body": "Qualquer processo que consulta também pode alterar, então um erro de digitação num comando administrativo tem alcance total.",
+   "paths": "infra/credenciais.tf",
+   "term": "credencial de leitura"
+  },
+  {
+   "lang": "pt",
+   "q": "a tela mostra dados de outro cliente por um instante",
+   "title": "O estado anterior permanece durante a troca de conta",
+   "body": "A interface só limpa depois que a nova resposta chega, então há uma janela em que o conteúdo antigo aparece sob o cabeçalho novo.",
+   "paths": "web/troca-conta.tsx",
+   "term": "troca de conta"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o total de acessos caiu pela metade de um dia para o outro?",
+   "title": "O bloqueador de anúncios passou a filtrar o script de medição",
+   "body": "O tráfego não mudou, a contagem mudou. Comparar com os registros do servidor separa queda real de queda de instrumentação.",
+   "paths": "analytics/medicao.ts",
+   "term": "instrumentação"
+  },
+  {
+   "lang": "pt",
+   "q": "posso apagar as filas antigas do broker?",
+   "title": "Uma delas ainda recebe mensagens de um serviço legado",
+   "body": "O serviço não aparece na lista de dependências porque conecta direto, sem passar pelo descobridor. O tráfego é baixo e constante.",
+   "paths": "infra/filas.md",
+   "term": "serviço legado"
+  },
+  {
+   "lang": "pt",
+   "q": "o que acontece se dois agentes pedirem o mesmo arquivo?",
+   "title": "O pedido de permissão expira concedendo",
+   "body": "O silêncio de quem detém o caminho vira concessão depois do prazo, e isso é dito em voz alta no barramento em vez de acontecer calado.",
+   "paths": "src/state/permissions.ts",
+   "term": "expira concedendo"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a nota que escrevi não aparece na busca semântica?",
+   "title": "O cérebro embute as notas em segundo plano",
+   "body": "Uma nota recém-escrita é encontrável pelo canal lexical imediatamente e pelo vetorial quando o processo terminar. Nada no caminho de escrita espera pelo modelo.",
+   "paths": "src/daemon/server.ts",
+   "term": "segundo plano"
+  },
+  {
+   "lang": "pt",
+   "q": "a conversão caiu depois que mudamos o formulário",
+   "title": "O campo novo é obrigatório apenas no servidor",
+   "body": "O navegador permite enviar, o servidor recusa, e a mensagem de erro aparece no topo de uma página longa que já rolou para baixo.",
+   "paths": "web/formulario.tsx",
+   "term": "obrigatório"
+  },
+  {
+   "lang": "pt",
+   "q": "como o sistema decide qual tarefa roda em paralelo?",
+   "title": "O plano deriva o paralelismo dos caminhos declarados",
+   "body": "Duas tarefas que não compartilham caminho podem correr juntas. A declaração é o que torna isso calculável em vez de combinado por conversa.",
+   "paths": "src/plan/parse.ts",
+   "term": "paralelismo"
+  },
+  {
+   "lang": "pt",
+   "q": "por que recebo alerta de disco cheio se sobra espaço?",
+   "title": "O que acabou foram os identificadores de arquivo, não os bytes",
+   "body": "Milhões de arquivos pequenos esgotam a tabela antes do espaço, e a mensagem do sistema operacional é a mesma nos dois casos.",
+   "paths": "infra/disco.md",
+   "term": "identificadores de arquivo"
+  },
+  {
+   "lang": "pt",
+   "q": "o cliente quer exportar tudo o que temos sobre ele",
+   "title": "Os dados estão espalhados por quatro serviços",
+   "body": "Não existe consulta única que reúna tudo, e dois deles guardam referências por identificador interno que só o terceiro sabe traduzir.",
+   "paths": "privacidade/exportacao.md",
+   "term": "identificador interno"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o mesmo usuário aparece com dois perfis?",
+   "title": "O login social cria conta separada do cadastro por e-mail",
+   "body": "Mesmo e-mail, contas distintas, e a fusão posterior não transfere o histórico porque as chaves estrangeiras apontam para a conta antiga.",
+   "paths": "auth/social.py",
+   "term": "login social"
+  },
+  {
+   "lang": "pt",
+   "q": "quanto custa deixar esse ambiente ligado no fim de semana?",
+   "title": "Os ambientes de teste não desligam sozinhos",
+   "body": "A computação é reaproveitada mas os discos e balanceadores permanecem, e eles são a maior parte da conta em ambientes ociosos.",
+   "paths": "infra/ambientes.tf",
+   "term": "balanceadores"
+  },
+  {
+   "lang": "pt",
+   "q": "a importação aceitou um arquivo que deveria recusar",
+   "title": "A validação para no primeiro erro encontrado",
+   "body": "Um arquivo com problema na linha dois é recusado inteiro, mas um com problema na linha mil passa pelas anteriores e grava metade antes de parar.",
+   "paths": "importacao/validacao.py",
+   "term": "primeiro erro"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o histórico de uma conversa some depois de um tempo?",
+   "title": "O cursor de leitura avança mesmo sem ninguém ler",
+   "body": "Qualquer chamada que toca a conversa move o cursor, então mensagens não lidas passam a contar como lidas por efeito colateral.",
+   "paths": "src/state/conversation.ts",
+   "term": "cursor de leitura"
+  },
+  {
+   "lang": "pt",
+   "q": "o que garante que o barramento não perde uma decisão?",
+   "title": "O registro em disco acontece antes da resposta",
+   "body": "A ordem é o que sustenta a recuperação: se o processo morre entre uma coisa e outra, o que foi respondido já está gravado e não o contrário.",
+   "paths": "src/journal/journal.ts",
+   "term": "antes da resposta"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a soma dos pedidos do mês não fecha com o extrato?",
+   "title": "Estornos são gravados como pedidos negativos",
+   "body": "Quem soma apenas valores positivos infla o total, e a diferença cresce exatamente nos meses com mais devolução.",
+   "paths": "financeiro/estornos.py",
+   "term": "estornos"
+  },
+  {
+   "lang": "pt",
+   "q": "o servidor recusa conexões mas o processo está de pé",
+   "title": "A fila de conexões pendentes encheu",
+   "body": "O processo está vivo e ocupado, então a verificação de saúde por processo passa enquanto ninguém consegue conectar.",
+   "paths": "infra/limites.conf",
+   "term": "conexões pendentes"
+  },
+  {
+   "lang": "pt",
+   "q": "como saber quais arquivos outra sessão está editando agora?",
+   "title": "O rodapé traz o que mudou desde a última olhada",
+   "body": "Ele chega junto com o resultado da ferramenta, sem ninguém perguntar, e é a informação mais barata do turno porque já está no contexto.",
+   "paths": "src/adapters/hook.ts",
+   "term": "rodapé"
+  },
+  {
+   "lang": "pt",
+   "q": "por que o e-mail chegou sem as imagens?",
+   "title": "O modelo referencia arquivos por caminho relativo",
+   "body": "No navegador o caminho resolve, no cliente de e-mail não existe base para resolver contra, e a maioria bloqueia carregamento externo de qualquer forma.",
+   "paths": "emails/modelo.html",
+   "term": "caminho relativo"
+  },
+  {
+   "lang": "pt",
+   "q": "a tarefa agendada rodou duas vezes na virada do horário de verão",
+   "title": "O agendador usa horário local",
+   "body": "A hora que se repete é executada duas vezes e a que não existe é pulada. Agendar em tempo universal elimina os dois casos.",
+   "paths": "jobs/agendador.py",
+   "term": "horário de verão"
+  },
+  {
+   "lang": "pt",
+   "q": "o que impede um agente de gastar meu dinheiro?",
+   "title": "Autorizar mais sessões é decisão de quem paga",
+   "body": "É a única operação recusada a um agente por ser agente e não por deter a coisa errada, porque é a única que gasta dinheiro de alguém.",
+   "paths": "src/state/work.ts",
+   "term": "gasta dinheiro"
+  },
+  {
+   "lang": "pt",
+   "q": "por que a resposta muda se eu repetir a mesma pergunta?",
+   "title": "O empate é resolvido pelo identificador",
+   "body": "Sem esse desempate a ordem entre pontuações iguais dependeria da ordem de inserção, e o mesmo acervo responderia diferente entre reinícios.",
+   "paths": "src/brain/lexical.ts",
+   "term": "empate"
+  },
+  {
+   "lang": "pt",
+   "q": "como o sistema sabe que dois diretórios são o mesmo projeto?",
+   "title": "A identidade vem do diretório comum do git",
+   "body": "Todas as árvores de trabalho de um repositório compartilham esse diretório, e é isso que coloca sessões abertas em pastas diferentes no mesmo barramento.",
+   "paths": "src/repo/canonical.ts",
+   "term": "diretório comum"
+  }
+ ],
+ "exactTerms": [
+  {
+   "query": "chunk map",
+   "answers": 0
+  },
+  {
+   "query": "five minute window",
+   "answers": 1
+  },
+  {
+   "query": "optional chaining",
+   "answers": 3
+  },
+  {
+   "query": "arrival rate",
+   "answers": 4
+  },
+  {
+   "query": "snapshot",
+   "answers": 5
+  },
+  {
+   "query": "jitter",
+   "answers": 6
+  },
+  {
+   "query": "rotation",
+   "answers": 7
+  },
+  {
+   "query": "analyser",
+   "answers": 8
+  },
+  {
+   "query": "round trips",
+   "answers": 9
+  },
+  {
+   "query": "tenant filter",
+   "answers": 10
+  },
+  {
+   "query": "v1 endpoints",
+   "answers": 11
+  },
+  {
+   "query": "migrations",
+   "answers": 12
+  },
+  {
+   "query": "shared store",
+   "answers": 13
+  },
+  {
+   "query": "deduplication",
+   "answers": 16
+  },
+  {
+   "query": "worktree",
+   "answers": 17
+  },
+  {
+   "query": "backoff",
+   "answers": 18
+  },
+  {
+   "query": "connection pool",
+   "answers": 19
+  },
+  {
+   "query": "cron job",
+   "answers": 20
+  },
+  {
+   "query": "byte order mark",
+   "answers": 21
+  },
+  {
+   "query": "concurrency limit",
+   "answers": 22
+  },
+  {
+   "query": "timezone",
+   "answers": 23
+  },
+  {
+   "query": "working directory",
+   "answers": 24
+  },
+  {
+   "query": "imposto retido",
+   "answers": 25
+  },
+  {
+   "query": "destinatário válido",
+   "answers": 26
+  },
+  {
+   "query": "reescreve a tabela",
+   "answers": 27
+  },
+  {
+   "query": "paginação",
+   "answers": 28
+  },
+  {
+   "query": "subtotal",
+   "answers": 29
+  },
+  {
+   "query": "tempo limite",
+   "answers": 30
+  },
+  {
+   "query": "carimbo de tempo",
+   "answers": 31
+  },
+  {
+   "query": "atraso de replicação",
+   "answers": 32
+  },
+  {
+   "query": "cancelamento",
+   "answers": 33
+  },
+  {
+   "query": "cache de configuração",
+   "answers": 34
+  },
+  {
+   "query": "processo noturno",
+   "answers": 35
+  },
+  {
+   "query": "lote",
+   "answers": 36
+  },
+  {
+   "query": "chave de idempotência",
+   "answers": 37
+  },
+  {
+   "query": "contador acumulado",
+   "answers": 38
+  },
+  {
+   "query": "revertidas",
+   "answers": 39
+  },
+  {
+   "query": "disco local",
+   "answers": 41
+  },
+  {
+   "query": "arredondados",
+   "answers": 42
+  },
+  {
+   "query": "identificador do chamado",
+   "answers": 43
+  },
+  {
+   "query": "mensagem envenenada",
+   "answers": 45
+  },
+  {
+   "query": "contrato de saída",
+   "answers": 46
+  },
+  {
+   "query": "diretório temporário",
+   "answers": 47
+  },
+  {
+   "query": "reconciliação",
+   "answers": 48
+  },
+  {
+   "query": "credencial compartilhada",
+   "answers": 49
+  },
+  {
+   "query": "compaction window",
+   "answers": 50
+  },
+  {
+   "query": "explicit ordering",
+   "answers": 51
+  },
+  {
+   "query": "floating point",
+   "answers": 52
+  },
+  {
+   "query": "cross-node",
+   "answers": 53
+  },
+  {
+   "query": "token lifetime",
+   "answers": 54
+  },
+  {
+   "query": "client disconnects",
+   "answers": 55
+  },
+  {
+   "query": "cache key",
+   "answers": 56
+  },
+  {
+   "query": "version table",
+   "answers": 57
+  },
+  {
+   "query": "relevance floor",
+   "answers": 58
+  },
+  {
+   "query": "claiming",
+   "answers": 59
+  },
+  {
+   "query": "memory limit",
+   "answers": 60
+  },
+  {
+   "query": "request bodies",
+   "answers": 61
+  },
+  {
+   "query": "reference data",
+   "answers": 62
+  },
+  {
+   "query": "audience",
+   "answers": 63
+  },
+  {
+   "query": "liveness",
+   "answers": 64
+  },
+  {
+   "query": "code splitting",
+   "answers": 65
+  },
+  {
+   "query": "stale",
+   "answers": 67
+  },
+  {
+   "query": "content hash",
+   "answers": 68
+  },
+  {
+   "query": "last write wins",
+   "answers": 69
+  },
+  {
+   "query": "partition key",
+   "answers": 70
+  },
+  {
+   "query": "date range",
+   "answers": 71
+  },
+  {
+   "query": "envelope",
+   "answers": 73
+  },
+  {
+   "query": "exclusive lock",
+   "answers": 74
+  },
+  {
+   "query": "planejador",
+   "answers": 75
+  },
+  {
+   "query": "prazo máximo",
+   "answers": 76
+  },
+  {
+   "query": "credencial de leitura",
+   "answers": 77
+  },
+  {
+   "query": "troca de conta",
+   "answers": 78
+  },
+  {
+   "query": "instrumentação",
+   "answers": 79
+  },
+  {
+   "query": "serviço legado",
+   "answers": 80
+  },
+  {
+   "query": "expira concedendo",
+   "answers": 81
+  },
+  {
+   "query": "segundo plano",
+   "answers": 82
+  },
+  {
+   "query": "obrigatório",
+   "answers": 83
+  },
+  {
+   "query": "paralelismo",
+   "answers": 84
+  },
+  {
+   "query": "identificadores de arquivo",
+   "answers": 85
+  },
+  {
+   "query": "identificador interno",
+   "answers": 86
+  },
+  {
+   "query": "login social",
+   "answers": 87
+  },
+  {
+   "query": "balanceadores",
+   "answers": 88
+  },
+  {
+   "query": "primeiro erro",
+   "answers": 89
+  },
+  {
+   "query": "cursor de leitura",
+   "answers": 90
+  },
+  {
+   "query": "antes da resposta",
+   "answers": 91
+  },
+  {
+   "query": "estornos",
+   "answers": 92
+  },
+  {
+   "query": "conexões pendentes",
+   "answers": 93
+  },
+  {
+   "query": "rodapé",
+   "answers": 94
+  },
+  {
+   "query": "caminho relativo",
+   "answers": 95
+  },
+  {
+   "query": "gasta dinheiro",
+   "answers": 97
+  },
+  {
+   "query": "empate",
+   "answers": 98
+  },
+  {
+   "query": "diretório comum",
+   "answers": 99
+  }
+ ]
+}

@@ -128,7 +128,7 @@ other direct CLI command: it reports the problem on stderr —
 `parley: <reason> — continuing without coordination` — and exits clean
 rather than blocking (`src/cli/main.ts:187-193`). A shape change that does
 land is announced loudly to everyone on the bus, at high priority, naming
-both the new value and the one it replaced (`src/state/machine.ts:125-132`),
+both the new value and the one it replaced (`src/state/machine.ts:124-131`),
 for the same reason a mode change is: this setting belongs to the repository,
 and a front picking one for itself would make it theatre for every front
 that did not agree.

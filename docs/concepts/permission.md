@@ -72,7 +72,7 @@ never answers, including one whose front has gone entirely — `tick`
 evaluates every pending request's deadline on a timer and before each
 command regardless of whether the owner is still connected, so a request
 against a dead front still resolves on schedule instead of waiting forever
-(`src/state/permissions.ts:162-181`, `src/state/machine.ts:229-233,289-290`).
+(`src/state/permissions.ts:162-181`, `src/state/machine.ts:238-242,289-290`).
 
 If the daemon itself cannot be reached, `parley ask` (like every other CLI
 command) reports it on stderr and exits clean rather than blocking —

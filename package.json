@@ -15,7 +15,8 @@
     "docs:citations": "bun run scripts/gen-citations.ts --write",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "bench:recall": "bun run scripts/bench-recall.ts"
   },
   "engines": {
     "bun": ">=1.3.0"

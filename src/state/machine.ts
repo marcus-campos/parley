@@ -1,5 +1,4 @@
 import { DEFAULTS, PROTOCOL_VERSION, err, ok, type Mode } from "../protocol/types";
-import { findModel } from "../brain/registry";
 import { drain, history, say } from "./conversation";
 import { listResults, recordResult } from "./results";
 import { acknowledge, askFront, listQuestions, markNudged, questionStatus, replyToQuestion } from "./questions";
@@ -204,15 +203,25 @@ function brain(state: State, actorId: string | null, frame: Record<string, unkno
     return { state, response: ok({ active: false, model: null }), broadcast: brainChangeBroadcast(state, ctx, before) };
   }
 
+  // Whether a name is in the catalogue is not this file's business.
+  //
+  // `src/state/` is a pure function of (state, frame, ctx) and the model
+  // catalogue is a fact about the build — importing it here made every state
+  // transition depend on what the product happens to ship, which is how a
+  // dozen tests about calibration and persistence went red the day the listing
+  // changed. The daemon checks the name against the registry it was given,
+  // before this runs (`handle`, server.ts), and a name that reaches here has
+  // already been vouched for. A name that somehow is not loadable still ends
+  // as the brain being off and the bus being told: `reconcileBrainAnnouncement`
+  // corrects the response and the broadcast in the same turn.
   const name = String(frame.enable ?? "");
-  const model = findModel(name);
-  if (!model) {
-    return { state, response: err("UNKNOWN_OP", `no such model in the registry: ${name}`), broadcast: [] };
+  if (!name) {
+    return { state, response: err("UNKNOWN_OP", "brain enable needs a model name"), broadcast: [] };
   }
   state.brain.active = true;
-  state.brain.model = model.name;
+  state.brain.model = name;
   state.brain.askedAtMs = null;
-  return { state, response: ok({ active: true, model: model.name }), broadcast: brainChangeBroadcast(state, ctx, before) };
+  return { state, response: ok({ active: true, model: name }), broadcast: brainChangeBroadcast(state, ctx, before) };
 }
 
 /**

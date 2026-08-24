@@ -278,18 +278,55 @@ export class VectorIndex {
  * appear — the score map is only ever populated from `lexical` and `vector`
  * themselves.
  */
-export function fuse(lexical: Hit[], vector: Hit[], k: number): Hit[] {
+/**
+ * How much more a vector hit's rank counts than a lexical one's.
+ *
+ * Plain reciprocal-rank fusion weights both channels equally, and with
+ * `RRF_K` at 60 the difference between rank 1 and rank 10 is under fifteen
+ * percent — so a note the model puts first loses to a note that merely shares
+ * a word and happens to rank first lexically. That is not a hypothetical:
+ * measured on the 100-note benchmark in `tests/brain/fixtures`, equal weighting
+ * threw away eighteen of the answers the model had already found.
+ *
+ * ```
+ *   vector weight   paraphrase (of 100)   exact term (of 92)
+ *   no model                 24                   92
+ *   1  (equal)               50                   91
+ *   4                        53                   90
+ *   8                        56                   90
+ *   20                       66                   90
+ *   50                       66                   90
+ *   1000 (vector alone)      68                   88
+ * ```
+ *
+ * Twenty is the smallest weight that captures the whole gain, and the smallest
+ * sufficient value is the right one: it leaves the lexical channel as much
+ * influence as it can have without costing anything. Pushing further buys two
+ * more paraphrase answers and gives back two exact-term ones, which is the
+ * wrong trade — somebody searching a symbol they know exists is not guessing.
+ *
+ * The number was measured on a corpus with both kinds of question in it,
+ * deliberately. An earlier attempt to tune this on the paraphrase corpus alone
+ * concluded the lexical channel should be switched off entirely, which is what
+ * a benchmark built so that keywords cannot help will always conclude.
+ */
+export const DEFAULT_VECTOR_WEIGHT = 20;
+
+export function fuse(lexical: Hit[], vector: Hit[], k: number, vectorWeight = DEFAULT_VECTOR_WEIGHT): Hit[] {
   const RRF_K = 60;
   const scores = new Map<string, { score: number; kind: Hit["kind"] }>();
-  const add = (hits: Hit[]) => hits.forEach((h, rank) => {
+  const add = (hits: Hit[], weight: number) => hits.forEach((h, rank) => {
     const prev = scores.get(h.id);
-    const bump = 1 / (RRF_K + rank + 1);
+    const bump = weight / (RRF_K + rank + 1);
     scores.set(h.id, { score: (prev?.score ?? 0) + bump, kind: prev?.kind ?? h.kind });
   });
-  add(lexical);
-  add(vector);
+  // Lexical first, so that when only one channel has an opinion the result is
+  // exactly what that channel said — the brain being off must change nothing.
+  add(lexical, 1);
+  add(vector, vectorWeight);
   return [...scores.entries()]
     .sort((a, b) => (b[1].score - a[1].score) || a[0].localeCompare(b[0]))
     .slice(0, k)
     .map(([id, v]) => ({ id, score: v.score, kind: v.kind }));
 }
+

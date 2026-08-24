@@ -112,7 +112,7 @@ So the flow is:
 Point 3 fires **once**, not on every query. Same nudge-once discipline as
 `src/state/permissions.ts:204`, for the same reason.
 
-`src/state/machine.ts:60` says a human observer has *"a voice, not a vote"*.
+`src/state/machine.ts:59` says a human observer has *"a voice, not a vote"*.
 Activation is on the voice side, exactly like the capacity ceiling in the
 companion spec: **money and machine are the person's; work is the fronts'.**
 

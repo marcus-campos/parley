@@ -11,7 +11,9 @@ import { indexFromState, type Hit, type LexicalIndex } from "../brain/lexical";
 import { debias, embed, fuse, loadStaticModel, VectorIndex, type StaticModel } from "../brain/embed";
 import { calibrate, type Calibration } from "../brain/calibrate";
 import { loadVectors, saveVectors } from "../brain/vectors";
-import { findModel, isEncoder, type EncoderBrainModel } from "../brain/registry";
+import {
+  findModel, isEncoder, retiredReason, type BrainModel, type EncoderBrainModel,
+} from "../brain/registry";
 import { modelPath } from "../brain/download";
 import { startEncoder, type EncoderHandle } from "../brain/encoder";
 import { exportNotes } from "../notes/export";
@@ -82,6 +84,17 @@ export interface DaemonOptions {
    * discipline `download.ts` already keeps for `ensureModel`.
    */
   modelsDir?: string;
+  /**
+   * The registry this daemon resolves `state.brain.model` against.
+   *
+   * Defaults to what the product offers. Tests override it so they can exercise
+   * the loading paths — a static table on disk, a calibration that fails, a
+   * file that disappears between restarts — without those paths depending on
+   * which models the listing happens to carry this month. That coupling was
+   * real: retiring the static entries broke a dozen tests that were not about
+   * the listing at all.
+   */
+  models?: BrainModel[];
   /**
    * How a worktree is collected. Production never sets this — the default is
    * the real `removeWorktreeIfClean`.
@@ -299,8 +312,21 @@ export class ParleyDaemon {
     this.brainLoadNudged = false;
     if (!this.state.brain.active || !this.state.brain.model) return;
     try {
-      const model = findModel(this.state.brain.model);
-      if (!model) return;
+      const model = findModel(this.state.brain.model, this.opts.models);
+      if (!model) {
+        // Enabled once, listed no longer. Say why: a model that was withdrawn
+        // because it measured worse than the floor it sits on is not the same
+        // event as a corrupt download, and the person's recall just improved
+        // rather than degraded.
+        const why = retiredReason(this.state.brain.model);
+        if (why) {
+          process.stderr.write(
+            `parley: ${this.state.brain.model} is no longer offered (${why}) — the lexical floor is ` +
+              `answering, which is better than that model was\n`,
+          );
+        }
+        return;
+      }
       if (isEncoder(model)) {
         this.loadEncoderBrain(model);
         return;
@@ -486,6 +512,18 @@ export class ParleyDaemon {
     }
     this.encoderQueue.push({ id, kind, text });
     this.drainEncoderQueue();
+  }
+
+  /**
+   * The registry entry behind the loaded brain, or `null`.
+   *
+   * `this.brain` holds what was *loaded* — a parsed table, or a live sidecar —
+   * and deliberately not the listing row it came from. Ranking needs one field
+   * off that row, so this looks it back up rather than duplicating it into two
+   * places that can disagree.
+   */
+  private brainEntry(): BrainModel | undefined {
+    return this.state.brain.model ? findModel(this.state.brain.model, this.opts.models) : undefined;
   }
 
   /** Persists the vector index beside the journal; a failure here never surfaces as a write failure. */
@@ -901,13 +939,32 @@ export class ParleyDaemon {
         const queryVector = await this.queryVector(frame.q);
         const vectorHits =
           this.brain && queryVector ? this.brain.vectors.search(queryVector, this.brain.vectors.size) : [];
-        const hits = fuse(lexicalHits, vectorHits, this.index.size + vectorHits.length)
+        const hits = fuse(
+          lexicalHits,
+          vectorHits,
+          this.index.size + vectorHits.length,
+          this.brainEntry()?.vectorWeight,
+        )
           .filter((h) => (wantsNote ? h.kind !== "result" : h.kind === "result"));
         toApply = { ...frame, ids: hits.slice(0, k).map((h) => h.id), ranked: true };
       } catch (e) {
         // A broken index must never take the query down with it — the honest
         // degrade is the same unranked list a plain notes/results call gets.
         process.stderr.write(`parley: query resolution failed: ${(e as Error).message}\n`);
+      }
+    }
+
+    // The catalogue check lives here, not in the reducer: this is the layer
+    // that knows which registry it was built with, and `src/state/` is a pure
+    // function that must not depend on what the product ships this month.
+    if (frame.op === "brain" && typeof frame.enable === "string") {
+      const wanted = frame.enable;
+      if (!findModel(wanted, this.opts.models)) {
+        const why = retiredReason(wanted);
+        this.send(conn, err("UNKNOWN_OP", why
+          ? `${wanted} is no longer offered: ${why}`
+          : `no such model in the registry: ${wanted}`));
+        return;
       }
     }
 

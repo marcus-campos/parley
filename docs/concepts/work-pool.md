@@ -123,7 +123,7 @@ five-minute presence lease on purpose (`DEFAULTS.LEASE_TTL_MS`,
 `src/protocol/types.ts:69`), so a front that stopped renewing that long ago
 reads as gone rather than as idle capacity waiting to be pinged. It addresses exactly one idle front, at high priority, and stamps
 every stale item as nudged so the same one is never rung twice
-(`src/state/machine.ts:390-410`).
+(`src/state/machine.ts:399-419`).
 
 ## What happens when it fails
 
@@ -132,13 +132,13 @@ pool automatically after five minutes, the same window an unanswered
 permission request gets, matched on purpose
 (`DEFAULTS.OFFER_TTL_MS`, `src/protocol/types.ts:75`), and the return is
 announced by name rather than happening quietly
-(`src/state/machine.ts:371-387`).
+(`src/state/machine.ts:380-396`).
 
 A front holding a **taken** item that goes dark does not lose it the instant
 its lease lapses either. The item is stamped orphaned immediately but only
 actually returned to the pool after the same sixty-second grace period a
 claim gets (`DEFAULTS.ORPHAN_GRACE_MS`, `src/protocol/types.ts:73`;
-`src/state/machine.ts:346-369`), so a front that is merely restarting does
+`src/state/machine.ts:355-378`), so a front that is merely restarting does
 not come back to find its work already given away.
 
 If the daemon cannot be reached at all, `work`, `works`, `take`, `drop` and

@@ -294,7 +294,7 @@ that shaped the question mechanism does not apply.
 ### 4.7 The human's voice on spending
 
 **Updated 2026-08-21, after `feat/human-vote`.** This section used to open
-by quoting `src/state/machine.ts:60`: a human observer has *"a voice, not a
+by quoting `src/state/machine.ts:59`: a human observer has *"a voice, not a
 vote"*, enforced by a guard that refused `grant` and `deny` by `kind` alone.
 That guard is gone — a human answers for whatever territory they hold,
 exactly like any front; ownership decides, not `kind`. Nothing below needed

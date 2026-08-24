@@ -10,7 +10,7 @@ const body = new TextEncoder().encode("pretend this is a model");
 const digest = new Bun.CryptoHasher("sha256").update(body).digest("hex");
 
 const model = (sha: string): StaticBrainModel => ({
-  name: "test-model", kind: "static", dims: 4, score: 1, ramMB: 1, msPerNote: 1, bytes: body.length,
+  name: "test-model", kind: "static", vectorWeight: 1, dims: 4, score: 1, ramMB: 1, msPerNote: 1, bytes: body.length,
   url: "https://example.invalid/model.bin", sha256: sha, tokenizer: "wordlevel",
 });
 

@@ -165,10 +165,24 @@ describe("turning the brain on", () => {
     expect(state.brain.model).toBe(MODELS[0]!.name);
   });
 
-  test("a model that is not in the registry is refused", () => {
-    const out = apply(state, human, { v: 1, op: "brain", enable: "something-off-the-internet" }, at(300));
-    expect(out.response.ok).toBe(false);
+  test("an empty model name is refused; which names exist is not this layer's question", () => {
+    // The catalogue check moved to the daemon, which is the layer that knows
+    // which registry it was built with. Keeping it here made every state
+    // transition depend on what the product happens to list — the day the
+    // static entries were withdrawn, a dozen tests about calibration and
+    // vector persistence went red for a reason unrelated to either.
+    //
+    // What the reducer still owns is the frame being well-formed.
+    const empty = apply(state, human, { v: 1, op: "brain", enable: "" }, at(300));
+    expect(empty.response.ok).toBe(false);
     expect(state.brain.active).toBe(false);
+
+    // And a name it was handed is recorded as the person's decision. If it
+    // turns out not to be loadable, `reconcileBrainAnnouncement` corrects the
+    // response and tells the bus in the same turn — see tests/integration.
+    const named = apply(state, human, { v: 1, op: "brain", enable: "whatever-the-daemon-vouched-for" }, at(310));
+    expect(named.response.ok).toBe(true);
+    expect(state.brain.model).toBe("whatever-the-daemon-vouched-for");
   });
 
   test("status is readable by anyone", () => {
@@ -224,12 +238,14 @@ describe("turning the brain on or off is announced, the same way mode and shape 
     expect(out.broadcast).toHaveLength(0);
   });
 
-  test("a refused attempt — an unknown model — announces nothing", () => {
-    // The "wrong actor" half is gone with the `kind` gate above. What is left
-    // is the half that was always about the frame rather than the caller.
-    const unknownModel = apply(state, human, { v: 1, op: "brain", enable: "not-a-model" }, at(300));
-    expect(unknownModel.response.ok).toBe(false);
-    expect(unknownModel.broadcast).toHaveLength(0);
+  test("a refused attempt announces nothing", () => {
+    // The "wrong actor" half is gone with the `kind` gate, and the "unknown
+    // model" half moved to the daemon. What is left is the frame itself being
+    // unusable — and a refusal must never reach the bus, or every front learns
+    // about a change that did not happen.
+    const noName = apply(state, human, { v: 1, op: "brain", enable: "" }, at(300));
+    expect(noName.response.ok).toBe(false);
+    expect(noName.broadcast).toHaveLength(0);
   });
 
   test("every other front hears it, exactly like a mode change", () => {

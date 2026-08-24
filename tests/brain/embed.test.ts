@@ -178,6 +178,51 @@ describe("static embeddings", () => {
   test("fusion never invents a document neither ranking returned", () => {
     expect(fuse([{ id: "a", score: 1, kind: "note" }], [], 5).map((h) => h.id)).toEqual(["a"]);
   });
+
+  test("with no vector ranking, fusion returns exactly what the lexical one said", () => {
+    // The brain is off by default and its index is incomplete while notes are
+    // still being embedded. In both cases fusion has to be a no-op, or turning
+    // the brain on would change answers it has nothing to say about.
+    const lex = ["a", "b", "c", "d"].map((id, i) => ({ id, score: 10 - i, kind: "note" as const }));
+    expect(fuse(lex, [], 4).map((h) => h.id)).toEqual(["a", "b", "c", "d"]);
+  });
+
+  test("a note the model ranks first outranks one that merely shares a word", () => {
+    // The behaviour this pins is the whole reason the vector channel carries
+    // more weight than the lexical one. Equal weighting — plain RRF — puts "a"
+    // first here, because rank 1 against rank 3 is a difference of under four
+    // percent when the constant is 60. Measured on the 100-note benchmark that
+    // cost eighteen of the answers the model had already found.
+    const lex = [
+      { id: "a", score: 9, kind: "note" as const },
+      { id: "b", score: 4, kind: "note" as const },
+      { id: "target", score: 1, kind: "note" as const },
+    ];
+    const vecHits = [{ id: "target", score: 0.91, kind: "note" as const }];
+    expect(fuse(lex, vecHits, 3)[0]!.id).toBe("target");
+  });
+
+  test("a document only the lexical channel found ranks below every vector hit — the cost of that weight", () => {
+    // This is the price of weighting the vector channel, stated rather than
+    // hidden. Once the model has an opinion at all, anything it did not rank
+    // sits underneath everything it did: twenty over sixty-one beats one over
+    // sixty-one however certain the lexical side was.
+    //
+    // Two things make that acceptable, and both are measurements rather than
+    // hopes. On the 100-note benchmark, exact-term queries went from 91 correct
+    // to 90 — because a note containing the term also embeds near it, so the
+    // vector channel usually finds it too. And a document the model has not
+    // embedded YET is the same case, which is why the backfill matters and why
+    // `fuse` with an empty vector list is a no-op (see the test above).
+    //
+    // If this line ever needs changing, the honest fix is a floor on what
+    // counts as a vector opinion — not a quiet nudge to the weight.
+    const lex = [{ id: "onlyLexical", score: 40, kind: "note" as const }];
+    const vecHits = Array.from({ length: 3 }, (_, i) => ({
+      id: `v${i}`, score: 0.6 - i * 0.01, kind: "note" as const,
+    }));
+    expect(fuse(lex, vecHits, 4).map((h) => h.id)).toEqual(["v0", "v1", "v2", "onlyLexical"]);
+  });
 });
 
 /**
@@ -504,14 +549,14 @@ describe("aboveRelevanceFloor is absolute — a candidate is judged alone", () =
 describe("which registry entries this build can actually load", () => {
   test("a wordlevel entry is loadable", () => {
     expect(isLoadable({
-      name: "tiny", kind: "static", dims: 2, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
+      name: "tiny", kind: "static", vectorWeight: 1, dims: 2, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
       url: "https://example.invalid/m.json", sha256: "0".repeat(64), tokenizer: "wordlevel",
     })).toBe(true);
   });
 
   test("an xlmr entry is not — this build has no XLM-RoBERTa tokenizer", () => {
     expect(isLoadable({
-      name: "big", kind: "static", dims: 256, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
+      name: "big", kind: "static", vectorWeight: 1, dims: 256, score: 1, ramMB: 1, msPerNote: 1, bytes: 1,
       url: "https://example.invalid/m.safetensors", sha256: "0".repeat(64), tokenizer: "xlmr",
     })).toBe(false);
   });
